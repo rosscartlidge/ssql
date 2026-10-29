@@ -1,9 +1,9 @@
 package commands
 
 import (
-	"strconv"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -338,7 +338,7 @@ func windowClausesShareOrder(configs []ssql.WindowConfig) bool {
 
 // typedWindowAggs are the registry aggregates over a frame that have a
 // typed form (typed.WAgg); the rest take the record path.
-var typedWindowAggs = map[string]bool{"median": true, "percentile": true, "stddev": true, "variance": true, "mode": true}
+var typedWindowAggs = map[string]bool{"median": true, "percentile": true, "stddev": true, "variance": true, "mode": true, "count-distinct": true, "string-agg": true}
 
 // typedWindowSpec renders one typed.WindowSpec literal and decides the
 // result's Go type and the assignment from res[i]. Results that can be
@@ -419,6 +419,10 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			return d.Agg.Name, "*float64", readPtr("float64"), of(k), ""
 		case "mode":
 			return d.Agg.Name, "*" + base, readPtr(base), of("Mode"), ""
+		case "count-distinct":
+			return d.Agg.Name, "int64", read("int64"), of("CountDistinct"), ""
+		case "string-agg":
+			return d.Agg.Name, "*string", readPtr("string"), of("StringAgg", fmt.Sprintf("%q", d.Agg.Extra)), ""
 		}
 		return "", "", "", "", fmt.Sprintf("window: %s over a frame has no typed form yet (it runs on the record path)", d.Agg.Name)
 	case "lag", "lead", "nth_value":

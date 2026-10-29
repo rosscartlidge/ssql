@@ -3949,7 +3949,7 @@ var equivCases = []EquivCase{
 		// — the typed lane computes these natively since 2026-10-29
 		// (typed.WAgg); DuckDB is the independent oracle.
 		Name:     "window_rolling_stats_bounded",
-		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -preceding 1 -following 1 -stddev salary sd -variance salary v -median salary med -percentile salary 0.25 p25 -mode city mc | {{.bin}} include name sd v med p25 mc`,
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -preceding 1 -following 1 -stddev salary sd -variance salary v -median salary med -percentile salary 0.25 p25 -mode city mc -count-distinct status st -string-agg name "," names | {{.bin}} include name sd v med p25 mc st names`,
 		Ordered:  false,
 	},
 	{

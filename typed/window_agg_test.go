@@ -3,6 +3,7 @@ package typed
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"testing"
@@ -118,4 +119,54 @@ func fmtOut(o struct {
 		return strconvFloat(*p)
 	}
 	return "{" + s(o.med) + " " + s(o.p25) + " " + s(o.sd) + " " + s(o.v) + " " + fmtAny(o.mode) + "}"
+}
+
+// TestWindowFrameSetAndList: count-distinct and string-agg over a frame
+// in the typed lane — the distinct present values by ssql.DistinctKey,
+// the present values in frame order joined by the separator (absent
+// when none) — against values by hand over a three-row moving frame.
+func TestWindowFrameSetAndList(t *testing.T) {
+	rows := []winRow{{Name: "x", Salary: 1}, {Name: "y", Salary: 2}, {Name: "x", Salary: 3}, {Name: "", Salary: 4}, {Name: "z", Salary: 5}}
+	c := WindowClause[winRow]{
+		HasOrder: true, KeyInt: func(r winRow) int64 { return r.Salary },
+		Frame: WindowFrame{Preceding: 1, Following: 1},
+		Specs: []WindowSpec[winRow]{
+			CountDistinctOf(func(r winRow) string { return r.Name }),
+			StringAggOf(func(r winRow) string { return r.Name }, "+"),
+			CountDistinctOf(func(r winRow) int64 { return r.Salary / 2 }),
+		},
+	}
+	type out struct {
+		n  int64
+		s  any
+		n2 int64
+	}
+	var got []out
+	for o := range Window([]WindowClause[winRow]{c}, func(r winRow, res WindowRow) out {
+		n, _ := res.Int(0)
+		n2, _ := res.Int(2)
+		return out{n, res.Value(1), n2}
+	})(slices.Values(rows)) {
+		got = append(got, o)
+	}
+	want := []out{
+		{2, "x+y", 2},   // x,y            | 0,1
+		{2, "x+y+x", 2}, // x,y,x          | 0,1,1
+		{2, "y+x", 2},   // y,x,""         | 1,1,2
+		{2, "x+z", 2},   // x,"",z         | 1,2,2
+		{1, "z", 1},     // "",z           | 2,2
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	// All missing: string-agg absent, count-distinct 0.
+	empty := []winRow{{Name: "", Salary: 1}}
+	for o := range Window([]WindowClause[winRow]{c}, func(r winRow, res WindowRow) out {
+		n, _ := res.Int(0)
+		return out{n, res.Value(1), 0}
+	})(slices.Values(empty)) {
+		if o.n != 0 || o.s != nil {
+			t.Fatalf("all missing: got %v", o)
+		}
+	}
 }

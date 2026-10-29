@@ -685,6 +685,7 @@ type WindowSpec[T any] struct {
     Default any                      // LAG/LEAD default (nil = absent)
     Agg     WindowAgg                // WAgg: the statistic over the frame
     P       float64                  // WAggQuantile: the quantile (0.5 = median)
+    Sep     string                   // WAggStringAgg: the separator
     Num     func(T) (float64, bool)  // the numeric field for sum/avg and the statistics
     Val     func(T) (any, bool)      // any field for lag, lead, first, last, nth, count, min, max
     Init    func() any               // WFold (window -stream-expr): a fresh state
@@ -725,6 +726,8 @@ const (
 	WAggVariance  // the sample variance of Num; absent below two rows (SQL's NULL)
 	WAggStdDev    // its square root
 	WAggMode      // the most frequent Val; ties to the value seen first in the frame
+	WAggCountDistinct  // the distinct present values of Val (ssql.DistinctKey)
+	WAggStringAgg      // the present values of Val in frame order, as ssql.AggValueString, joined by Sep
 )
 
 // The spec constructors: one line per window function, the readers built
@@ -769,6 +772,10 @@ func VarianceOf[T any, N WindowNumber](get func(T) N) WindowSpec[T]
 func VarianceOfPtr[T any, N WindowNumber](get func(T) *N) WindowSpec[T]
 func ModeOf[T any, V any](get func(T) V) WindowSpec[T]
 func ModeOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
+func CountDistinctOf[T any, V any](get func(T) V) WindowSpec[T]             // the distinct present values in the frame
+func CountDistinctOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
+func StringAggOf[T any, V any](get func(T) V, sep string) WindowSpec[T]     // the present values in frame order, joined; absent when none
+func StringAggOfPtr[T any, V any](get func(T) *V, sep string) WindowSpec[T]
 ```
 
 A clause that names its order by one typed key (`KeyInt`, `KeyString` or
@@ -780,8 +787,8 @@ ORDER BY / frame`, any number of functions per clause, one output row per
 input row. `build` receives the results in clause order then spec order
 and assembles the output struct, which a generated program synthesises
 from the input fields plus one per function. `WAgg` is the typed form of
-the registry statistics over a frame (`-median`, `-percentile`,
-`-stddev`, `-variance`, `-mode`): the same arithmetic as the record
+the registry aggregates over a frame (`-median`, `-percentile`,
+`-stddev`, `-variance`, `-mode`, `-count-distinct`, `-string-agg`): the same arithmetic as the record
 path's aggregates (`ssql.QuantileCont` over the frame's sorted values,
 Welford's sample variance, the mode with ties to the first seen),
 scanned per row — O(k) a row over a bounded frame, O(n²) over the

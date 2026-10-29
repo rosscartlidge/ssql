@@ -200,6 +200,30 @@ func ModeOfPtr[T any, V any](get func(T) *V) WindowSpec[T] {
 
 func (WindowAgg) kind() WindowKind { return WAgg }
 
+// CountDistinctOf counts the distinct present values in the frame;
+// StringAggOf joins the present values in frame order with sep (absent
+// when there is none).
+func CountDistinctOf[T any, V any](get func(T) V) WindowSpec[T] {
+	s := valSpec(WAgg, present(get))
+	s.Agg = WAggCountDistinct
+	return s
+}
+func CountDistinctOfPtr[T any, V any](get func(T) *V) WindowSpec[T] {
+	s := valSpec(WAgg, deref(get))
+	s.Agg = WAggCountDistinct
+	return s
+}
+func StringAggOf[T any, V any](get func(T) V, sep string) WindowSpec[T] {
+	s := valSpec(WAgg, present(get))
+	s.Agg, s.Sep = WAggStringAgg, sep
+	return s
+}
+func StringAggOfPtr[T any, V any](get func(T) *V, sep string) WindowSpec[T] {
+	s := valSpec(WAgg, deref(get))
+	s.Agg, s.Sep = WAggStringAgg, sep
+	return s
+}
+
 // withComparators fills a clause's Compare from its typed order key when
 // the program gave only the key (KeyString, KeyInt or KeyFloat, with
 // Desc): the comparator a template used to spell beside the key is the

@@ -69,6 +69,13 @@ func CountDistinct(field string) AggregateFunc {
 	}
 }
 
+// DistinctKey is the key -count-distinct and -mode count a value under —
+// the one rule every lane shares: comparable scalars as themselves
+// (numbers widened to float64 so 3 and 3.0 are one value, a time by its
+// instant, a whole int128 or decimal with the int form), everything
+// else by its formatted text.
+func DistinctKey(v any) any { return distinctKey(v) }
+
 // distinctKey makes a value usable as a map key: comparable scalars as
 // themselves (numbers widened to float64 so 3 and 3.0 are one value),
 // everything else by its formatted text.

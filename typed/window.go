@@ -70,11 +70,13 @@ const (
 type WindowAgg int
 
 const (
-	WAggNone     WindowAgg = iota
-	WAggQuantile           // the continuous P-quantile of Num over the frame (median: P = 0.5)
-	WAggVariance           // the sample variance of Num; absent below two rows (SQL's NULL)
-	WAggStdDev             // its square root
-	WAggMode               // the most frequent Val; ties to the value seen first in the frame
+	WAggNone          WindowAgg = iota
+	WAggQuantile                // the continuous P-quantile of Num over the frame (median: P = 0.5)
+	WAggVariance                // the sample variance of Num; absent below two rows (SQL's NULL)
+	WAggStdDev                  // its square root
+	WAggMode                    // the most frequent Val; ties to the value seen first in the frame
+	WAggCountDistinct           // the distinct present values of Val (ssql.DistinctKey)
+	WAggStringAgg               // the present values of Val in frame order, as ssql.AggValueString, joined by Sep
 )
 
 // WindowSpec is one function over a clause's frame. Num reads a numeric
@@ -95,6 +97,7 @@ type WindowSpec[T any] struct {
 	Default any       // LAG/LEAD default (nil = absent)
 	Agg     WindowAgg // WAgg: the statistic
 	P       float64   // WAggQuantile: the quantile (0.5 = median)
+	Sep     string    // WAggStringAgg: the separator
 	Num     func(T) (float64, bool)
 	Int     func(T) (int64, bool)        // set for an int64 field: the sum is exact, an Int128 (DFC155 C); avg divides the exact sum
 	Wide    func(T) (ssql.Int128, bool)  // set for an int128 field, the same way

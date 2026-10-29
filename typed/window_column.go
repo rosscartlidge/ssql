@@ -45,8 +45,11 @@ func columnKind[T any](spec WindowSpec[T]) colKind {
 	case WPercentRank, WCumeDist, WAvg:
 		return colFloat
 	case WAgg:
-		if spec.Agg == WAggMode {
+		switch spec.Agg {
+		case WAggMode, WAggStringAgg:
 			return colAny
+		case WAggCountDistinct:
+			return colInt
 		}
 		return colFloat
 	case WSum:

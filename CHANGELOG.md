@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Count-distinct and string-agg over a window frame run typed.** `typed.CountDistinctOf` and `typed.StringAggOf` (and their Ptr forms) join the frame statistics in the typed lane, counting under the same key as the record path (`ssql.DistinctKey`, now exported) and formatting values as `ssql.AggValueString`; the registry aggregates still on the record path over a frame are first, last, any, collect, arg-max and arg-min.
+
 ### Fixed
 
 - **A shard's panic could go unraised in the channel-based `typed.Parallel`.** A panicking goroutine's own defers run before the group's recover stores the panic, so a consumer that drained the channel the defer closed, in that gap, read no panic and returned normally — about one run in a hundred under the race detector. `shardGroup.rethrow` waits for the goroutine first; the JSON scanner and `ParallelBatched` had the same gap.

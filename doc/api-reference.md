@@ -892,6 +892,7 @@ func (w Welford) MeanValue() float64
 func (w Welford) Variance() float64         // sample, n−1
 
 func QuantileCont(sorted []float64, p float64) float64   // the continuous quantile every lane shares
+func DistinctKey(v any) any        // the key -count-distinct and -mode count a value under, shared by every lane
 func AggValueString(v any) string                        // StringAgg's text form: ints in full, floats shortest round-trip, times RFC 3339
 ```
 

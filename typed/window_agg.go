@@ -3,10 +3,20 @@ package typed
 import (
 	"math"
 	"sort"
-	"time"
+	"strings"
 
 	ssql "github.com/rosscartlidge/ssql/v4"
 )
+
+// aggMissing is the record path's rule for a value that counts as absent
+// in an aggregate: nil, or the empty string.
+func aggMissing(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, isString := v.(string)
+	return isString && s == ""
+}
 
 // frameAggregate is a WAgg spec's value over the frame [start, end] of
 // the sorted partition idx — the typed form of ssql.applyFrameAggregate:
@@ -45,6 +55,25 @@ func frameAggregate[T any](spec WindowSpec[T], all []T, idx []int, start, end in
 			return math.Sqrt(w.Variance())
 		}
 		return w.Variance()
+	case WAggCountDistinct:
+		seen := make(map[any]struct{})
+		for i := start; i <= end; i++ {
+			if v, ok := spec.Val(all[idx[i]]); ok && !aggMissing(v) {
+				seen[ssql.DistinctKey(v)] = struct{}{}
+			}
+		}
+		return int64(len(seen))
+	case WAggStringAgg:
+		var parts []string
+		for i := start; i <= end; i++ {
+			if v, ok := spec.Val(all[idx[i]]); ok && !aggMissing(v) {
+				parts = append(parts, ssql.AggValueString(v))
+			}
+		}
+		if len(parts) == 0 {
+			return nil // the record path's "" marker: absent
+		}
+		return strings.Join(parts, spec.Sep)
 	case WAggMode:
 		type entry struct {
 			value any
@@ -55,16 +84,10 @@ func frameAggregate[T any](spec WindowSpec[T], all []T, idx []int, start, end in
 		var order int64
 		for i := start; i <= end; i++ {
 			v, ok := spec.Val(all[idx[i]])
-			if !ok || v == nil {
+			if !ok || aggMissing(v) {
 				continue
 			}
-			if s, isString := v.(string); isString && s == "" {
-				continue // the record path's missing marker
-			}
-			k := v
-			if t, isTime := v.(time.Time); isTime {
-				k = t.UnixNano()
-			}
+			k := ssql.DistinctKey(v)
 			if e, seen := counts[k]; seen {
 				e.n++
 			} else {
