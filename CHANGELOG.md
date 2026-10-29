@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A shard's panic could go unraised in the channel-based `typed.Parallel`.** A panicking goroutine's own defers run before the group's recover stores the panic, so a consumer that drained the channel the defer closed, in that gap, read no panic and returned normally — about one run in a hundred under the race detector. `shardGroup.rethrow` waits for the goroutine first; the JSON scanner and `ParallelBatched` had the same gap.
+
 ### Changed
 
 - **Generated typed windows read plainly.** Each window function is one constructor — `typed.AvgOf(func(r T) int64 { return r.N })`, `typed.CountRows[T]()`, `typed.LagOf(get, 1).WithDefault(0)`, `typed.MedianOf(get)` — and the package builds the readers; one order field is its typed key alone, the comparator derived in the package. Before, the program spelled two reader closures per numeric function and a comparator repeating the key. The struct-literal form still works. An `update` with one unconditional clause no longer wraps its assignments in a block. (Ross, 2026-10-29: the generated code must stay easy to read, with the complexity of optimisation in the packages.)

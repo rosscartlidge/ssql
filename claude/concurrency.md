@@ -524,6 +524,18 @@ order is decided before its values are computed, compute the values
 straight into output order — a scatter followed by a gather is two
 random passes where none is needed.
 
+## 17. A captured panic is readable only after the goroutine has finished
+
+`shardGroup.Go` recovers a worker's panic in a deferred function and
+stores it; a reader `rethrow`s it. But the worker's OWN defers run
+before that recover — `Parallel`'s feeder closes the work channel in
+one — so a shard that drained the closed channel and rethrew in that
+gap read nil and returned normally: `TestStreamConsumersPropagateShardPanic`,
+one run in a hundred under the race detector (2026-10-29). `rethrow`
+waits on the group first; the wait is free once the goroutine is gone.
+Rule: never infer "the goroutine has stored its panic" from a side
+effect of its defers; wait on it.
+
 ## See Also
 
 - [`doc/research/typed-concurrency-proposal.md`](../doc/research/typed-concurrency-proposal.md) — design proposal + measured PoC results in §9a

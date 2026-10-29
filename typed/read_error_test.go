@@ -231,10 +231,12 @@ func TestStreamConsumersPropagateShardPanic(t *testing.T) {
 		},
 	}
 	for name, fn := range consumers {
-		re := catchReadError(t, fn)
-		if re.Row != 1002 {
-			t.Errorf("%s: %+v", name, re)
-		}
+		t.Run(name, func(t *testing.T) { // a subtest, so a failure names the consumer
+			re := catchReadError(t, fn)
+			if re.Row != 1002 {
+				t.Errorf("%+v", re)
+			}
+		})
 	}
 }
 

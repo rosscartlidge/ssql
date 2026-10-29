@@ -107,7 +107,16 @@ func (g *shardGroup) Wait() {
 // waits in one goroutine while the consumer loop is in another).
 func (g *shardGroup) waitQuiet() { g.wg.Wait() }
 
+// rethrow re-raises the first captured panic, after every goroutine has
+// finished: a goroutine's own defers run before Go's deferred recover
+// stores its panic, so a reader that waits on what such a defer does
+// (Parallel's feeder closes the work channel) could reach here first,
+// read nil and return normally — the flake in
+// TestStreamConsumersPropagateShardPanic, about one run in a hundred
+// under the race detector (2026-10-29). The wait is free when the
+// goroutine is already gone.
 func (g *shardGroup) rethrow() {
+	g.wg.Wait()
 	g.mu.Lock()
 	r := g.panic
 	g.mu.Unlock()
