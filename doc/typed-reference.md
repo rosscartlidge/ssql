@@ -726,7 +726,54 @@ const (
 	WAggStdDev    // its square root
 	WAggMode      // the most frequent Val; ties to the value seen first in the frame
 )
+
+// The spec constructors: one line per window function, the readers built
+// here (a generated program uses these; the struct literal still works).
+// The Ptr forms read a nullable field (*N, *V); absent values are skipped.
+type WindowNumber interface { int64 | float64 | ssql.Int128 | ssql.Decimal }
+func RowNumber[T any]() WindowSpec[T]
+func Rank[T any]() WindowSpec[T]
+func DenseRank[T any]() WindowSpec[T]
+func PercentRank[T any]() WindowSpec[T]
+func CumeDist[T any]() WindowSpec[T]
+func Ntile[T any](n int) WindowSpec[T]
+func CountRows[T any]() WindowSpec[T]                                       // the frame's rows
+func CountOf[T any, V any](get func(T) V) WindowSpec[T]                     // the rows whose field is present
+func CountOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
+func SumOf[T any, N WindowNumber](get func(T) N) WindowSpec[T]              // an int64 field sums to an ssql.Int128, a decimal to a decimal
+func SumOfPtr[T any, N WindowNumber](get func(T) *N) WindowSpec[T]
+func AvgOf[T any, N WindowNumber](get func(T) N) WindowSpec[T]
+func AvgOfPtr[T any, N WindowNumber](get func(T) *N) WindowSpec[T]
+func MinOf[T any, V any](get func(T) V) WindowSpec[T]
+func MinOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
+func MaxOf[T any, V any](get func(T) V) WindowSpec[T]
+func MaxOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
+func FirstOf[T any, V any](get func(T) V) WindowSpec[T]
+func FirstOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
+func LastOf[T any, V any](get func(T) V) WindowSpec[T]
+func LastOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
+func NthOf[T any, V any](get func(T) V, n int) WindowSpec[T]                // the frame's n-th value, 1-based
+func NthOfPtr[T any, V any](get func(T) *V, n int) WindowSpec[T]
+func LagOf[T any, V any](get func(T) V, n int) WindowSpec[T]                // n rows before; absent past the edge
+func LagOfPtr[T any, V any](get func(T) *V, n int) WindowSpec[T]
+func LeadOf[T any, V any](get func(T) V, n int) WindowSpec[T]
+func LeadOfPtr[T any, V any](get func(T) *V, n int) WindowSpec[T]
+func (s WindowSpec[T]) WithDefault(v any) WindowSpec[T]                     // a lag or lead's value past the edge
+func MedianOf[T any, N WindowNumber](get func(T) N) WindowSpec[T]
+func MedianOfPtr[T any, N WindowNumber](get func(T) *N) WindowSpec[T]
+func PercentileOf[T any, N WindowNumber](get func(T) N, p float64) WindowSpec[T]
+func PercentileOfPtr[T any, N WindowNumber](get func(T) *N, p float64) WindowSpec[T]
+func StdDevOf[T any, N WindowNumber](get func(T) N) WindowSpec[T]
+func StdDevOfPtr[T any, N WindowNumber](get func(T) *N) WindowSpec[T]
+func VarianceOf[T any, N WindowNumber](get func(T) N) WindowSpec[T]
+func VarianceOfPtr[T any, N WindowNumber](get func(T) *N) WindowSpec[T]
+func ModeOf[T any, V any](get func(T) V) WindowSpec[T]
+func ModeOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
 ```
+
+A clause that names its order by one typed key (`KeyInt`, `KeyString` or
+`KeyFloat`, with `Desc`) and no `Compare` gets its comparator from the
+key; `Compare` is for a multi-field or time, int128 or decimal order.
 
 The typed form of the `window` command: one clause per `PARTITION BY /
 ORDER BY / frame`, any number of functions per clause, one output row per

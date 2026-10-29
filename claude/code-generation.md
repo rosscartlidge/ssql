@@ -19,6 +19,8 @@ ssql supports **self-generating pipelines** where commands emit Go code fragment
    - GOOD: `ssql.DisplayTable(records, 50)` (one line, clear intent)
    - BAD: 80 lines of formatting logic inlined (hard to understand)
 
+   - The typed window is the worked example (2026-10-29, Ross: "the code generated must remain easy to read with the complexity of optimisation moved to the packages"): a program names each function in one line — `typed.AvgOf(func(r T) int64 { return r.N })`, `typed.CountRows[T]()`, `typed.LagOf(get, 1).WithDefault(0)` — and the package builds the readers (`typed/window_spec.go`); one order field is its typed key alone (`KeyInt: …`) and the package derives the comparator (`withComparators`). Before, the template spelled two reader closures per numeric function and a comparator that repeated the key. An `update` with one unconditional clause has no block around its assignments. `TestTypedWindowProgramReadsPlainly` holds the line; check any template change by generating a pipeline and reading `run()`.
+
 2. **Generated code should be self-documenting** - A reader should immediately understand what the pipeline does
 
 3. **When adding new commands:**

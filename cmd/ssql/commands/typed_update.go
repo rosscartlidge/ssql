@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"slices"
 	"fmt"
 	"strconv"
 	"strings"
@@ -401,6 +402,25 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		}
 	}
 	body.WriteString("\t\t}\n")
+	if len(clauses) == 1 && uncond == 0 {
+		// One unconditional clause needs no block: the braces were the
+		// first arm of an if/else chain with nothing to chain (Ross,
+		// 2026-10-29: the program must stay easy to read).
+		lines := strings.Split(strings.TrimSuffix(body.String(), "\n"), "\n")
+		open, close := slices.Index(lines, "\t\t{"), len(lines)-1
+		if open >= 0 && lines[close] == "\t\t}" {
+			body.Reset()
+			for i, l := range lines {
+				switch {
+				case i == open || i == close:
+				case i > open:
+					body.WriteString(strings.TrimPrefix(l, "\t") + "\n")
+				default:
+					body.WriteString(l + "\n")
+				}
+			}
+		}
+	}
 	body.WriteString("\t\treturn out\n")
 
 	// Render the struct definition for new derived schemas.

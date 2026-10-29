@@ -143,6 +143,7 @@ type WindowClause[T any] struct {
 // Window evaluates clauses over the input and builds one output per
 // row; results are passed to build in clause order, then spec order.
 func Window[T, O any](clauses []WindowClause[T], build func(T, WindowRow) O) func(iter.Seq[T]) iter.Seq[O] {
+	clauses = withComparators(clauses)
 	return func(in iter.Seq[T]) iter.Seq[O] {
 		return func(yield func(O) bool) {
 			var all []T
@@ -200,6 +201,7 @@ func WindowPresorted[T, O any](clauses []WindowClause[T], build func(T, WindowRo
 }
 
 func windowStream[T, O any](clauses []WindowClause[T], build func(T, WindowRow) O, presorted bool) func(Stream[T]) Stream[O] {
+	clauses = withComparators(clauses)
 	return func(in Stream[T]) Stream[O] {
 		var (
 			once    sync.Once

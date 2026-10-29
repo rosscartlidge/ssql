@@ -782,7 +782,7 @@ func TestTypedWindowFrameStatistics(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	src := runTypedPipeline(t, bin,
 		bin+" from range 20 | "+bin+" window -presorted -preceding 2 -following 2 -median n med -stddev n sd -mode n mo -order n -count c | "+bin+" where -if c eq 5 | "+bin+" limit 2 | "+bin+" to csv")
-	for _, want := range []string{"typed.WAgg", "typed.WAggQuantile", "typed.WAggStdDev", "typed.WAggMode"} {
+	for _, want := range []string{"typed.MedianOf(", "typed.StdDevOf(", "typed.ModeOf("} {
 		if !strings.Contains(src, want) {
 			t.Errorf("the frame statistics took the record path: generated source lacks %q\n%s", want, src)
 		}
@@ -867,6 +867,37 @@ func TestTypedWindowPresorted(t *testing.T) {
 		bin+" from "+emp+" | "+bin+" sort dept years | "+bin+" window -presorted -partition dept -order years -sum years total + -order name -row-number rn | "+bin+" to csv")
 	if !strings.Contains(src, "typed.WindowParallel(") || strings.Contains(src, "typed.WindowPresorted(") {
 		t.Errorf("clauses on different orders must take the materialised window\n%s", src)
+	}
+}
+
+// TestTypedWindowProgramReadsPlainly: the generated window is one
+// constructor per function and one key per order, the readers and the
+// comparator built in the package (typed/window_spec.go); an update
+// with one unconditional clause has no block around its assignments.
+// Ross, 2026-10-29: the program must stay easy to read, with the
+// complexity of optimisation in the packages.
+func TestTypedWindowProgramReadsPlainly(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from range 100 | "+bin+" update -set-expr r 'hash(n)' | "+bin+" sort n | "+bin+" exclude r | "+bin+" window -presorted -preceding 5 -following 5 -avg n running -order n -count count | "+bin+" where -if count eq 11 | "+bin+" limit 3 | "+bin+" to csv")
+	for _, want := range []string{
+		"typed.CountRows[RangeRowUpdatedSubset]()",
+		"typed.AvgOf(func(r RangeRowUpdatedSubset) int64 { return r.N })",
+		"KeyInt: func(r RangeRowUpdatedSubset) int64 { return r.N },",
+		"\t\tout.R = exprfn.Hash(r.N, 0)\n\t\treturn out",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated source lacks %q\n%s", want, src)
+		}
+	}
+	for _, bad := range []string{"Compare:", " Num:", "Kind: typed.", "{N: r.N}\n\t\t{\n"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("generated source spells %q, which belongs in the package\n%s", bad, src)
+		}
+	}
+	out := goRunGenerated(t, src)
+	if want := "n,count,running\n6,11,6\n7,11,7\n8,11,8\n"; !strings.Contains(out, want) {
+		t.Errorf("expected %q in output\n%s", want, out)
 	}
 }
 

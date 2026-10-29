@@ -5,6 +5,12 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Generated typed windows read plainly.** Each window function is one constructor — `typed.AvgOf(func(r T) int64 { return r.N })`, `typed.CountRows[T]()`, `typed.LagOf(get, 1).WithDefault(0)`, `typed.MedianOf(get)` — and the package builds the readers; one order field is its typed key alone, the comparator derived in the package. Before, the program spelled two reader closures per numeric function and a comparator repeating the key. The struct-literal form still works. An `update` with one unconditional clause no longer wraps its assignments in a block. (Ross, 2026-10-29: the generated code must stay easy to read, with the complexity of optimisation in the packages.)
+
 ## [4.133.0] - 2026-10-29
 
 ### Changed
