@@ -193,7 +193,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				hoisted = append(hoisted, plan.Hoisted...)
 				goType = string(plan.FinalType)
 				scale = plan.FinalScale
-				assign = fmt.Sprintf("if v, ok := res[%d].(%s); ok { o.GONAME = v }", resIdx, goType)
+				assign = windowResultAssign(resIdx, goType, false)
 				specLit = renderWindowFoldSpec(stateType, in.TypeName, plan)
 			} else {
 				var reason string
@@ -226,7 +226,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 
 	// The build function.
 	var build strings.Builder
-	fmt.Fprintf(&build, "func(r %s, res []any) %s {\n\t\to := %s{", in.TypeName, outType, outType)
+	fmt.Fprintf(&build, "func(r %s, res typed.WindowRow) %s {\n\t\to := %s{", in.TypeName, outType, outType)
 	for i, f := range in.Fields {
 		if i > 0 {
 			build.WriteString(", ")
@@ -275,6 +275,30 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 	return true, "", lib.WriteCodeFragment(frag)
 }
 
+// windowResultAssign is the statement assigning result i of a
+// typed.WindowRow into o.GONAME (its address when ptr — a nullable
+// result): the column's typed reader for the three unboxed kinds (no
+// allocation per row), the boxed value asserted to the Go type for the
+// rest (the readers fall back across kinds, so a -min on an int64 field
+// reads through Int either way).
+func windowResultAssign(i int, goType string, ptr bool) string {
+	var read string
+	switch goType {
+	case "int64":
+		read = fmt.Sprintf("res.Int(%d)", i)
+	case "float64":
+		read = fmt.Sprintf("res.Float(%d)", i)
+	case "ssql.Int128":
+		read = fmt.Sprintf("res.Wide(%d)", i)
+	default:
+		read = fmt.Sprintf("res.Value(%d).(%s)", i, goType)
+	}
+	if ptr {
+		return fmt.Sprintf("if v, ok := %s; ok { o.GONAME = &v }", read)
+	}
+	return fmt.Sprintf("if v, ok := %s; ok { o.GONAME = v }", read)
+}
+
 // typedWindowSpec renders one typed.WindowSpec literal and decides the
 // result's Go type and the assignment from res[i]. Results that can be
 // absent (lag/lead without a default, nth_value) are pointer-typed —
@@ -321,38 +345,39 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			}
 		}
 	}
-	res := fmt.Sprintf("res[%d]", i)
+	read := func(t string) string { return windowResultAssign(i, t, false) }
+	readPtr := func(t string) string { return windowResultAssign(i, t, true) }
 	switch d.Kind {
 	case "row_number", "rank", "dense_rank", "count":
 		k := map[string]string{"row_number": "WRowNumber", "rank": "WRank", "dense_rank": "WDenseRank", "count": "WCount"}[d.Kind]
-		return d.Kind, "int64", fmt.Sprintf("if v, ok := %s.(int64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.%s}", k), ""
+		return d.Kind, "int64", read("int64"), fmt.Sprintf("{Kind: typed.%s}", k), ""
 	case "ntile":
-		return d.Kind, "int64", fmt.Sprintf("if v, ok := %s.(int64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WNtile, N: %d}", d.N), ""
+		return d.Kind, "int64", read("int64"), fmt.Sprintf("{Kind: typed.WNtile, N: %d}", d.N), ""
 	case "percent_rank", "cume_dist":
 		k := map[string]string{"percent_rank": "WPercentRank", "cume_dist": "WCumeDist"}[d.Kind]
-		return d.Kind, "float64", fmt.Sprintf("if v, ok := %s.(float64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.%s}", k), ""
+		return d.Kind, "float64", read("float64"), fmt.Sprintf("{Kind: typed.%s}", k), ""
 	case "sum", "avg":
 		if num == "" {
 			return "", "", "", "", fmt.Sprintf("window: %s over non-numeric field %q stays on the record path", d.Kind, f.Name)
 		}
 		k := map[string]string{"sum": "WSum", "avg": "WAvg"}[d.Kind]
 		if d.Kind == "sum" && (isInt || isWide) { // an integer column sums to an int128, exactly (DFC155 C)
-			return d.Kind, "ssql.Int128", fmt.Sprintf("if v, ok := %s.(ssql.Int128); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
+			return d.Kind, "ssql.Int128", read("ssql.Int128"), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
 		}
 		if d.Kind == "sum" && isDec { // a decimal column sums to a decimal at its scale (DFC155 E)
-			return d.Kind, "ssql.Decimal", fmt.Sprintf("if v, ok := %s.(ssql.Decimal); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
+			return d.Kind, "ssql.Decimal", read("ssql.Decimal"), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
 		}
-		return d.Kind, "float64", fmt.Sprintf("if v, ok := %s.(float64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.%s, %s}", k, num), ""
+		return d.Kind, "float64", read("float64"), fmt.Sprintf("{Kind: typed.%s, %s}", k, num), ""
 	case "count_field":
-		return d.Kind, "int64", fmt.Sprintf("if v, ok := %s.(int64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WCountField, %s}", val), ""
+		return d.Kind, "int64", read("int64"), fmt.Sprintf("{Kind: typed.WCountField, %s}", val), ""
 	case "first", "last", "min", "max":
 		k := map[string]string{"first": "WFirst", "last": "WLast", "min": "WMin", "max": "WMax"}[d.Kind]
 		// Always present within a non-empty frame; keeps the field's type
 		// (a nullable field stays nullable).
 		if strings.HasPrefix(f.GoType, "*") {
-			return d.Kind, f.GoType, fmt.Sprintf("if v, ok := %s.(%s); ok { o.GONAME = &v }", res, base), fmt.Sprintf("{Kind: typed.%s, %s}", k, val), ""
+			return d.Kind, f.GoType, readPtr(base), fmt.Sprintf("{Kind: typed.%s, %s}", k, val), ""
 		}
-		return d.Kind, f.GoType, fmt.Sprintf("if v, ok := %s.(%s); ok { o.GONAME = v }", res, f.GoType), fmt.Sprintf("{Kind: typed.%s, %s}", k, val), ""
+		return d.Kind, f.GoType, read(f.GoType), fmt.Sprintf("{Kind: typed.%s, %s}", k, val), ""
 	case "lag", "lead", "nth_value":
 		k := map[string]string{"lag": "WLag", "lead": "WLead", "nth_value": "WNth"}[d.Kind]
 		if d.Default != nil {
@@ -361,9 +386,9 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			if defGo != base {
 				return "", "", "", "", fmt.Sprintf("window: %s default %v is %s but field %q is %s — stays on the record path", d.Kind, d.Default, defGo, f.Name, f.GoType)
 			}
-			return d.Kind, base, fmt.Sprintf("if v, ok := %s.(%s); ok { o.GONAME = v }", res, base), fmt.Sprintf("{Kind: typed.%s, N: %d, Default: %s, %s}", k, d.N, goLiteralOf(d.Default), val), ""
+			return d.Kind, base, read(base), fmt.Sprintf("{Kind: typed.%s, N: %d, Default: %s, %s}", k, d.N, goLiteralOf(d.Default), val), ""
 		}
-		return d.Kind, "*" + base, fmt.Sprintf("if v, ok := %s.(%s); ok { o.GONAME = &v }", res, base), fmt.Sprintf("{Kind: typed.%s, N: %d, %s}", k, d.N, val), ""
+		return d.Kind, "*" + base, readPtr(base), fmt.Sprintf("{Kind: typed.%s, N: %d, %s}", k, d.N, val), ""
 	}
 	return "", "", "", "", fmt.Sprintf("window: %s has no typed form", d.Kind)
 }

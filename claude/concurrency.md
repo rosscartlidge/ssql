@@ -512,6 +512,18 @@ per-shard form). 5.0 → 4.07 s on the benchmark window, 4.7 → 4.1 GB.
 independently; with the flag off, the fan-in scrambled the rows and
 the test said so.
 
+Postscript (DFC158 §3.12, the same day): the phase timing then named
+the largest partition's specs pass, 0.77 s on one core after its sort
+— a boxed value per row scattered into a results slice indexed by
+INPUT row, a cache miss each, gathered back afterwards. The results
+are now typed columns in OUTPUT order, written sequentially by the
+partition that decides the order (its positions are known from the
+partition sizes before its values are); 0.24 s, and the gather of the
+results is gone. 4.07 → 3.24 s. The pattern: when a barrier's output
+order is decided before its values are computed, compute the values
+straight into output order — a scatter followed by a gather is two
+random passes where none is needed.
+
 ## See Also
 
 - [`doc/research/typed-concurrency-proposal.md`](../doc/research/typed-concurrency-proposal.md) — design proposal + measured PoC results in §9a

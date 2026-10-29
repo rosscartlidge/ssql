@@ -120,16 +120,16 @@ type WindowClause[T any] struct {
 
 // Window evaluates clauses over the input and builds one output per
 // row; results are passed to build in clause order, then spec order.
-func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(iter.Seq[T]) iter.Seq[O] {
+func Window[T, O any](clauses []WindowClause[T], build func(T, WindowRow) O) func(iter.Seq[T]) iter.Seq[O] {
 	return func(in iter.Seq[T]) iter.Seq[O] {
 		return func(yield func(O) bool) {
 			var all []T
 			for r := range in {
 				all = append(all, r)
 			}
-			rows, results := windowRows(all, clauses)
+			rows, cols := windowRows(all, clauses)
 			for p := range rows {
-				if !yield(build(rows[p], results[p])) {
+				if !yield(build(rows[p], WindowRow{cols, p})) {
 					return
 				}
 			}
@@ -156,12 +156,12 @@ func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(it
 // shard consumed. Before this form the window accepted only an iter.Seq
 // and the planner read the source serially: 2.4 s of the benchmark
 // window plus the growth of one slice by appends (DFC158 §4.3).
-func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(Stream[T]) Stream[O] {
+func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, WindowRow) O) func(Stream[T]) Stream[O] {
 	return func(in Stream[T]) Stream[O] {
 		var (
 			once    sync.Once
 			rows    []T
-			results [][]any
+			cols    []windowColumn
 			failure any
 		)
 		prepare := func() {
@@ -174,7 +174,7 @@ func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, []any) O)
 						failure = r
 					}
 				}()
-				rows, results = windowRows(materialise(in), clauses)
+				rows, cols = windowRows(materialise(in), clauses)
 			})
 			if failure != nil {
 				panic(failure)
@@ -187,7 +187,7 @@ func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, []any) O)
 				prepare()
 				n := len(rows)
 				for p := i * n / r; p < (i+1)*n/r; p++ {
-					if !yield(build(rows[p], results[p])) {
+					if !yield(build(rows[p], WindowRow{cols, p})) {
 						return
 					}
 				}
@@ -232,75 +232,111 @@ func materialise[T any](in Stream[T]) []T {
 }
 
 // windowRows is the window over the materialised rows: the rows in the
-// window's output order and, parallel to them, each row's results in
-// clause order then spec order.
-func windowRows[T any](all []T, clauses []WindowClause[T]) ([]T, [][]any) {
+// window's output order and, beside them, one column of results per
+// spec in clause order then spec order, in that same order.
+func windowRows[T any](all []T, clauses []WindowClause[T]) ([]T, []windowColumn) {
 	n := len(all)
 	if n == 0 {
 		return nil, nil
 	}
-	total := 0
+	var cols []windowColumn
 	for _, c := range clauses {
-		total += len(c.Specs)
+		for _, spec := range c.Specs {
+			cols = append(cols, newWindowColumn(spec, n))
+		}
 	}
-	// One allocation for every row's results, not one per row.
-	flat := make([]any, n*total)
-	results := make([][]any, n)
-	for i := range results {
-		results[i] = flat[i*total : (i+1)*total : (i+1)*total]
+	// The first clause with an ORDER BY decides the output order: its
+	// partitions in first-seen order, each sorted. Its results are
+	// written straight at their output positions (the partition's
+	// offset plus the sorted position); any other clause's go through
+	// outPos, the row's output position, built once the order is known.
+	// Without an ordered clause the output order is the input order and
+	// outPos is the identity (nil).
+	deciding := -1
+	for i, c := range clauses {
+		if c.HasOrder {
+			deciding = i
+			break
+		}
+	}
+	// The deciding clause runs first, so outPos exists for the others;
+	// clauses are independent (each writes its own columns).
+	order := make([]int, 0, len(clauses))
+	if deciding >= 0 {
+		order = append(order, deciding)
+	}
+	for ci := range clauses {
+		if ci != deciding {
+			order = append(order, ci)
+		}
+	}
+	bases := make([]int, len(clauses))
+	for ci := 1; ci < len(clauses); ci++ {
+		bases[ci] = bases[ci-1] + len(clauses[ci-1].Specs)
 	}
 	var outputOrder []int
-	orderDecided := false // the first clause with an ORDER BY fixes the output order
-	base := 0
-	for _, c := range clauses {
+	var outPos []int32
+	for _, ci := range order {
+		c, base := clauses[ci], bases[ci]
 		partitions, partOrder := partitionIndex(c, all)
+		offsets := make(map[string]int, len(partOrder))
+		if ci == deciding {
+			off := 0
+			for _, k := range partOrder {
+				offsets[k] = off
+				off += len(partitions[k])
+			}
+		}
 		// Partitions are independent — each sorts its own index
-		// slice and writes its own rows of results — so they run
-		// concurrently, one goroutine per core; a panic in a row's
+		// slice and writes its own positions of the columns — so they
+		// run concurrently, one goroutine per core; a panic in a row's
 		// closure is re-raised here, as the readers' shards do it.
-		// The output order is assembled afterwards, in first-seen
-		// partition order.
 		var g shardGroup
 		sem := make(chan struct{}, runtime.GOMAXPROCS(0))
 		for _, k := range partOrder {
 			idx := partitions[k]
+			off := offsets[k]
 			sem <- struct{}{}
 			g.Go(func() {
 				defer func() { <-sem }()
-				windowPartition(c, all, idx, results, base)
+				if ci == deciding {
+					windowPartition(c, all, idx, cols[base:base+len(c.Specs)], off, nil)
+				} else {
+					windowPartition(c, all, idx, cols[base:base+len(c.Specs)], -1, outPos)
+				}
 			})
 		}
 		g.Wait()
-		if !orderDecided && c.HasOrder {
+		if ci == deciding {
+			outputOrder = make([]int, 0, n)
 			for _, k := range partOrder {
 				outputOrder = append(outputOrder, partitions[k]...)
 			}
+			if len(clauses) > 1 {
+				outPos = make([]int32, n)
+				parallelRanges(n, func(lo, hi int) {
+					for p := lo; p < hi; p++ {
+						outPos[outputOrder[p]] = int32(p)
+					}
+				})
+			}
 		}
-		if c.HasOrder {
-			orderDecided = true
-		}
-		base += len(c.Specs)
 	}
 	if outputOrder == nil {
-		outputOrder = make([]int, n)
-		for i := range outputOrder {
-			outputOrder[i] = i
-		}
+		return all, cols
 	}
-	// The rows and their results, gathered into output order on every
-	// core before the emit: read at random from a slice of millions of
-	// rows, each row was a cache miss, and the emit loop took 3.7 s of
-	// the benchmark window on one core (DFC158 §3.10).
+	// The rows gathered into output order on every core: read at random
+	// from a slice of millions of rows, each row is a cache miss, and on
+	// one core the emit took 3.7 s of the benchmark window (DFC158
+	// §3.10). The results need no gather: the columns are in output
+	// order already.
 	ordered := make([]T, n)
-	orderedResults := make([][]any, n)
 	parallelRanges(n, func(lo, hi int) {
 		for p := lo; p < hi; p++ {
-			i := outputOrder[p]
-			ordered[p] = all[i]
-			orderedResults[p] = results[i]
+			ordered[p] = all[outputOrder[p]]
 		}
 	})
-	return ordered, orderedResults
+	return ordered, cols
 }
 
 // rangeMin is the row count below which a parallel pass over the rows
@@ -405,9 +441,12 @@ func partitionIndexRanges[T any](c WindowClause[T], all []T, r int) (map[string]
 	return partitions, partOrder
 }
 
-// windowPartition sorts one partition's index slice and fills its rows
-// of results for every spec of the clause.
-func windowPartition[T any](c WindowClause[T], all []T, idx []int, results [][]any, base int) {
+// windowPartition sorts one partition's index slice and fills the
+// clause's columns at the partition's rows: sorted position pos goes to
+// output position off+pos when the clause decides the output order
+// (off >= 0), else to the row's output position — outPos[idx[pos]], or
+// idx[pos] itself when no clause orders the output.
+func windowPartition[T any](c WindowClause[T], all []T, idx []int, cols []windowColumn, off int, outPos []int32) {
 	if c.HasOrder && c.Compare != nil {
 		// A stable sort by pdqsort: the row's index is the tiebreak, so
 		// peers keep input order exactly as sort.SliceStable kept it, with
@@ -432,15 +471,25 @@ func windowPartition[T any](c WindowClause[T], all []T, idx []int, results [][]a
 		}
 	}
 	partLen := len(idx)
+	at := func(pos int) int { // the output position of sorted position pos
+		switch {
+		case off >= 0:
+			return off + pos
+		case outPos != nil:
+			return int(outPos[idx[pos]])
+		}
+		return idx[pos]
+	}
 	done := make([]bool, len(c.Specs))
 	for s, spec := range c.Specs {
+		col := &cols[s]
 		// A fold over the running frame: one pass, the state
 		// carried across the partition (O(n), not O(n²)).
 		if spec.Kind == WFold && isRunningFrame(c.Frame) {
 			state := spec.Init()
 			for pos := range idx {
 				state = spec.Step(state, all[idx[pos]])
-				results[idx[pos]][base+s] = spec.Final(state)
+				col.set(at(pos), spec.Final(state))
 			}
 			done[s] = true
 			continue
@@ -448,10 +497,7 @@ func windowPartition[T any](c WindowClause[T], all []T, idx []int, results [][]a
 		// The aggregates and ranks over the running frame,
 		// carried the same way; the whole-partition frame,
 		// computed once (window_running.go).
-		if vals := runningSpecValues(spec, c, all, idx); vals != nil {
-			for pos := range idx {
-				results[idx[pos]][base+s] = vals[pos]
-			}
+		if runningSpecValues(spec, c, all, idx, col, at) {
 			done[s] = true
 		}
 	}
@@ -460,7 +506,7 @@ func windowPartition[T any](c WindowClause[T], all []T, idx []int, results [][]a
 			if done[s] {
 				continue
 			}
-			results[idx[pos]][base+s] = windowValue(spec, c, all, idx, pos, partLen)
+			cols[s].set(at(pos), windowValue(spec, c, all, idx, pos, partLen))
 		}
 	}
 }

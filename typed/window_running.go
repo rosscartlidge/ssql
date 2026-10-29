@@ -16,27 +16,27 @@ func isWholeFrame(f WindowFrame) bool {
 	return !f.Range && f.Preceding < 0 && f.Following < 0
 }
 
-// runningSpecValues precomputes one value per position for a spec whose
-// frame allows it; nil when the spec stays per row.
-func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []int) []any {
+// runningSpecValues writes one value per position of the partition into
+// the spec's column — at(pos) is the output position of sorted position
+// pos — for a spec whose frame allows it, and reports whether it did;
+// false means the spec stays per row.
+func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []int, col *windowColumn, at func(int) int) bool {
 	partLen := len(idx)
 	switch {
 	case isWholeFrame(c.Frame):
 		switch spec.Kind {
 		case WSum, WAvg, WCount, WCountField, WMin, WMax, WFold, WFirst, WLast, WNth:
 			v := windowValue(spec, c, all, idx, 0, partLen)
-			vals := make([]any, partLen)
-			for i := range vals {
-				vals[i] = v
+			for pos := range idx {
+				col.set(at(pos), v)
 			}
-			return vals
+			return true
 		}
-		return nil
+		return false
 	case !isRunningFrame(c.Frame):
-		return nil
+		return false
 	}
 	peers := func(a, b int) bool { return c.Compare == nil || c.Compare(all[idx[a]], all[idx[b]]) == 0 }
-	vals := make([]any, partLen)
 	switch spec.Kind {
 	case WSum:
 		switch {
@@ -50,7 +50,7 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 						sum = sum.Add(v)
 					}
 				}
-				vals[pos] = sum
+				col.anys[at(pos)] = sum
 			}
 		case spec.Int != nil || spec.Wide != nil:
 			var sum ssql.Int128
@@ -58,7 +58,7 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 				if v, ok := spec.wide(all[idx[pos]]); ok {
 					sum = sum.Add(v)
 				}
-				vals[pos] = sum
+				col.wides[at(pos)] = sum
 			}
 		default:
 			var sum ssql.CompensatedSum
@@ -66,7 +66,7 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 				if v, ok := spec.Num(all[idx[pos]]); ok {
 					sum.Add(v)
 				}
-				vals[pos] = sum.Value()
+				col.floats[at(pos)] = sum.Value()
 			}
 		}
 	case WAvg:
@@ -80,9 +80,9 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 					cnt++
 				}
 				if cnt == 0 {
-					vals[pos] = nil
+					col.setAbsent(at(pos))
 				} else {
-					vals[pos] = sum.Float64() / float64(cnt)
+					col.floats[at(pos)] = sum.Float64() / float64(cnt)
 				}
 			}
 		case spec.Int != nil || spec.Wide != nil:
@@ -93,9 +93,9 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 					cnt++
 				}
 				if cnt == 0 {
-					vals[pos] = float64(0)
+					col.floats[at(pos)] = 0
 				} else {
-					vals[pos] = sum.Float64() / float64(cnt)
+					col.floats[at(pos)] = sum.Float64() / float64(cnt)
 				}
 			}
 		default:
@@ -106,15 +106,15 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 					cnt++
 				}
 				if cnt == 0 {
-					vals[pos] = float64(0)
+					col.floats[at(pos)] = 0
 				} else {
-					vals[pos] = sum.Value() / float64(cnt)
+					col.floats[at(pos)] = sum.Value() / float64(cnt)
 				}
 			}
 		}
 	case WCount:
 		for pos := range idx {
-			vals[pos] = int64(pos + 1)
+			col.ints[at(pos)] = int64(pos + 1)
 		}
 	case WCountField:
 		var cnt int64
@@ -122,7 +122,7 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 			if v, ok := spec.Val(all[idx[pos]]); ok && v != nil {
 				cnt++
 			}
-			vals[pos] = cnt
+			col.ints[at(pos)] = cnt
 		}
 	case WMin, WMax:
 		var best any
@@ -135,7 +135,7 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 					best = v
 				}
 			}
-			vals[pos] = best
+			col.anys[at(pos)] = best
 		}
 	case WRank, WPercentRank:
 		groupStart := 0
@@ -146,12 +146,12 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 			rank := groupStart + 1
 			if spec.Kind == WPercentRank {
 				if partLen <= 1 {
-					vals[pos] = float64(0)
+					col.floats[at(pos)] = 0
 				} else {
-					vals[pos] = float64(rank-1) / float64(partLen-1)
+					col.floats[at(pos)] = float64(rank-1) / float64(partLen-1)
 				}
 			} else {
-				vals[pos] = int64(rank)
+				col.ints[at(pos)] = int64(rank)
 			}
 		}
 	case WDenseRank:
@@ -160,7 +160,7 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 			if pos > 0 && !peers(pos-1, pos) {
 				dr++
 			}
-			vals[pos] = dr
+			col.ints[at(pos)] = dr
 		}
 	case WCumeDist:
 		groupEnd := -1
@@ -171,10 +171,10 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 					groupEnd++
 				}
 			}
-			vals[pos] = float64(groupEnd+1) / float64(partLen)
+			col.floats[at(pos)] = float64(groupEnd+1) / float64(partLen)
 		}
 	default:
-		return nil
+		return false
 	}
-	return vals
+	return true
 }

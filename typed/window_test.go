@@ -51,21 +51,21 @@ func TestWindow(t *testing.T) {
 			{Kind: WNth, N: 2, Val: func(r winRow) (any, bool) { return r.Salary, true }},
 		},
 	}
-	build := func(r winRow, res []any) winOut {
+	build := func(r winRow, res WindowRow) winOut {
 		o := winOut{Name: r.Name}
-		if v, ok := res[0].(int64); ok {
+		if v, ok := res.Value(0).(int64); ok {
 			o.Rn = v
 		}
-		if v, ok := res[1].(int64); ok {
+		if v, ok := res.Value(1).(int64); ok {
 			o.Rk = v
 		}
-		if v, ok := res[2].(float64); ok {
+		if v, ok := res.Value(2).(float64); ok {
 			o.Run = v
 		}
-		if v, ok := res[3].(int64); ok {
+		if v, ok := res.Value(3).(int64); ok {
 			o.Prev = &v
 		}
-		if v, ok := res[4].(int64); ok {
+		if v, ok := res.Value(4).(int64); ok {
 			o.Nth = &v
 		}
 		return o
@@ -111,9 +111,9 @@ func TestWindow(t *testing.T) {
 			Frame:    WindowFrame{Range: true, RangePreceding: 10000, RangeFollowing: 0},
 			Specs:    []WindowSpec[winRow]{{Kind: WCount}},
 		}
-		out := slices.Collect(Window([]WindowClause[winRow]{rc}, func(r winRow, res []any) winOut {
+		out := slices.Collect(Window([]WindowClause[winRow]{rc}, func(r winRow, res WindowRow) winOut {
 			o := winOut{Name: r.Name}
-			if v, ok := res[0].(int64); ok {
+			if v, ok := res.Value(0).(int64); ok {
 				o.Rn = v
 			}
 			return o
@@ -133,7 +133,7 @@ func TestWindow(t *testing.T) {
 		}
 		// No ORDER BY anywhere: input order.
 		plain := WindowClause[winRow]{Specs: []WindowSpec[winRow]{{Kind: WRowNumber}}}
-		out2 := slices.Collect(Window([]WindowClause[winRow]{plain}, func(r winRow, res []any) winOut { return winOut{Name: r.Name} })(slices.Values(rows)))
+		out2 := slices.Collect(Window([]WindowClause[winRow]{plain}, func(r winRow, res WindowRow) winOut { return winOut{Name: r.Name} })(slices.Values(rows)))
 		if out2[0].Name != "Alice" || out2[len(out2)-1].Name != "Dan" {
 			t.Fatalf("without ORDER BY the output must be input order, got %v…%v", out2[0].Name, out2[len(out2)-1].Name)
 		}
@@ -177,8 +177,8 @@ func TestWindowFold(t *testing.T) {
 		Fib, Sum int64
 		WSum     float64
 	}
-	build := func(r winRow, res []any) out {
-		return out{Name: r.Name, Fib: res[0].(int64), Sum: res[1].(int64), WSum: res[2].(float64)}
+	build := func(r winRow, res WindowRow) out {
+		return out{Name: r.Name, Fib: res.Value(0).(int64), Sum: res.Value(1).(int64), WSum: res.Value(2).(float64)}
 	}
 	for _, fr := range []WindowFrame{{Preceding: -1}, {Preceding: 1}, {Preceding: 1, Following: 1}, {Preceding: -1, Following: -1}} {
 		clause := WindowClause[winRow]{

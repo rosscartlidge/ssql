@@ -615,6 +615,52 @@ FeedsParallelGroupBy` holds the generated program to
 `GroupByParallel` after the window with the serial `GroupBy` absent,
 and a `limit 3` after the window to the window's order.
 
+### 3.12 The window's results in typed columns, in output order (2026-10-29)
+
+The phase timing of §3.11 named the last serial pass: after the 4.75
+M-row partition's sort, its running-sum pass ran 0.77 s on one core.
+Not the arithmetic — a boxed `any` per row (an allocation, and 14.6 M
+objects for the GC to scan) scattered into `results[idx[pos]]`, a
+cache miss per row, then gathered back into output order.
+
+The results now live in one typed column per spec
+(`typed/window_column.go`: `[]int64` for ranks, row numbers, ntile and
+counts; `[]float64` for avg, percent_rank, cume_dist and float sums;
+`[]ssql.Int128` for integer sums; `[]any` for lag, lead, first, last,
+nth, min, max, folds and decimal sums; an absent bitmap for the typed
+ones), in the window's OUTPUT order. The first ordered clause decides
+the order, so its partitions' positions are known before their values
+are: partition k's sorted position pos is output position offset(k) +
+pos, and `runningSpecValues` writes there, sequentially, unboxed. A
+clause that did not decide the order writes through `outPos`, the row
+→ output-position map built once the order is known (the deciding
+clause runs first; clauses are independent); with no ordered clause
+the output order is the input order and the map is the identity. The
+rows alone are gathered. `build` takes a `WindowRow` — `Int`, `Float`,
+`Wide` read their column without boxing and fall back to the boxed
+value for a column of another kind (a `-min` on an int64 field reads
+as int64 either way); `Value`/`Values` box — and the template emits
+the reader matching the result's Go type.
+
+The benchmark window: **4.07 → 3.24 s** (best of three), peak RSS
+about the same (4.3 GB; the boxes and the per-row result slices are
+gone, the columns are what remains). The phases: materialise 0.87,
+partition index 0.18, sort and specs 1.71 — the big partition's specs
+pass 0.77 → 0.24 s — gather 0.28 → 0.07, the parallel emit and
+group-by in the rest. What is left on the critical path is the
+largest partition's sort (its chunks sort on every core; the final
+merges of `sortChunked` are serial, ~0.5 s of its 1.2) and the
+materialise (0.87: the Parquet read's tail and the copy); both are in
+TODO without an expected win attached.
+
+Tests: `TestWindowColumnsAcrossClauses` (three clauses: an unordered
+one before the deciding one, the deciding one, an ordered one after
+it; a lag's absent value and a decimal avg over nothing read as absent
+from a typed column; serial and parallel; it failed when the
+non-deciding clause was pointed at the deciding clause's positions),
+the existing window tests over `WindowRow`, the nine window
+equivalence cases in every lane.
+
 ## 4. What we can do, ranked
 
 Expected win first, cost second. Each item that changes a
@@ -641,9 +687,9 @@ could change, an equivalence case; none of them changes a result.
    serial source, not the boxing; and once parallel, the sort left the
    critical path, so the key bought little and the three serial phases
    the phase timing named bought 2.9 s. **§3.11 (2026-10-29)**: the
-   output is a `Stream`, 4.07 s. The unboxed result column stays in
-   TODO with the measurement that reshapes it (§3.11: the scatter, not
-   the box, is the cost).
+   output is a `Stream`, 4.07 s. **§3.12 (2026-10-29)**: the results
+   in typed columns written at their output positions, 3.24 s. The
+   whole item: 35 s → 3.24 s.
 
 4. **The filtered write's memory.** **Done 2026-10-28, §3.8**, and
    not where this item said: the sink holds 238 MB; the typed Parquet

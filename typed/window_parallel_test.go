@@ -1,6 +1,7 @@
 package typed
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"math/rand"
@@ -50,7 +51,7 @@ func TestWindowParallelMatchesWindow(t *testing.T) {
 				return 0
 			}
 		}
-		build := func(r winRow, res []any) []any { return append([]any{r.Name}, res...) }
+		build := func(r winRow, res WindowRow) []any { return append([]any{r.Name}, res.Values()...) }
 		var serial, parallel [][]any
 		for o := range Window([]WindowClause[winRow]{clause}, build)(slices.Values(rows)) {
 			serial = append(serial, o)
@@ -123,7 +124,7 @@ func TestWindowKeySortMatchesCompare(t *testing.T) {
 		{Kind: WRank},
 		{Kind: WSum, Num: func(r row) (float64, bool) { return r.V, true }},
 	}
-	build := func(r row, res []any) [4]any { return [4]any{r.V, res[0], res[1], res[2]} }
+	build := func(r row, res WindowRow) [4]any { return [4]any{r.V, res.Value(0), res.Value(1), res.Value(2)} }
 	run := func(c WindowClause[row]) [][4]any {
 		var out [][4]any
 		for o := range Window([]WindowClause[row]{c}, build)(slices.Values(rows)) {
@@ -281,8 +282,8 @@ func TestWindowParallelLargeMatchesReference(t *testing.T) {
 		Frame:     WindowFrame{Preceding: -1, Following: 0},
 		Specs:     []WindowSpec[winRow]{{Kind: WSum, Int: func(r winRow) (int64, bool) { return r.Salary, true }}},
 	}
-	build := func(r winRow, res []any) ref {
-		sum, _ := res[0].(ssql.Int128).Int64()
+	build := func(r winRow, res WindowRow) ref {
+		sum, _ := res.Value(0).(ssql.Int128).Int64()
 		return ref{r.Dept, r.Name, sum}
 	}
 	for _, shards := range []int{1, 5, 24} {
@@ -319,5 +320,98 @@ func TestWindowParallelLargeMatchesReference(t *testing.T) {
 		if !reflect.DeepEqual(byShard, want) {
 			t.Fatalf("shards=%d: the output shards concatenated are not the window's output", shards)
 		}
+	}
+}
+
+// TestWindowColumnsAcrossClauses: the results live in one typed column
+// per spec in OUTPUT order (DFC158 §3.12). The first ORDERED clause
+// decides the order and writes its positions sequentially; a clause
+// before it (unordered, so it did not decide) and one after it write
+// through the row → output-position map; absent values (a lag before
+// the first row, an avg over no values) read as absent from a typed
+// column. The reference is the per-row semantics by hand.
+func TestWindowColumnsAcrossClauses(t *testing.T) {
+	rows := []winRow{
+		{Dept: "eng", Name: "Bob", Salary: 300}, {Dept: "ops", Name: "Eve", Salary: 100}, {Dept: "eng", Name: "Al", Salary: 100},
+		{Dept: "ops", Name: "Cy", Salary: 200}, {Dept: "eng", Name: "Dee", Salary: 200},
+	}
+	bySalary := func(a, b winRow) int { return cmp.Compare(a.Salary, b.Salary) }
+	clauses := []WindowClause[winRow]{
+		{ // unordered, whole partition: a count per dept — runs through outPos
+			Partition: func(r winRow) string { return r.Dept },
+			Frame:     WindowFrame{Preceding: -1, Following: -1},
+			Specs:     []WindowSpec[winRow]{{Kind: WCount}},
+		},
+		{ // the deciding clause: by dept, salary ascending
+			Partition: func(r winRow) string { return r.Dept },
+			HasOrder:  true, Compare: bySalary,
+			Frame: WindowFrame{Preceding: -1, Following: 0},
+			Specs: []WindowSpec[winRow]{
+				{Kind: WRowNumber},
+				{Kind: WSum, Int: func(r winRow) (int64, bool) { return r.Salary, true }},
+				{Kind: WLag, N: 1, Val: func(r winRow) (any, bool) { return r.Name, true }},
+				{Kind: WAvg, Dec: func(r winRow) (ssql.Decimal, bool) { return ssql.Decimal{}, false }}, // no values: absent
+			},
+		},
+		{ // a later ordered clause over the whole input: rank by salary descending
+			Partition: func(r winRow) string { return "" },
+			HasOrder:  true, Compare: func(a, b winRow) int { return bySalary(b, a) },
+			Frame: WindowFrame{Preceding: -1, Following: 0},
+			Specs: []WindowSpec[winRow]{{Kind: WRank}},
+		},
+	}
+	type out struct {
+		name  string
+		n     int64
+		rn    int64
+		sum   int64
+		prev  any
+		avgOK bool
+		rank  int64
+		boxed []any
+	}
+	build := func(r winRow, res WindowRow) out {
+		n, _ := res.Int(0)
+		rn, _ := res.Int(1)
+		w, _ := res.Wide(2)
+		sum, _ := w.Int64()
+		_, avgOK := res.Float(4)
+		rank, _ := res.Int(5)
+		return out{r.Name, n, rn, sum, res.Value(3), avgOK, rank, res.Values()}
+	}
+	want := []out{ // eng first seen, by salary; then ops
+		{"Al", 3, 1, 100, nil, false, 4, nil},
+		{"Dee", 3, 2, 300, "Al", false, 2, nil},
+		{"Bob", 3, 3, 600, "Dee", false, 1, nil},
+		{"Eve", 2, 1, 100, nil, false, 4, nil},
+		{"Cy", 2, 2, 300, "Eve", false, 2, nil}, // rank 2: tied with Dee at 200
+	}
+	check := func(name string, got []out) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s: %d rows, want %d", name, len(got), len(want))
+		}
+		for i := range want {
+			g := got[i]
+			if g.boxed[3] != g.prev || g.boxed[4] != nil || len(g.boxed) != 6 {
+				t.Errorf("%s row %d: boxed values %v disagree with the readers", name, i, g.boxed)
+			}
+			g.boxed = nil
+			if !reflect.DeepEqual(g, want[i]) {
+				t.Errorf("%s row %d: got %+v, want %+v", name, i, g, want[i])
+			}
+		}
+	}
+	var serial []out
+	for o := range Window(clauses, build)(slices.Values(rows)) {
+		serial = append(serial, o)
+	}
+	check("Window", serial)
+	for _, shards := range []int{1, 3} {
+		var par []out
+		for o := range WindowParallel(clauses, build)(ParallelFromSlice(rows, shards)).Serial() {
+			par = append(par, o)
+		}
+		check(fmt.Sprintf("WindowParallel/%d", shards), par)
 	}
 }

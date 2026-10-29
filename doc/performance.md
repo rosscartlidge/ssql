@@ -103,8 +103,8 @@ program is the same `generate go` pipeline with `rust` in place of
 Rust cell is from the lowering that leaves out a sort the engine's SQL
 optimiser drops, 14.4 s with it; the typed column reads Parquet in
 batches, which is where the filtered write's 7.9 GB went; the window's
-serial phases run on every core and its output is a Stream, DFC158
-§3.10–§3.11):
+serial phases run on every core, its output is a Stream and its
+results are typed columns in output order, DFC158 §3.10–§3.12):
 
 | Pipeline (14.6 M rows; the join 10 M) | DataFusion (generated Rust) | ssql `generate go` (typed) | DuckDB 1.5.0 |
 |---|---:|---:|---:|
@@ -114,12 +114,12 @@ serial phases run on every core and its output is a Stream, DFC158
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.68 s** | 1.46 s | 2.97 s |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.25 s** | 0.51 s | 0.35 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.05 s** | 0.26 s | 0.06 s |
-| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | 5.8 s | **4.1 s** (9.6 before the serial phases went parallel, 5.0 before the output was a Stream) | 13.2 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | 5.8 s | **3.2 s** (9.6 before the serial phases went parallel, 5.0 before the output was a Stream, 4.1 before the results were columns) | 13.2 s |
 
 Peak RSS, same order: cube 184 MB / 506 MB / 427 MB; Parquet group-by
 68 MB / 199 MB / 37 MB; CSV group-by 77 MB / 1.2 GB / 666 MB; filtered
 write 1.7 GB / 4.0 GB / 1.3 GB; join 310 MB / 405 MB / 353 MB; decimal
-98 MB / 320 MB / 52 MB; window 1.7 GB / 4.1 GB / 2.9 GB.
+98 MB / 320 MB / 52 MB; window 1.7 GB / 4.3 GB / 2.9 GB.
 
 Honest framing: this is a scan-and-aggregate query, where a pruned
 parallel read wins. On the join-heavy benchmark in §3 DuckDB is still

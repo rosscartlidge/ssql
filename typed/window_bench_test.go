@@ -43,8 +43,8 @@ func BenchmarkWindowRunningSumString(b *testing.B) {
 		Frame:     WindowFrame{Preceding: -1, Following: 0},
 		Specs:     []WindowSpec[benchWinRow]{{Kind: WSum, Int: func(r benchWinRow) (int64, bool) { return r.V, true }}},
 	}}
-	w := Window(clauses, func(r benchWinRow, res []any) benchWinOut {
-		v, _ := res[0].(interface{ Int64() int64 })
+	w := Window(clauses, func(r benchWinRow, res WindowRow) benchWinOut {
+		v, _ := res.Value(0).(interface{ Int64() int64 })
 		var run int64
 		if v != nil {
 			run = v.Int64()

@@ -5,6 +5,12 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The typed window's results are typed columns in output order.** One column per window function (`[]int64`, `[]float64`, `[]ssql.Int128` or `[]any` by the function), written at the row's output position by the partition that decides the order — no boxed value per row, no scatter by input row, no gather of the results. The `build` function of `typed.Window` and `typed.WindowParallel` takes a `typed.WindowRow` (`Int`, `Float`, `Wide`, `Value`, `Values`) instead of a `[]any`; generated programs use the reader matching each result's type. The benchmark window 4.07 → 3.24 s ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.12).
+
 ## [4.131.0] - 2026-10-29
 
 ### Changed
