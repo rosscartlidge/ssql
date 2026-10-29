@@ -3935,6 +3935,15 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// -presorted after a matching sort with a bounded preceding frame:
+		// exec streams (StreamWindow), the typed lane runs the presorted
+		// window over the sort's rows in place (2026-10-29), DuckDB sorts
+		// for itself; all must agree.
+		Name:     "window_presorted_bounded",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept salary | {{.bin}} window -presorted -partition dept -order salary -preceding 1 -sum salary s2 -avg salary a2 -count n2 -row-number rn | {{.bin}} include name dept s2 a2 n2 rn`,
+		Ordered:  true,
+	},
+	{
 		// The same statistics over a bounded moving frame (ROWS 1 PRECEDING
 		// to 1 FOLLOWING): every row has at least two, so nothing is absent
 		// — the typed lane computes these natively since 2026-10-29

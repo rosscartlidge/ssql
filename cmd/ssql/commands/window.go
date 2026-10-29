@@ -887,8 +887,9 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 
 	// Typed lane (DFC130 unit 4): one typed.Window call over the row
 	// struct; shapes it cannot hold fall back to the record path below
-	// with the reason under -explain. -presorted changes nothing here —
-	// the typed runtime materialises the partition either way.
+	// with the reason under -explain. -presorted takes typed.WindowPresorted
+	// (contiguous runs, no sort; 2026-10-29) when the clauses share their
+	// partition and order, else the materialised form.
 	var typedFallbackNotes []string
 	// Every field the window reads: partition, order, function inputs —
 	// for the typed lane's nested-path test and the record lane's
@@ -912,7 +913,7 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 		prevSchema = nil
 	}
 	if typedMode() && prevSchema != nil {
-		handled, reason, err := emitTypedWindow(inputVar, prevSchema, configs)
+		handled, reason, err := emitTypedWindow(inputVar, prevSchema, configs, presorted)
 		if handled || err != nil {
 			return err
 		}

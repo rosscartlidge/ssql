@@ -842,6 +842,34 @@ func TestTypedSortKeepsPipelineParallel(t *testing.T) {
 	}
 }
 
+// TestTypedWindowPresorted: `sort | window -presorted` takes
+// typed.WindowPresorted (contiguous runs over the sort's rows in place,
+// no sort, no gather — 2026-10-29, DFC158 §3.14), and clauses that do
+// not share their partition and order fall back to the materialised
+// typed.WindowParallel rather than trusting the flag for both.
+func TestTypedWindowPresorted(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("name,dept,years\nAlice,eng,8\nBob,ops,3\nCarol,eng,2\nDan,ops,5\nEve,eng,8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" sort dept years | "+bin+" window -presorted -partition dept -order years -sum years total -preceding 1 -following 1 -avg years ma | "+bin+" to csv")
+	if !strings.Contains(src, "typed.WindowPresorted(") || !strings.Contains(src, "typed.SortParallelFunc(") {
+		t.Errorf("expected the presorted typed window after the parallel sort\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	if want := "name,dept,years,total,ma\nCarol,eng,2,10,5\nAlice,eng,8,18,6\nEve,eng,8,16,8\nBob,ops,3,8,4\nDan,ops,5,8,4\n"; !strings.Contains(out, want) {
+		t.Errorf("expected %q in output\n%s", want, out)
+	}
+	src = runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" sort dept years | "+bin+" window -presorted -partition dept -order years -sum years total + -order name -row-number rn | "+bin+" to csv")
+	if !strings.Contains(src, "typed.WindowParallel(") || strings.Contains(src, "typed.WindowPresorted(") {
+		t.Errorf("clauses on different orders must take the materialised window\n%s", src)
+	}
+}
+
 // TestGenerateRustBuildSurvivesOptimiser: `generate rust -build PATH` on
 // a pipeline the optimiser rewrites (a pruned Parquet read) re-executes
 // through bash, and the inner command must carry -build. Until 2026-10-28

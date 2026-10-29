@@ -24,7 +24,7 @@ import (
 // LAG/LEAD default whose type differs from the field's, a pointer-typed
 // (nullable) order or partition field, or a result name that collides
 // with an input field. Unknown fields are loud, like every typed emitter.
-func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.WindowConfig) (bool, string, error) {
+func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.WindowConfig, presorted bool) (bool, string, error) {
 	outType := in.TypeName + "Windowed"
 	outVar := "windowed"
 
@@ -249,7 +249,15 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 	// the SOURCE serially too (DFC158 §4.3, 2026-10-28), and an iter.Seq
 	// output made every consumer serial (DFC158 §3.11, 2026-10-29).
 	clauses := fmt.Sprintf("[]typed.WindowClause[%s]{\n%s\n\t}, %s", in.TypeName, strings.Join(clauseCode, "\n"), build.String())
-	code := fmt.Sprintf("%s := typed.WindowParallel(%s)(%s)", outVar, clauses, inputVar)
+	// -presorted with every clause on the same partition and order (the
+	// record path's streaming condition) takes typed.WindowPresorted:
+	// contiguous runs, no sort, no gather; other shapes run the
+	// materialised form as before.
+	streamFn := "typed.WindowParallel"
+	if presorted && windowClausesShareOrder(configs) {
+		streamFn = "typed.WindowPresorted"
+	}
+	code := fmt.Sprintf("%s := %s(%s)(%s)", outVar, streamFn, clauses, inputVar)
 	serialCode := fmt.Sprintf("%s := typed.Window(%s)(%s)", outVar, clauses, inputVar)
 
 	imports = append(imports, "github.com/rosscartlidge/ssql/v4/typed")
@@ -297,6 +305,28 @@ func windowResultAssign(i int, goType string, ptr bool) string {
 		return fmt.Sprintf("if v, ok := %s; ok { o.GONAME = &v }", read)
 	}
 	return fmt.Sprintf("if v, ok := %s; ok { o.GONAME = v }", read)
+}
+
+// windowClausesShareOrder reports whether every clause partitions and
+// orders by the same fields in the same directions — the shape under
+// which -presorted describes the input for all of them at once.
+func windowClausesShareOrder(configs []ssql.WindowConfig) bool {
+	for _, cfg := range configs[1:] {
+		if len(cfg.PartitionBy) != len(configs[0].PartitionBy) || len(cfg.OrderBy) != len(configs[0].OrderBy) {
+			return false
+		}
+		for i := range cfg.PartitionBy {
+			if cfg.PartitionBy[i] != configs[0].PartitionBy[i] {
+				return false
+			}
+		}
+		for i := range cfg.OrderBy {
+			if cfg.OrderBy[i] != configs[0].OrderBy[i] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // typedWindowAggs are the registry aggregates over a frame that have a

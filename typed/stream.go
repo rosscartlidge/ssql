@@ -38,6 +38,10 @@ type Stream[T any] struct {
 	shards  []iter.Seq[T]
 	n       int
 	ordered bool
+	// backing, when set, returns the slice an ordered stream's shards
+	// are ranges of (the parallel sort's output), so a barrier after it
+	// (the window) reads the rows in place instead of copying them.
+	backing func() []T
 }
 
 // Shards returns the number of parallel shards in the stream.

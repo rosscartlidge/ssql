@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`window -presorted` means something in the typed lane.** `typed.WindowPresorted` takes the partitions as contiguous runs of the input (one parallel scan, no partition index), sorts nothing, writes the results at the input positions, and reads the parallel sort's rows in place — `sort | window` copies nothing, with or without the flag. Unsorted input is an error naming the row, as in the other lanes. Ross's 10 M-row `sort n | window -presorted` program 2.2 → 1.9 s, 1.1 GB ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.14). Clauses that do not share their partition and order take the materialised form.
 - **The typed `sort` runs on every core and feeds a parallel consumer.** `typed.SortParallelBy` and `SortParallelFunc` take the source's Stream — shards materialised concurrently with no channel, an index sorted by a typed key in chunks on every core and merged, the rows gathered in parallel — and produce an ordered Stream, so the stage after a `sort` runs its parallel form and a serial one still sees the order. Until now the sort was the one typed barrier that fanned the source in through a channel and sorted on one core: 3.5 s of a 5.5 s program on 10 M rows, now 2.2 s for the whole program ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.13). The parallel sort is stable (ties in input order), as exec's is. `-spill` keeps its record-mode form.
 
 ## [4.132.0] - 2026-10-29

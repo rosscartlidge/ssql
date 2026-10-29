@@ -116,5 +116,5 @@ func orderedStream[T any](prepare func() []T) Stream[T] {
 			}
 		}
 	}
-	return Stream[T]{shards: shards, n: r, ordered: true}
+	return Stream[T]{shards: shards, n: r, ordered: true, backing: func() []T { ready(); return rows }}
 }

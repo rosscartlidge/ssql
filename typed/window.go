@@ -2,6 +2,7 @@ package typed
 
 import (
 	"cmp"
+	"fmt"
 	"iter"
 	"runtime"
 	"slices"
@@ -178,6 +179,27 @@ func Window[T, O any](clauses []WindowClause[T], build func(T, WindowRow) O) fun
 // and the planner read the source serially: 2.4 s of the benchmark
 // window plus the growth of one slice by appends (DFC158 §4.3).
 func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, WindowRow) O) func(Stream[T]) Stream[O] {
+	return windowStream(clauses, build, false)
+}
+
+// WindowPresorted is WindowParallel for input already in the window's
+// order — `window -presorted`: every clause's partitions are contiguous
+// runs of the input and each run is in the clause's order. The runs are
+// found by one parallel scan (no partition index), nothing is sorted,
+// the results are written at the input positions (no gather), and when
+// the input is the parallel sort's ordered Stream its rows are read in
+// place (no copy). A run whose key returns after another, or a row
+// before its predecessor by the order, is a panic naming the row — the
+// contract of -presorted, checked as the record path checks it. Before
+// 2026-10-29 the typed window ignored the flag: on Ross's 10 M-row `sort
+// n | window -presorted` it materialised the sorted rows again, sorted
+// them again and gathered them again — 1.5 s of a 2.2 s program (DFC158
+// §3.14).
+func WindowPresorted[T, O any](clauses []WindowClause[T], build func(T, WindowRow) O) func(Stream[T]) Stream[O] {
+	return windowStream(clauses, build, true)
+}
+
+func windowStream[T, O any](clauses []WindowClause[T], build func(T, WindowRow) O, presorted bool) func(Stream[T]) Stream[O] {
 	return func(in Stream[T]) Stream[O] {
 		var (
 			once    sync.Once
@@ -195,7 +217,11 @@ func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, WindowRow
 						failure = r
 					}
 				}()
-				rows, cols = windowRows(materialise(in), clauses)
+				if presorted {
+					rows, cols = windowRowsPresorted(materialise(in), clauses)
+				} else {
+					rows, cols = windowRows(materialise(in), clauses)
+				}
 			})
 			if failure != nil {
 				panic(failure)
@@ -219,8 +245,12 @@ func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, WindowRow
 }
 
 // materialise is the Stream's rows in shard order: each shard into its
-// own slice concurrently, then copied into one.
+// own slice concurrently, then copied into one — or, for an ordered
+// stream that holds its rows (the parallel sort's), those rows in place.
 func materialise[T any](in Stream[T]) []T {
+	if in.backing != nil {
+		return in.backing()
+	}
 	parts := make([][]T, len(in.shards))
 	var g shardGroup
 	for i, shard := range in.shards {
@@ -321,9 +351,9 @@ func windowRows[T any](all []T, clauses []WindowClause[T]) ([]T, []windowColumn)
 			g.Go(func() {
 				defer func() { <-sem }()
 				if ci == deciding {
-					windowPartition(c, all, idx, cols[base:base+len(c.Specs)], off, nil)
+					windowPartition(c, all, idx, cols[base:base+len(c.Specs)], off, nil, false)
 				} else {
-					windowPartition(c, all, idx, cols[base:base+len(c.Specs)], -1, outPos)
+					windowPartition(c, all, idx, cols[base:base+len(c.Specs)], -1, outPos, false)
 				}
 			})
 		}
@@ -467,8 +497,8 @@ func partitionIndexRanges[T any](c WindowClause[T], all []T, r int) (map[string]
 // output position off+pos when the clause decides the output order
 // (off >= 0), else to the row's output position — outPos[idx[pos]], or
 // idx[pos] itself when no clause orders the output.
-func windowPartition[T any](c WindowClause[T], all []T, idx []int, cols []windowColumn, off int, outPos []int32) {
-	if c.HasOrder && c.Compare != nil {
+func windowPartition[T any](c WindowClause[T], all []T, idx []int, cols []windowColumn, off int, outPos []int32, presorted bool) {
+	if c.HasOrder && c.Compare != nil && !presorted {
 		// A stable sort by pdqsort: the row's index is the tiebreak, so
 		// peers keep input order exactly as sort.SliceStable kept it, with
 		// O(n log n) comparisons and far fewer moves than its symmerge
@@ -920,4 +950,91 @@ func rangeBounds[T any](c WindowClause[T], all []T, idx []int, pos, partLen int)
 		end++
 	}
 	return start, end
+}
+
+// windowRowsPresorted is windowRows for input already in the window's
+// order (WindowPresorted): the rows come back as they are, with one
+// column of results per spec at the input positions.
+func windowRowsPresorted[T any](all []T, clauses []WindowClause[T]) ([]T, []windowColumn) {
+	n := len(all)
+	if n == 0 {
+		return nil, nil
+	}
+	var cols []windowColumn
+	for _, c := range clauses {
+		for _, spec := range c.Specs {
+			cols = append(cols, newWindowColumn(spec, n))
+		}
+	}
+	ident := identity(n)
+	base := 0
+	for _, c := range clauses {
+		runs := presortedRuns(c, all)
+		var g shardGroup
+		sem := make(chan struct{}, runtime.GOMAXPROCS(0))
+		for _, run := range runs {
+			sem <- struct{}{}
+			g.Go(func() {
+				defer func() { <-sem }()
+				windowPartition(c, all, ident[run[0]:run[1]], cols[base:base+len(c.Specs)], run[0], nil, true)
+			})
+		}
+		g.Wait()
+		base += len(c.Specs)
+	}
+	return all, cols
+}
+
+// presortedRuns is the clause's partitions as contiguous runs [lo, hi)
+// of the input, found by one scan as ranges on every core: a boundary
+// is a row whose partition key differs from the row before it. The
+// scan also holds -presorted's contract: within a run the order never
+// goes backwards (c.Compare), and no key returns after its run ended.
+func presortedRuns[T any](c WindowClause[T], all []T) [][2]int {
+	n := len(all)
+	key := c.Partition
+	if key == nil {
+		key = func(T) string { return "" }
+	}
+	r := rowRanges(n)
+	starts := make([][]int, r)
+	var g shardGroup
+	for i := range r {
+		g.Go(func() {
+			lo, hi := i*n/r, (i+1)*n/r
+			var s []int
+			for j := lo; j < hi; j++ {
+				if j == 0 || key(all[j]) != key(all[j-1]) {
+					s = append(s, j)
+				} else if c.HasOrder && c.Compare != nil && c.Compare(all[j-1], all[j]) > 0 {
+					panic(fmt.Errorf("window -presorted: row %d comes before the row above it by the order fields — the input is not sorted; sort it first, or drop -presorted", j+1))
+				}
+			}
+			starts[i] = s
+		})
+	}
+	g.Wait()
+	var bounds []int
+	for _, s := range starts {
+		bounds = append(bounds, s...)
+	}
+	bounds = append(bounds, n)
+	runs := make([][2]int, 0, len(bounds)-1)
+	seen := make(map[string]struct{}, len(bounds))
+	for i := 0; i+1 < len(bounds); i++ {
+		lo := bounds[i]
+		k := key(all[lo])
+		if _, dup := seen[k]; dup {
+			panic(fmt.Errorf("window -presorted: row %d returns to partition %q, which ended earlier — the input is not sorted by the partition fields; sort it first, or drop -presorted", lo+1, k))
+		}
+		seen[k] = struct{}{}
+		runs = append(runs, [2]int{lo, bounds[i+1]})
+	}
+	return runs
+}
+
+// rowRanges is the number of contiguous ranges a pass over n rows runs
+// as: one per core, none shorter than rangeMin, one when n is small.
+func rowRanges(n int) int {
+	return max(min(runtime.GOMAXPROCS(0), n/rangeMin), 1)
 }

@@ -708,6 +708,45 @@ program carries `SortParallelBy` and `GroupByParallel` with no
 with a `limit` after it, the output the stable order), the sort
 equivalence cases in every lane.
 
+### 3.14 The typed window honours -presorted (2026-10-29)
+
+With the sort parallel (§3.13) the window was the remaining 1.5 s of
+Ross's program: `-presorted` meant nothing to the typed window, so
+after `sort n` it materialised the sorted rows again, built a
+partition index, sorted the partition again (pdqsort on sorted input is
+linear, but the keyed pairs are still built and the chunks merged) and
+gathered the rows into the order they were already in.
+
+`typed.WindowPresorted` (`windowRowsPresorted`, `presortedRuns`) is the
+form the template emits for `-presorted` when every clause shares its
+partition and order (the record path's streaming condition,
+`windowClausesShareOrder`): the partitions are contiguous runs found by
+one scan as ranges on every core (a boundary is a row whose key differs
+from the row before it), each run goes to `windowPartition` with its
+identity index and the sort skipped, the results land at the input
+positions, and the rows come back as they are. An ordered Stream now
+carries `backing`, the slice its shards are ranges of, set by the
+parallel sort; `materialise` returns it in place, so `sort | window`
+copies nothing — with or without `-presorted`. The scan holds the
+flag's contract as the record path does since this morning: a key that
+returns after its run, or a row before its predecessor by the clause's
+comparator, is a panic naming the row.
+
+Ross's program: **2.17 → 1.90 s** with `-presorted`, 2.12 without
+(the in-place rows); peak RSS 1.1 GB. From the morning's 5.55 s and
+DuckDB's 0.73. What is left is the parallel sort's own cost on 10 M
+rows plus the window's per-row frame scan; a phase timing would say
+which, and neither is a serial pass.
+
+Tests: `TestWindowPresortedMatchesWindow` (running, bounded, whole and
+RANGE frames with a sum, ranks, a lag, an avg and a stddev, over a
+slice and over the parallel sort's Stream, against `Window`; the two
+refusals — it failed with the order check removed),
+`TestTypedWindowPresorted` (the generated program carries
+`WindowPresorted` after `SortParallelFunc`, output by hand; clauses on
+different orders take `WindowParallel`), `window_presorted_bounded`
+in the equivalence suite (exec streams, typed presorted, DuckDB sorts).
+
 ## 4. What we can do, ranked
 
 Expected win first, cost second. Each item that changes a

@@ -415,3 +415,94 @@ func TestWindowColumnsAcrossClauses(t *testing.T) {
 		check(fmt.Sprintf("WindowParallel/%d", shards), par)
 	}
 }
+
+// TestWindowPresortedMatchesWindow: over input already in the window's
+// order, WindowPresorted (contiguous runs, no sort, results at the input
+// positions, the sort's rows in place) equals Window over the same rows
+// — running, bounded, whole and RANGE frames, ranks, lag, a frame
+// statistic — straight from a slice and from the parallel sort's
+// ordered Stream; and it holds -presorted's contract: a partition that
+// returns, or an order that goes backwards, is a panic naming the row.
+func TestWindowPresortedMatchesWindow(t *testing.T) {
+	n := 2*rangeMin + 999
+	rng := rand.New(rand.NewSource(3))
+	rows := make([]winRow, n)
+	for i := range rows {
+		rows[i] = winRow{Dept: "d" + strconv.Itoa(rng.Intn(5)), Name: strconv.Itoa(rng.Intn(100)), Salary: int64(rng.Intn(1000))}
+	}
+	bySalary := func(a, b winRow) int { return cmp.Compare(a.Salary, b.Salary) }
+	byDeptSalary := func(a, b winRow) int {
+		if c := strings.Compare(a.Dept, b.Dept); c != 0 {
+			return c
+		}
+		return bySalary(a, b)
+	}
+	num := func(r winRow) (float64, bool) { return float64(r.Salary), true }
+	clause := func(fr WindowFrame) WindowClause[winRow] {
+		specs := []WindowSpec[winRow]{
+			{Kind: WSum, Int: func(r winRow) (int64, bool) { return r.Salary, true }},
+			{Kind: WRank}, {Kind: WRowNumber},
+			{Kind: WLag, N: 1, Val: func(r winRow) (any, bool) { return r.Name, true }},
+			{Kind: WAvg, Num: num},
+		}
+		if !isRunningFrame(fr) { // a frame statistic scans the frame per row: quadratic over the running frame
+			specs = append(specs, WindowSpec[winRow]{Kind: WAgg, Agg: WAggStdDev, Num: num})
+		}
+		return WindowClause[winRow]{
+			Partition: func(r winRow) string { return r.Dept },
+			HasOrder:  true, Compare: bySalary, KeyInt: func(r winRow) int64 { return r.Salary },
+			RangeKey: func(r winRow) float64 { return float64(r.Salary) },
+			Frame:    fr,
+			Specs:    specs,
+		}
+	}
+	build := func(r winRow, res WindowRow) []any { return append([]any{r.Dept, r.Name, r.Salary}, res.Values()...) }
+	sorted := slices.Clone(rows)
+	slices.SortStableFunc(sorted, byDeptSalary)
+	// The running frame over the whole input (past the range threshold,
+	// so the run scan is parallel); the other frames over a prefix — the
+	// comparison of boxed rows is what the race detector pays for.
+	for i, fr := range []WindowFrame{{Preceding: -1}, {Preceding: 2, Following: 1}, {Preceding: -1, Following: -1}, {Range: true, RangePreceding: 50, RangeFollowing: 0}} {
+		c := clause(fr)
+		in, inSorted := rows, sorted
+		if i > 0 {
+			in = rows[:4000]
+			inSorted = slices.Clone(in)
+			slices.SortStableFunc(inSorted, byDeptSalary)
+		}
+		want := slices.Collect(Window([]WindowClause[winRow]{c}, build)(slices.Values(inSorted)))
+		got := slices.Collect(WindowPresorted([]WindowClause[winRow]{c}, build)(ParallelFromSlice(inSorted, 7)).Serial())
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("frame %+v: presorted over a slice differs from Window (first diff at row %d)", fr, firstDiffAny(got, want))
+		}
+		// Through the parallel sort: its rows read in place.
+		got = slices.Collect(WindowPresorted([]WindowClause[winRow]{c}, build)(SortParallelFunc(byDeptSalary)(ParallelFromSlice(in, 5))).Serial())
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("frame %+v: presorted over the parallel sort differs from Window (first diff at row %d)", fr, firstDiffAny(got, want))
+		}
+	}
+	// The contract.
+	refuse := func(name string, in []winRow, want string) {
+		t.Helper()
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s: no panic", name)
+			} else if !strings.Contains(r.(error).Error(), want) {
+				t.Errorf("%s: got %q", name, r)
+			}
+		}()
+		_ = slices.Collect(WindowPresorted([]WindowClause[winRow]{clause(WindowFrame{Preceding: -1})}, build)(ParallelFromSlice(in, 3)).Serial())
+	}
+	refuse("returning partition", []winRow{{Dept: "a", Salary: 1}, {Dept: "b", Salary: 1}, {Dept: "a", Salary: 2}}, "row 3 returns to partition \"a\"")
+	refuse("backwards order", []winRow{{Dept: "a", Salary: 2}, {Dept: "a", Salary: 1}}, "row 2 comes before the row above it")
+}
+
+func firstDiffAny(a, b [][]any) int {
+	for i := range min(len(a), len(b)) {
+		if !reflect.DeepEqual(a[i], b[i]) {
+			return i
+		}
+	}
+	return min(len(a), len(b))
+}
