@@ -313,7 +313,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-presorted").
 		Bool().
 		Global().
-		Help("Input is presorted by group fields (streaming, O(1) memory per group)").
+		Help("Input is presorted by group fields (streaming, O(1) memory per group; a group that returns after another is an error)").
 		Done().
 		Flag("-spill").
 		String().

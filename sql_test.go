@@ -2851,15 +2851,18 @@ func TestStreamWindowSlidingFirst(t *testing.T) {
 }
 
 func TestStreamWindowRunningMin(t *testing.T) {
+	// The rows arrive in t order (the -presorted contract: the order
+	// fields ARE the arrival order; a backwards order field is loud
+	// since 2026-10-29); val carries the running extreme.
 	input := slices.Values([]Record{
-		NewRecord(map[string]any{"val": float64(30)}),
-		NewRecord(map[string]any{"val": float64(10)}),
-		NewRecord(map[string]any{"val": float64(20)}),
-		NewRecord(map[string]any{"val": float64(5)}),
+		NewRecord(map[string]any{"t": int64(1), "val": float64(30)}),
+		NewRecord(map[string]any{"t": int64(2), "val": float64(10)}),
+		NewRecord(map[string]any{"t": int64(3), "val": float64(20)}),
+		NewRecord(map[string]any{"t": int64(4), "val": float64(5)}),
 	})
 
 	filter, err := StreamWindow([]WindowConfig{{
-		OrderBy: []OrderField{{Field: "val"}},
+		OrderBy: []OrderField{{Field: "t"}},
 		Frame:   WindowFrame{Preceding: -1, Following: 0}, // default frame
 		Specs:   []WindowSpec{{Function: WMin("val"), ResultName: "rmin"}},
 	}})
@@ -2878,15 +2881,18 @@ func TestStreamWindowRunningMin(t *testing.T) {
 }
 
 func TestStreamWindowRunningMax(t *testing.T) {
+	// The rows arrive in t order (the -presorted contract: the order
+	// fields ARE the arrival order; a backwards order field is loud
+	// since 2026-10-29); val carries the running extreme.
 	input := slices.Values([]Record{
-		NewRecord(map[string]any{"val": float64(10)}),
-		NewRecord(map[string]any{"val": float64(30)}),
-		NewRecord(map[string]any{"val": float64(20)}),
-		NewRecord(map[string]any{"val": float64(5)}),
+		NewRecord(map[string]any{"t": int64(1), "val": float64(10)}),
+		NewRecord(map[string]any{"t": int64(2), "val": float64(30)}),
+		NewRecord(map[string]any{"t": int64(3), "val": float64(20)}),
+		NewRecord(map[string]any{"t": int64(4), "val": float64(5)}),
 	})
 
 	filter, err := StreamWindow([]WindowConfig{{
-		OrderBy: []OrderField{{Field: "val"}},
+		OrderBy: []OrderField{{Field: "t"}},
 		Frame:   WindowFrame{Preceding: -1, Following: 0},
 		Specs:   []WindowSpec{{Function: WMax("val"), ResultName: "rmax"}},
 	}})
@@ -2905,16 +2911,19 @@ func TestStreamWindowRunningMax(t *testing.T) {
 }
 
 func TestStreamWindowSlidingMin(t *testing.T) {
+	// The rows arrive in t order (the -presorted contract: the order
+	// fields ARE the arrival order; a backwards order field is loud
+	// since 2026-10-29); val carries the running extreme.
 	input := slices.Values([]Record{
-		NewRecord(map[string]any{"val": float64(50)}),
-		NewRecord(map[string]any{"val": float64(30)}),
-		NewRecord(map[string]any{"val": float64(40)}),
-		NewRecord(map[string]any{"val": float64(10)}),
-		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"t": int64(1), "val": float64(50)}),
+		NewRecord(map[string]any{"t": int64(2), "val": float64(30)}),
+		NewRecord(map[string]any{"t": int64(3), "val": float64(40)}),
+		NewRecord(map[string]any{"t": int64(4), "val": float64(10)}),
+		NewRecord(map[string]any{"t": int64(5), "val": float64(20)}),
 	})
 
 	filter, err := StreamWindow([]WindowConfig{{
-		OrderBy: []OrderField{{Field: "val"}},
+		OrderBy: []OrderField{{Field: "t"}},
 		Frame:   WindowFrame{Preceding: 2, Following: 0}, // ROWS 2,0 (window of 3)
 		Specs:   []WindowSpec{{Function: WMin("val"), ResultName: "smin"}},
 	}})
@@ -2934,16 +2943,19 @@ func TestStreamWindowSlidingMin(t *testing.T) {
 }
 
 func TestStreamWindowSlidingMax(t *testing.T) {
+	// The rows arrive in t order (the -presorted contract: the order
+	// fields ARE the arrival order; a backwards order field is loud
+	// since 2026-10-29); val carries the running extreme.
 	input := slices.Values([]Record{
-		NewRecord(map[string]any{"val": float64(10)}),
-		NewRecord(map[string]any{"val": float64(30)}),
-		NewRecord(map[string]any{"val": float64(20)}),
-		NewRecord(map[string]any{"val": float64(50)}),
-		NewRecord(map[string]any{"val": float64(40)}),
+		NewRecord(map[string]any{"t": int64(1), "val": float64(10)}),
+		NewRecord(map[string]any{"t": int64(2), "val": float64(30)}),
+		NewRecord(map[string]any{"t": int64(3), "val": float64(20)}),
+		NewRecord(map[string]any{"t": int64(4), "val": float64(50)}),
+		NewRecord(map[string]any{"t": int64(5), "val": float64(40)}),
 	})
 
 	filter, err := StreamWindow([]WindowConfig{{
-		OrderBy: []OrderField{{Field: "val"}},
+		OrderBy: []OrderField{{Field: "t"}},
 		Frame:   WindowFrame{Preceding: 2, Following: 0},
 		Specs:   []WindowSpec{{Function: WMax("val"), ResultName: "smax"}},
 	}})

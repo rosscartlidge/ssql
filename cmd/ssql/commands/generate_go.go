@@ -584,6 +584,13 @@ require github.com/rosscartlidge/ssql/v4 v%s
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		os.RemoveAll(dir)
+		if version.Local && os.Getenv("SSQL_MODULE_DIR") == "" {
+			// A binary built from a checkout emits what its templates
+			// know; the program compiled against the released module at
+			// this version, which may not have it yet ("undefined:
+			// typed.WindowRow", Ross, 2026-10-29).
+			return "", "", fmt.Errorf("ssql generate go: compile failed: %w\nnote: this ssql is built from a checkout (%s) and the program compiled against the released module v%s, which may lack what this build generates — set SSQL_MODULE_DIR=/path/to/the/checkout", err, version.Commit, version.Version)
+		}
 		return "", "", fmt.Errorf("ssql generate go: compile failed: %w", err)
 	}
 

@@ -2,6 +2,7 @@ package typed
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -364,3 +365,38 @@ func TestGroupByParallelMatchesSerial(t *testing.T) {
 		}
 	}
 }
+
+// TestGroupByOrderedRefusesReturningKey: a key that returns after another
+// has started is a panic naming the row (the contract of -presorted),
+// not two groups of the same key (2026-10-29).
+func TestGroupByOrderedRefusesReturningKey(t *testing.T) {
+	run := func(rows []keyedRow) (n int, msg string) {
+		defer func() {
+			if r := recover(); r != nil {
+				msg = r.(error).Error()
+			}
+		}()
+		for range GroupByOrdered(slices.Values(rows), func(r keyedRow) string { return r.K },
+			func() Aggregator[keyedRow, int64] { return &sumKeyedRows{} },
+			func(k string, s int64) [2]any { return [2]any{k, s} }) {
+			n++
+		}
+		return
+	}
+	if n, msg := run([]keyedRow{{"a", 1}, {"a", 2}, {"b", 1}}); n != 2 || msg != "" {
+		t.Errorf("sorted: %d groups, %q", n, msg)
+	}
+	if _, msg := run([]keyedRow{{"a", 1}, {"b", 1}, {"a", 2}}); !strings.Contains(msg, "row 3 returns to key a") {
+		t.Errorf("interleaved: got %q", msg)
+	}
+}
+
+type keyedRow struct {
+	K string
+	V int64
+}
+
+type sumKeyedRows struct{ s int64 }
+
+func (a *sumKeyedRows) Add(r keyedRow) { a.s += r.V }
+func (a *sumKeyedRows) Result() int64  { return a.s }

@@ -1119,8 +1119,10 @@ func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, 
 			var currentKey string
 			var currentKeyValues []any
 			var buffer []Record
+			guard := newPresortedGuard("group-by", fields)
 
 			for record := range input {
+				guard.row++
 				// Extract key values from this record
 				keyValues := make([]any, len(fields))
 				for i, field := range fields {
@@ -1134,6 +1136,7 @@ func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, 
 
 				if len(buffer) == 0 {
 					// First record
+					guard.keyChange(key, record)
 					currentKey = key
 					currentKeyValues = keyValues
 					buffer = append(buffer, record)
@@ -1145,6 +1148,7 @@ func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, 
 					buffer = append(buffer, record)
 				} else {
 					// Group changed — emit buffered group
+					guard.keyChange(key, record)
 					result := MakeMutableRecord()
 					for i, field := range fields {
 						result.put(field, currentKeyValues[i])
@@ -3258,20 +3262,26 @@ func streamWindowImmediate(allAggs []swSpecAgg, partitionBy []string, orderBy []
 			var prevRecord *Record
 			firstRecord := true
 			pos := 0
+			guard := newPresortedGuard("window", partitionBy)
 
 			for record := range input {
+				guard.row++
 				key := buildGroupKey(record, partitionBy)
 
 				if firstRecord {
 					firstRecord = false
+					guard.keyChange(key, record)
 					prevKey = key
 				} else if key != prevKey {
+					guard.keyChange(key, record)
 					for _, sa := range allAggs {
 						sa.agg.reset()
 					}
 					prevRecord = nil
 					prevKey = key
 					pos = 0
+				} else if prevRecord != nil {
+					guard.orderCheck(*prevRecord, record, orderBy)
 				}
 
 				mut := record.ToMutable()
@@ -3317,6 +3327,7 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 			firstRecord := true
 			pos := 0
 			var buf []pendingRecord
+			guard := newPresortedGuard("window", partitionBy)
 
 			emitRecord := func(pr pendingRecord, bufIdx int, bufLen int) bool {
 				mut := pr.record.ToMutable()
@@ -3362,12 +3373,15 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 			}
 
 			for record := range input {
+				guard.row++
 				key := buildGroupKey(record, partitionBy)
 
 				if firstRecord {
 					firstRecord = false
+					guard.keyChange(key, record)
 					prevKey = key
 				} else if key != prevKey {
+					guard.keyChange(key, record)
 					// Partition changed — flush buffer, reset
 					if !flushBuf() {
 						return

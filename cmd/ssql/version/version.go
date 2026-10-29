@@ -20,6 +20,12 @@ var gitVersion string
 // (go install from the module proxy).
 var Commit string
 
+// Local is true when this binary was built from a checkout (Go's VCS
+// info named the revision) rather than installed from the module proxy
+// or stamped by a release build: its generated code may need the
+// checkout's module (SSQL_MODULE_DIR) rather than the released one.
+var Local bool
+
 //go:embed commit.txt
 var gitCommit string
 
@@ -43,6 +49,7 @@ func detectCommit() string {
 			}
 		}
 		if revision != "" {
+			Local = true
 			short := revision
 			if len(short) > 8 {
 				short = short[:8]

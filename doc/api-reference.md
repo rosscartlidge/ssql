@@ -807,7 +807,7 @@ so one field may hold mixed values). Behind the `top` command.
 ```go
 func GroupByFields(sequenceField string, fields ...string) Filter[Record, Record]     // one record per distinct key; the group's rows in sequenceField
 func GroupBy[K comparable](sequenceField string, keyField string, keyFn func(Record) K) Filter[Record, Record]
-func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, Record] // input already sorted by the fields: one group in memory (`group-by -presorted`)
+func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, Record] // input already sorted by the fields: one group in memory (`group-by -presorted`); a key that returns after another is a panic naming the row
 func Aggregate(sequenceField string, aggregations map[string]AggregateFunc) Filter[Record, Record]
 func AggregateOrdered(sequenceField string, aggregations []NamedAgg) Filter[Record, Record]   // result fields in the order given
 type NamedAgg struct{ Name string; Fn AggregateFunc }
@@ -1161,7 +1161,7 @@ Every input row comes out enriched with computed values; unlike
 
 ```go
 func Window(configs []WindowConfig) Filter[Record, Record]
-func StreamWindow(configs []WindowConfig) (Filter[Record, Record], error)   // presorted input, O(frame) memory; refuses what it cannot stream
+func StreamWindow(configs []WindowConfig) (Filter[Record, Record], error)   // presorted input, O(frame) memory; refuses what it cannot stream; a partition that returns or an order that goes backwards is a panic naming the row
 func MustStreamWindow(configs []WindowConfig) Filter[Record, Record]
 
 type WindowConfig struct {

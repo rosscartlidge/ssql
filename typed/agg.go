@@ -1,6 +1,9 @@
 package typed
 
-import "iter"
+import (
+	"fmt"
+	"iter"
+)
 
 // Aggregator accumulates a value across a stream of input rows and
 // returns a final result on close. It's the building block for GroupBy
@@ -162,8 +165,12 @@ func GroupBy[T, S, O any, K comparable](
 }
 
 // GroupByOrdered streams a pre-sorted input into one output per group
-// in O(1) memory. The input MUST be ordered such that all rows with
-// the same key are contiguous; otherwise the result is undefined.
+// in O(1) memory per group. The input MUST be ordered such that all
+// rows with the same key are contiguous; a key that returns after
+// another has started is a panic naming the row (the error channel of
+// DFC142), not an undefined result — the check is one map lookup per
+// key change and a set of the keys seen (2026-10-29; before, unsorted
+// input made every run its own group, silently).
 //
 // Use this when the input is the output of a sort, or comes from a
 // naturally-grouped source (e.g. partitioned files).
@@ -175,22 +182,31 @@ func GroupByOrdered[T, S, O any, K comparable](
 ) iter.Seq[O] {
 	return func(yield func(O) bool) {
 		var (
-			haveKey  bool
-			lastKey  K
-			agg      Aggregator[T, S]
+			haveKey bool
+			lastKey K
+			agg     Aggregator[T, S]
+			seen    = make(map[K]struct{})
+			row     int64
 		)
+		start := func(k K) {
+			if _, dup := seen[k]; dup {
+				panic(fmt.Errorf("group-by -presorted: row %d returns to key %v, which ended earlier — the input is not sorted by the group fields; sort it first, or drop -presorted", row, k))
+			}
+			seen[k] = struct{}{}
+			lastKey = k
+			agg = newAgg()
+		}
 		for v := range seq {
+			row++
 			k := keyFn(v)
 			if !haveKey {
-				lastKey = k
-				agg = newAgg()
+				start(k)
 				haveKey = true
 			} else if k != lastKey {
 				if !yield(build(lastKey, agg.Result())) {
 					return
 				}
-				lastKey = k
-				agg = newAgg()
+				start(k)
 			}
 			agg.Add(v)
 		}

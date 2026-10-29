@@ -33,7 +33,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-presorted").
 			Bool().
 			Global().
-			Help("Input is presorted by partition+order fields (streaming, O(1) memory)").
+			Help("Input is presorted by partition+order fields (streaming, O(1) memory per partition; a partition that returns or an order that goes backwards is an error)").
 			Done().
 
 		// Local flags (clause-scoped)
