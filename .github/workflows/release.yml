@@ -15,7 +15,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # Every commit and tag (goreleaser's changelog and version), no
+          # blobs until checkout needs them: the full clone pulled every
+          # .deb and wasm ever committed, 5.5 GB, and v4.126.0's job sat
+          # in this step for 15 minutes (TODO 2026-10-26; fixed 2026-10-29).
           fetch-depth: 0
+          filter: blob:none
 
       - name: Set up Go
         uses: actions/setup-go@v5

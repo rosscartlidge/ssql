@@ -5,7 +5,7 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.131.0] - 2026-10-29
 
 ### Changed
 
@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The release workflow checks out without blobs.** `fetch-depth: 0` pulled every `.deb` and wasm ever committed, 5.5 GB per run, and one release sat in checkout for 15 minutes; `filter: blob:none` keeps every commit and tag for goreleaser and fetches only the files of the tagged tree.
 - **A stage after a sink is refused at generation time.** `count`, `to csv` and the other sinks consume the records and write their result, so nothing can follow them; exec said so, but `generate go` in record and typed mode emitted code that did not compile and the SQL and Rust formats assembled nonsense. The reader every stage uses now reports "ssql count is a sink — it consumes the records and writes its result, so no stage can follow it" from the stage that followed, in every generate format. `TestStageAfterSinkIsRefused`.
 
 ## [4.130.0] - 2026-10-29
