@@ -199,9 +199,14 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 	}
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {
-		// Sort is SerialOnly — the planner inserts Stream.Serial()
-		// upstream automatically when input is a Stream. The serial
-		// codegen below always runs.
+		// Dual templates: typed.SortParallelBy / SortParallelFunc take
+		// the source's Stream (shards materialised concurrently, an
+		// index sorted on every core, an ordered Stream out, so the
+		// consumer runs parallel too); typed.SortBy / SortByDesc /
+		// SortByFunc are the iter.Seq alternative. Until 2026-10-29 the
+		// sort was SerialOnly: a channel fan-in and one core's
+		// slices.SortFunc, 3.5 s of a 5.5 s program on 10 M rows
+		// (DFC158 §3.13).
 		if len(orderBy) == 0 {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'sort' requires at least one field"))
@@ -228,7 +233,7 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 		// Single-field path: prefer the simpler typed.SortBy /
 		// typed.SortByDesc. Multi-field path: build a comparator
 		// closure and use typed.SortByFunc.
-		var code string
+		var code, serialCode string
 		if len(fields) == 1 && fields[0].f.GoType != "ssql.Int128" && fields[0].f.GoType != "ssql.Decimal" { // neither is cmp.Ordered: the comparator path
 			fn := "typed.SortBy"
 			if fields[0].desc {
@@ -239,8 +244,9 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 				// time.Time is not cmp.Ordered; its instant is.
 				keyType, keyExpr = "int64", keyExpr+".UnixNano()"
 			}
-			code = fmt.Sprintf("%s := %s(func(r %s) %s { return %s })(%s)",
-				outputVar, fn, prevSchema.TypeName, keyType, keyExpr, inputVar)
+			keyFn := fmt.Sprintf("func(r %s) %s { return %s }", prevSchema.TypeName, keyType, keyExpr)
+			code = fmt.Sprintf("%s := typed.SortParallelBy(%s, %v)(%s)", outputVar, keyFn, fields[0].desc, inputVar)
+			serialCode = fmt.Sprintf("%s := %s(%s)(%s)", outputVar, fn, keyFn, inputVar)
 		} else {
 			// Build the comparator: each field contributes a < / > /
 			// 0 chain. Descending fields swap a/b.
@@ -264,19 +270,22 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 				cmpBody.WriteString(fmt.Sprintf(`if %s < %s { return -1 }; if %s > %s { return 1 }`, lhs, rhs, lhs, rhs))
 			}
 			cmpBody.WriteString("\n\t\treturn 0")
-			code = fmt.Sprintf(`%s := typed.SortByFunc(func(a, b %s) int {
+			cmpFn := fmt.Sprintf(`func(a, b %s) int {
 		%s
-	})(%s)`, outputVar, prevSchema.TypeName, cmpBody.String(), inputVar)
+	}`, prevSchema.TypeName, cmpBody.String())
+			code = fmt.Sprintf("%s := typed.SortParallelFunc(%s)(%s)", outputVar, cmpFn, inputVar)
+			serialCode = fmt.Sprintf("%s := typed.SortByFunc(%s)(%s)", outputVar, cmpFn, inputVar)
 		}
 
-		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+		frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
-		frag.Capabilities = &lib.Capabilities{
-			Accepts:    lib.ShapeSeqTyped,
-			Produces:   lib.ShapeSeqTyped,
-			SerialOnly: true,
-		}
+		frag.IsStream = true
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+		frag.AltCodeIfSeq = serialCode
+		frag.AltImportsIfSeq = imports
+		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

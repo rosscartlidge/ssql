@@ -5,6 +5,12 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The typed `sort` runs on every core and feeds a parallel consumer.** `typed.SortParallelBy` and `SortParallelFunc` take the source's Stream — shards materialised concurrently with no channel, an index sorted by a typed key in chunks on every core and merged, the rows gathered in parallel — and produce an ordered Stream, so the stage after a `sort` runs its parallel form and a serial one still sees the order. Until now the sort was the one typed barrier that fanned the source in through a channel and sorted on one core: 3.5 s of a 5.5 s program on 10 M rows, now 2.2 s for the whole program ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.13). The parallel sort is stable (ties in input order), as exec's is. `-spill` keeps its record-mode form.
+
 ## [4.132.0] - 2026-10-29
 
 ### Added

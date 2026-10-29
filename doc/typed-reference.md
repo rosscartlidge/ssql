@@ -289,6 +289,8 @@ func SortBy[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T]      
 func SortByDesc[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T]
 func SortByStable[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T]  // keeps input order among equal keys
 func SortByFunc[T any](cmp func(a, b T) int) func(iter.Seq[T]) iter.Seq[T]        // any comparator: multi-key sorts
+func SortParallelBy[T any, K Ordered](key func(T) K, desc bool) func(Stream[T]) Stream[T]  // the Stream form: shards materialised concurrently, sorted on every core, an ordered Stream out; stable (ties in input order)
+func SortParallelFunc[T any](compare func(a, b T) int) func(Stream[T]) Stream[T]           // the comparator form of the same
 
 func Distinct[T any, K comparable](key func(T) K) func(iter.Seq[T]) iter.Seq[T]   // first occurrence of each key; O(distinct keys) memory
 func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T]                               // one after another, streaming

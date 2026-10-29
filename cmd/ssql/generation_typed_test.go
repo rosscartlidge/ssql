@@ -422,8 +422,8 @@ func TestTypedSortDesc(t *testing.T) {
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" sort salary -desc | "+bin+" limit 2 | "+bin+" to csv")
 
-	if !strings.Contains(src, "typed.SortByDesc(") {
-		t.Errorf("expected typed.SortByDesc call\n%s", src)
+	if !strings.Contains(src, ", true)(") || !strings.Contains(src, "typed.SortParallelBy(") {
+		t.Errorf("expected a descending typed.SortParallelBy call\n%s", src)
 	}
 
 	out := goRunGenerated(t, src)
@@ -450,8 +450,8 @@ func TestTypedSortAsc(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" sort age | "+bin+" to csv")
-	if !strings.Contains(src, "typed.SortBy(") || strings.Contains(src, "typed.SortByDesc") {
-		t.Errorf("expected typed.SortBy ascending\n%s", src)
+	if !strings.Contains(src, "typed.SortParallelBy(") || !strings.Contains(src, ", false)(") {
+		t.Errorf("expected an ascending typed.SortParallelBy\n%s", src)
 	}
 	out := goRunGenerated(t, src)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -594,7 +594,11 @@ func TestTypedTopBy(t *testing.T) {
 // TestTypedTopBySerialForm forces the serial iter.Seq form (a sort
 // upstream downgrades the running shape) and checks the planner swaps to
 // typed.TopBy rather than the parallel TopByParallel.
-func TestTypedTopBySerialForm(t *testing.T) {
+// TestTypedTopAfterSortStaysParallel: the sort produces an ordered
+// Stream (2026-10-29), so a top after it keeps its parallel form; until
+// then the sort was SerialOnly and this test pinned the serial TopBy
+// after the downgrade.
+func TestTypedTopAfterSortStaysParallel(t *testing.T) {
 	dir := t.TempDir()
 	emp := filepath.Join(dir, "people.csv")
 	if err := os.WriteFile(emp, []byte("id,name,salary\n1,Alice,95000\n2,Bob,65000\n3,Carol,120000\n4,Dave,55000\n"), 0o644); err != nil {
@@ -603,11 +607,11 @@ func TestTypedTopBySerialForm(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" sort name | "+bin+" top 2 -field salary | "+bin+" to csv")
-	if !strings.Contains(src, "typed.TopBy(") {
-		t.Errorf("expected serial typed.TopBy after a sort downgrade\n%s", src)
+	if !strings.Contains(src, "typed.TopByParallel") {
+		t.Errorf("expected typed.TopByParallel after a parallel sort\n%s", src)
 	}
-	if strings.Contains(src, "typed.TopByParallel") {
-		t.Errorf("serial-shape input must not use TopByParallel\n%s", src)
+	if strings.Contains(src, ".Serial()") {
+		t.Errorf("no Serial() boundary belongs between a sort and a top\n%s", src)
 	}
 	out := goRunGenerated(t, src)
 	if !strings.Contains(out, "Carol") || !strings.Contains(out, "Alice") {
@@ -627,8 +631,8 @@ func TestTypedSortMultiField(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" sort region product | "+bin+" to csv")
-	if !strings.Contains(src, "typed.SortByFunc") {
-		t.Errorf("expected typed.SortByFunc for multi-field sort\n%s", src)
+	if !strings.Contains(src, "typed.SortParallelFunc") {
+		t.Errorf("expected typed.SortParallelFunc for multi-field sort\n%s", src)
 	}
 	out := goRunGenerated(t, src)
 	// Lex-asc by region, then product: N/A, N/B, N/C, S/A, S/B
@@ -791,6 +795,49 @@ func TestTypedWindowFrameStatistics(t *testing.T) {
 	// the row, the sample stddev of five consecutive integers is sqrt(2.5),
 	// the mode of five distinct values is the first seen (the lowest).
 	if want := "n,c,sd,med,mo\n3,5,1.5811388300841898,3,1\n4,5,1.5811388300841898,4,2\n"; !strings.Contains(out, want) {
+		t.Errorf("expected %q in output\n%s", want, out)
+	}
+}
+
+// TestTypedSortKeepsPipelineParallel: the sort takes the source's Stream
+// and produces an ordered one (typed.SortParallelBy / SortParallelFunc),
+// so the source is not fanned in through a channel before it and the
+// consumer after it runs parallel; the serial typed.SortBy must not
+// appear, nor a Serial() before the sort. Until 2026-10-29 the sort was
+// SerialOnly — 3.5 s of a 5.5 s program on 10 M rows (DFC158 §3.13).
+// The output order is the stable one (ties in input order), as exec's.
+func TestTypedSortKeepsPipelineParallel(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("name,dept,years\nAlice,eng,8\nBob,ops,3\nCarol,eng,2\nDan,ops,3\nEve,eng,8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" sort years | "+bin+" group-by dept -first name f | "+bin+" to csv")
+	for _, want := range []string{"typed.ReadCSVParallel", "typed.SortParallelBy(", "typed.GroupByParallel"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("the sort serialised the pipeline: generated source lacks %q\n%s", want, src)
+		}
+	}
+	for _, bad := range []string{"typed.SortBy(", ".Serial()"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("the sort took the serial path (%q present)\n%s", bad, src)
+		}
+	}
+	out := goRunGenerated(t, src)
+	// By years ascending, ties in input order: Carol 2, Bob 3, Dan 3, Alice 8, Eve 8 → first per dept.
+	if want := "dept,f\neng,Carol\nops,Bob\n"; !strings.Contains(out, want) {
+		t.Errorf("expected %q in output\n%s", want, out)
+	}
+	// A multi-field sort (the comparator form) and a serial consumer.
+	src = runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" sort dept + years -desc | "+bin+" limit 3 | "+bin+" to csv")
+	if !strings.Contains(src, "typed.SortParallelFunc(") {
+		t.Errorf("multi-field sort lacks SortParallelFunc\n%s", src)
+	}
+	out = goRunGenerated(t, src)
+	if want := "name,dept,years\nAlice,eng,8\nEve,eng,8\nCarol,eng,2\n"; !strings.Contains(out, want) {
 		t.Errorf("expected %q in output\n%s", want, out)
 	}
 }

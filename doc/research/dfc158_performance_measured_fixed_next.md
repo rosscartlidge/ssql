@@ -661,6 +661,53 @@ non-deciding clause was pointed at the deciding clause's positions),
 the existing window tests over `WindowRow`, the nine window
 equivalence cases in every lane.
 
+### 3.13 The sort stage runs parallel, and feeds a parallel consumer (2026-10-29)
+
+Ross ran `from range 10000000 | update -set-expr r 'hash(n)' | sort r
+| sort n | exclude r | window -presorted -preceding 5 -following 5 -avg
+n running -order n -count count | where … | limit 10` through
+`generate go -run` (6.96 s, the program 5.55 of it) and `generate sql
+-run` (DuckDB, 0.73 s): "duckdb very good". By pipeline prefix the
+typed program's time was the sort stage's: range, update, `sort n`,
+count ran 3.97 s against DuckDB's 0.42, and the window added 1.5 s
+against 0.23. The sort was the one barrier the typed lane still ran
+the old way — `SerialOnly`, so the planner fanned the source's shards
+into one `iter.Seq` through a channel (10 M rows at ~100 ns) and
+`slices.SortFunc` sorted the slice on one core with a closure
+comparator — exactly the shape the window had before §3.5.
+
+`typed.SortParallelBy` and `SortParallelFunc` (`typed/sort_parallel.go`)
+take the Stream: the shards are materialised concurrently (the window's
+`materialise`), an index is sorted by a typed key as the window's
+partitions are (`sortIdxByKey` / `sortIdxByString`: (key, index) pairs,
+chunks sorted on every core and merged pairwise, the index the
+tiebreak), the rows are gathered into order on every core, and the
+output is an ordered Stream of ranges — `orderedStream`, the once-built
+shards of §3.11 factored out — so the consumer after the sort runs
+parallel too and `Serial()` walks it in order. The sort template
+declares dual templates (`Produces: ShapeStream`, `IsStream`), the
+serial `SortBy` forms as the `iter.Seq` alternative; `-spill` stays
+record-mode. Two consequences beyond speed: the parallel sort is
+STABLE (ties in input order), as `ssql.SortRecords` is and
+`slices.SortFunc` is not, so the typed lane now agrees with exec on
+ties; and a pipeline whose only Stream consumer was after the sort
+(`from … | sort | to table`) no longer has its SOURCE read serially,
+since the sort accepts the Stream.
+
+Ross's program: **5.55 → 2.17 s** (the compile 1.7 s is outside both).
+The 1.5 s the window still costs on already-sorted input — it ignores
+`-presorted`, materialises again, sorts again, scans an eleven-row
+frame per row — is the next item (§3.14, the typed presorted window).
+
+Tests: `TestSortParallelMatchesStable` (ascending, descending, a string
+key, a comparator; 1, 3 and 24 shards past the chunk threshold, many
+ties, against `slices.SortStableFunc`; the shards concatenated and
+`Serial()`), `TestTypedSortKeepsPipelineParallel` (the generated
+program carries `SortParallelBy` and `GroupByParallel` with no
+`Serial()` and no `SortBy(`; a multi-field sort as `SortParallelFunc`
+with a `limit` after it, the output the stable order), the sort
+equivalence cases in every lane.
+
 ## 4. What we can do, ranked
 
 Expected win first, cost second. Each item that changes a
