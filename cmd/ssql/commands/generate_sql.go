@@ -263,6 +263,7 @@ type sqlSource struct {
 	format  string   // csv, tsv, json, jsonl, parquet, "" (bare: by extension)
 	files   []string // one or several (several: UNION ALL of the files)
 	columns []string // a parquet -columns projection
+	schema  []sqlPair // generate rust: every column and its ssql kind, when a type is declared (nil = the reader infers)
 }
 
 // sqlStar is a `* EXCLUDE / REPLACE / RENAME` projection, structured.
@@ -857,6 +858,11 @@ func translateFrom(q *sqlQuery, args []string) error {
 			}
 			q.fromClause = src
 			q.source = &sqlSource{format: args[0], files: files}
+			defer func() { // after the header and the kinds are seeded below
+				if q.csvSource != "" { // the whole header: a -columns projection still reads every column
+					q.source.schema = rustSourceSchema(delimHeader(q.csvSource, rune(q.csvDelim)), typeOverrides)
+				}
+			}()
 			// Seed column tracking from the header (generation runs where
 			// the file lives). Non-delimited formats stay unknown.
 			switch {
@@ -885,7 +891,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 			}
 			if q.csvSource != "" {
 				applyTypeOverrideKinds(typeOverrides)
-				if sqlDialectCur == dialectDataFusion && len(withSampledWideColumns(typeOverrides)) > len(typeOverrides) {
+				if sqlDialectCur == dialectDataFusion && !sqlForRust && len(withSampledWideColumns(typeOverrides)) > len(typeOverrides) {
 					// A sampled column holds an integer literal past int64
 					// (DFC155 C): DuckDB reads it as HUGEINT through types=,
 					// but DataFusion's file table infers Int64 and the cast
@@ -955,6 +961,17 @@ func translateFrom(q *sqlQuery, args []string) error {
 			}
 			q.fromClause = sqlSubquery("(" + strings.Join(parts, " UNION ALL ") + ")")
 			q.source = &sqlSource{format: args[0], files: files}
+			if sqlForRust && len(files) > 0 {
+				delim := ','
+				if args[0] == "tsv" || strings.HasSuffix(strings.ToLower(files[0]), ".tsv") {
+					delim = '\t'
+				}
+				if cols := delimHeader(files[0], delim); len(cols) > 0 {
+					seedColumnKinds(files[0], delim)
+					applyTypeOverrideKinds(typeOverrides)
+					q.source.schema = rustSourceSchema(cols, typeOverrides)
+				}
+			}
 		}
 	case "ssh":
 		return fmt.Errorf("from ssh has no SQL equivalent — it is an ssql-specific distributed feature")
@@ -3535,6 +3552,34 @@ func coalesceEmptyCells(src string, columns []string) string {
 // (a literal past int64; sqlColumnKinds was seeded from this file) to the
 // declared types, so the engine reads them as HUGEINT where its own
 // sniffer would make them DOUBLE (DFC155 C). An explicit -type wins.
+// rustSourceSchema is the declared schema a Rust reader takes for a
+// delimited source: every header column with its ssql kind (the sampled
+// kind, a -type or sidecar declaration on top) — or nil, letting
+// DataFusion infer, when nothing is declared and no column holds an
+// integer past int64. A partial schema is not an option: the reader
+// takes all of the columns or none.
+func rustSourceSchema(cols []string, overrides map[string]string) []sqlPair {
+	if !sqlForRust || len(cols) == 0 || len(withSampledWideColumns(overrides)) == 0 {
+		return nil
+	}
+	schema := make([]sqlPair, 0, len(cols))
+	for _, c := range cols {
+		kind := sqlColumnKinds[c]
+		switch {
+		case kind == "":
+			kind = "string"
+		case kind == "time":
+			// ssql reads a time cell by its own rules (zones, -tz, the
+			// formats it accepts); DataFusion's CSV timestamp parser has
+			// others. Read it as text: a later cast or expression sees the
+			// same string the record path holds until it is cast.
+			kind = "string"
+		}
+		schema = append(schema, sqlPair{c, kind})
+	}
+	return schema
+}
+
 func withSampledWideColumns(overrides map[string]string) map[string]string {
 	var out map[string]string
 	for col, kind := range sqlColumnKinds {

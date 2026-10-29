@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/expr-lang/expr/ast"
+	ssql "github.com/rosscartlidge/ssql/v4"
 )
 
 // The numeric functions (DFC153) in SQL. Names are DuckDB's, so most
@@ -148,7 +149,28 @@ func mathFuncToSQL(name string, args []ast.Node) (string, bool, error) {
 	if guard, overflows := mathOverflow[name]; overflows && sqlDialectCur == dialectPostgres && len(parts) == 1 {
 		call = "CASE WHEN " + strings.ReplaceAll(guard, "%s", parts[0]) + " THEN " + call + " END"
 	}
+	if mathKeepsType[name] && len(args) == 1 && exprArgIsDecimal(args[0]) {
+		// trunc/sign of a decimal is a decimal, which has no infinity or
+		// NaN — and DataFusion, asked to compare it with 'inf'::double,
+		// casts the infinity to the decimal and fails ("Overflowing on
+		// inf"; the rust lane's decimal_round_floor_ceil, 2026-10-30).
+		return call, true, nil
+	}
 	return sqlFinite(call), true, nil
+}
+
+// mathKeepsType are the functions whose result has the argument's type.
+var mathKeepsType = map[string]bool{"trunc": true, "sign": true}
+
+// exprArgIsDecimal reports whether an expression argument is a column of a
+// decimal kind (the source's -type, a cast, a sidecar).
+func exprArgIsDecimal(n ast.Node) bool {
+	id, ok := n.(*ast.IdentifierNode)
+	if !ok {
+		return false
+	}
+	base, _ := ssql.ParseWireType(sqlColumnKinds[id.Value])
+	return base == "decimal"
 }
 
 // sqlFinite makes an infinite (or NaN) double NULL: ssql has no value for

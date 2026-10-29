@@ -157,7 +157,7 @@ opt-level = 3
 func rustLaneMain(funcs, names []string) string {
 	var sb strings.Builder
 	sb.WriteString(`#![allow(unused_imports, dead_code)]
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn as agg;
 use datafusion::functions_window::expr_fn as win;

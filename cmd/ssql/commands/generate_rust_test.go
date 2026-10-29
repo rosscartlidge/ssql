@@ -72,7 +72,7 @@ func TestGenerateRustProgram(t *testing.T) {
 
 #![allow(unused_imports)]
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn as agg;
 use datafusion::functions_window::expr_fn as win;
@@ -304,5 +304,62 @@ func TestGenerateRustRuns(t *testing.T) {
 	want := `{"dept":"eng","avg_salary":150.0,"bonus":30.0,"n":2}`
 	if got != want {
 		t.Errorf("output\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestGenerateRustSourceOptions: the Rust lowering reads what DataFusion's
+// SQL file table cannot (2026-10-30) — a .tsv with its delimiter and
+// extension, a .jsonl with its extension, and a declared schema when a
+// type is declared or a column holds an integer past int64: every header
+// column (a -columns projection still reads them all), int128 as
+// Decimal128(38, 0), a declared decimal read as text and cast after the
+// read (the CSV reader truncates extra digits; the cast rounds as ssql
+// does). The datafusion dialect of generate sql still refuses all three.
+func TestGenerateRustSourceOptions(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	tsv := write("t.tsv", "id\tname\tbig\n1\tAl\t123456789012345678901234\n2\tBo\t5\n")
+	jsonl := write("e.jsonl", "{\"id\":1}\n")
+	csv := write("z.csv", "id,zip,amt\n1,02134,12.50\n")
+
+	has := func(code string, want ...string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(code, w) {
+				t.Errorf("generated Rust lacks %q\n%s", w, code)
+			}
+		}
+	}
+	has(rustFromCommands(t, "", "ssql from tsv "+tsv),
+		`.delimiter(b'\t').file_extension(".tsv").schema(&df_schema)`,
+		`Field::new("id", DataType::Int64, true),`,
+		`Field::new("big", DataType::Decimal128(38, 0), true),`)
+	has(rustFromCommands(t, "", "ssql from jsonl "+jsonl),
+		`JsonReadOptions::default().file_extension(".jsonl")`)
+	code := rustFromCommands(t, "", "ssql from csv "+csv+" -type zip string -type amt decimal:2 -columns amt")
+	has(code,
+		`Field::new("id", DataType::Int64, true),`,
+		`Field::new("zip", DataType::Utf8, true),`,
+		`Field::new("amt", DataType::Utf8, true),`,
+		`.with_column("amt", cast(col("amt"), DataType::Decimal128(38, 2)))?;`)
+	// No declaration, no wide column: DataFusion infers.
+	if code := rustFromCommands(t, "", "ssql from csv "+csv); strings.Contains(code, "Schema::new") {
+		t.Errorf("an undeclared CSV got a schema\n%s", code)
+	}
+	// The SQL dialect is unchanged.
+	for _, cmd := range []string{"ssql from tsv " + tsv, "ssql from csv " + csv + " -type zip string"} {
+		var buf bytes.Buffer
+		if err := json.NewEncoder(&buf).Encode(lib.CodeFragment{Type: "stmt", Command: cmd}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := assembleSQLDialect(&buf, dialectDataFusion); err == nil {
+			t.Errorf("generate sql -dialect datafusion accepted %q", cmd)
+		}
 	}
 }

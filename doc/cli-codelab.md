@@ -1034,7 +1034,10 @@ translation, the one the oracle lane checks, not a second one in Rust.
 A stage with no DataFrame form yet (`-cube`, a keyed `except`, `unpivot`,
 `sample`, `from range`) runs as one `ctx.sql(…)` step over the DataFrame
 so far, named in the program's header; what `-dialect datafusion`
-refuses, `generate rust` refuses the same way. The program's `main`
+refuses, `generate rust` refuses the same way, except the sources the
+DataFrame API's readers can take and DataFusion's SQL file table cannot:
+a `.tsv` (its delimiter), a `.jsonl` (its extension), and `-type` or a
+schema sidecar (a declared schema). The program's `main`
 builds the session, runs the function and writes by the pipeline's sink
 (`to table` shows it, `to csv` and `to jsonl` stream it to stdout, `to
 parquet FILE` writes the file).

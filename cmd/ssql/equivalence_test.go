@@ -3939,9 +3939,13 @@ var equivCases = []EquivCase{
 		// exec streams (StreamWindow), the typed lane runs the presorted
 		// window over the sort's rows in place (2026-10-29), DuckDB sorts
 		// for itself; all must agree.
+		// Unordered: a SQL window's output has no defined order without a
+		// final ORDER BY, and DataFusion drops the sort below it, so its
+		// partitions came back in scheduling order under a loaded lane run
+		// (2026-10-30) — the values are what this case pins.
 		Name:     "window_presorted_bounded",
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept salary | {{.bin}} window -presorted -partition dept -order salary -preceding 1 -sum salary s2 -avg salary a2 -count n2 -row-number rn | {{.bin}} include name dept s2 a2 n2 rn`,
-		Ordered:  true,
+		Ordered:  false,
 	},
 	{
 		// The same statistics over a bounded moving frame (ROWS 1 PRECEDING

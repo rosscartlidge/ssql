@@ -183,6 +183,15 @@ func sqlSubquery(body string) string {
 	return body
 }
 
+// sqlForRust is set while `generate rust` assembles its tree: the
+// DataFrame API's readers take what DataFusion's SQL file table cannot —
+// a delimiter and a file extension (.tsv, .jsonl) and a declared schema
+// (-type, a schema sidecar, an integer column past int64) — so those
+// refusals of the datafusion dialect are lifted there, and the source
+// carries what the reader needs (sqlSource.schema). The SQL text the
+// dialect renders is unchanged (2026-10-30, DFC157 §6 follow-up 1).
+var sqlForRust bool
+
 // dialectSource renders the FROM reference for one data file: a quoted
 // path for DuckDB and DataFusion (both read a file by name), a table for
 // Postgres, which cannot read files in a query — the table is named after
@@ -196,13 +205,13 @@ func dialectSource(file string) (string, error) {
 // them; DataFusion's file table infers and cannot, so they are refused.
 func dialectSourceTyped(file string, overrides map[string]string) (string, error) {
 	lower := strings.ToLower(file)
-	if sqlDialectCur == dialectDataFusion && len(overrides) > 0 {
+	if sqlDialectCur == dialectDataFusion && len(overrides) > 0 && !sqlForRust {
 		return "", dialectRefuse("from -type / schema sidecar", "DataFusion's file table infers its column types")
 	}
 	if sqlDialectCur == dialectDataFusion && (strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) {
 		return "", dialectRefuse("from "+file, "DataFusion's file table reads local paths; an http source needs a registered object store, which the Python bindings' url table does not resolve (55.0)")
 	}
-	if sqlDialectCur == dialectDataFusion && (strings.HasSuffix(lower, ".tsv") || strings.HasSuffix(lower, ".jsonl")) {
+	if sqlDialectCur == dialectDataFusion && !sqlForRust && (strings.HasSuffix(lower, ".tsv") || strings.HasSuffix(lower, ".jsonl")) {
 		return "", dialectRefuse("from "+file, "DataFusion's file table reads .csv, .json and .parquet by extension")
 	}
 	if sqlDialectCur == dialectDataFusion && strings.HasSuffix(lower, ".json") && jsonFileIsArray(file) {

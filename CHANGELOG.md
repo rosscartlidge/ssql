@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`generate rust` reads TSV, JSONL and declared types.** The DataFrame API's readers take what DataFusion's SQL file table cannot, so `generate rust` no longer refuses a `.tsv` (its delimiter), a `.jsonl` (its extension), or `-type` / a schema sidecar / an integer column past int64 (a declared schema built from the header and ssql's own sampled kinds). A declared decimal is read as text and cast, because DataFusion's CSV reader truncates extra digits where ssql rounds. `generate sql -dialect datafusion` still refuses all three ([DFC157](doc/research/dfc157_generate_rust.md) §7a).
+
 - **Arg-max and arg-min over a window frame run typed.** `typed.ArgMaxOf(get, by)` / `ArgMinOf` (and Ptr forms): the field at the row with the extreme BY, ties to the first in frame order, absent when no row has both — the last registry aggregates `window` exposes that ran on the record path in a typed program (first, last, any and collect are group-by flags only).
 - **Count-distinct and string-agg over a window frame run typed.** `typed.CountDistinctOf` and `typed.StringAggOf` (and their Ptr forms) join the frame statistics in the typed lane, counting under the same key as the record path (`ssql.DistinctKey`, now exported) and formatting values as `ssql.AggValueString`; the registry aggregates still on the record path over a frame are first, last, any, collect, arg-max and arg-min.
 
 ### Fixed
 
+- **`trunc` and `sign` of a decimal column in `generate sql`.** They were wrapped in the non-finite guard, which DataFusion evaluates by casting infinity to the decimal and failing ("Overflowing on inf"); a decimal has no infinity, so the guard is left off.
 - **A shard's panic could go unraised in the channel-based `typed.Parallel`.** A panicking goroutine's own defers run before the group's recover stores the panic, so a consumer that drained the channel the defer closed, in that gap, read no panic and returned normally — about one run in a hundred under the race detector. `shardGroup.rethrow` waits for the goroutine first; the JSON scanner and `ParallelBatched` had the same gap.
 
 ### Changed

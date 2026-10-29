@@ -164,9 +164,9 @@ func registerGenerateRust(cmd *cf.SubcommandBuilder) {
 // assembleRust translates the fragment stream into a Rust program (or,
 // with funcName, the pipeline function alone).
 func assembleRust(input io.Reader, funcName string) (string, error) {
-	prev, prevLoads := sqlDialectCur, pgLoads
-	sqlDialectCur, pgLoads = dialectDataFusion, nil
-	defer func() { sqlDialectCur, pgLoads = prev, prevLoads }()
+	prev, prevLoads, prevRust := sqlDialectCur, pgLoads, sqlForRust
+	sqlDialectCur, pgLoads, sqlForRust = dialectDataFusion, nil, true
+	defer func() { sqlDialectCur, pgLoads, sqlForRust = prev, prevLoads, prevRust }()
 	q, err := assembleQuery(input)
 	if err != nil {
 		return "", err
@@ -226,12 +226,32 @@ func renderRust(q *sqlQuery, funcName string) string {
 	return sb.String()
 }
 
-const rustImports = `use datafusion::arrow::datatypes::DataType;
+const rustImports = `use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn as agg;
 use datafusion::functions_window::expr_fn as win;
 use datafusion::prelude::*;
 `
+
+// rustArrowType is the Arrow type a declared ssql column kind reads as:
+// an int128 is DataFusion's Decimal128(38, 0) (it has no 128-bit
+// integer), a decimal:S a Decimal128(38, S); anything else is text (a
+// time column reads as text, rustSourceSchema).
+func rustArrowType(kind string) string {
+	switch {
+	case kind == "int":
+		return "DataType::Int64"
+	case kind == "float":
+		return "DataType::Float64"
+	case kind == "bool":
+		return "DataType::Boolean"
+	case kind == "int128":
+		return "DataType::Decimal128(38, 0)"
+	case strings.HasPrefix(kind, "decimal:"):
+		return "DataType::Decimal128(38, " + strings.TrimPrefix(kind, "decimal:") + ")"
+	}
+	return "DataType::Utf8"
+}
 
 // rustMain is the program's main: the session the datafusion oracle
 // lane uses (CSV files have a header; a quoted path in an escape-hatch
@@ -394,13 +414,56 @@ func (g *rustGen) source(s *sqlSource, name string) {
 		}
 		paths = "vec![" + strings.Join(quoted, ", ") + "]"
 	}
+	// The reader's options from the file itself: a .tsv is tab-delimited
+	// and a .jsonl is line-delimited JSON, and DataFusion's readers reject
+	// a path whose extension is not the one they expect unless told
+	// (file_extension) — the SQL file table cannot be told, so the
+	// datafusion dialect refuses both (2026-10-30). A declared schema
+	// (-type, a sidecar, an integer column past int64) is the reader's
+	// whole schema; without one DataFusion infers.
+	ext := strings.ToLower(filepath.Ext(files[0]))
 	switch format {
 	case "parquet":
 		g.line("let %s = ctx.read_parquet(%s, ParquetReadOptions::default()).await?;", name, paths)
 	case "json", "jsonl":
-		g.line("let %s = ctx.read_json(%s, JsonReadOptions::default()).await?;", name, paths)
+		opts := "JsonReadOptions::default()"
+		if ext != ".json" && ext != "" {
+			opts += fmt.Sprintf(".file_extension(%s)", rustStr(ext))
+		}
+		g.line("let %s = ctx.read_json(%s, %s).await?;", name, paths, opts)
 	default:
-		g.line("let %s = ctx.read_csv(%s, CsvReadOptions::new().has_header(true)).await?;", name, paths)
+		opts := "CsvReadOptions::new().has_header(true)"
+		if format == "tsv" || ext == ".tsv" {
+			opts += ".delimiter(b'\\t')"
+		}
+		if ext != ".csv" && ext != "" {
+			opts += fmt.Sprintf(".file_extension(%s)", rustStr(ext))
+		}
+		// A declared decimal is read as text and cast after the read: the
+		// CSV reader parses a cell with more digits than the scale by
+		// TRUNCATING (12.345 → 12.34), where ssql — and DataFusion's own
+		// text-to-decimal cast — round half away from zero (12.35). Found
+		// by the rust lane's decimal cases on the day the read was lifted
+		// (2026-10-30).
+		var decimals []sqlPair
+		if len(s.schema) > 0 {
+			schema := name + "_schema"
+			g.line("let %s = Schema::new(vec![", schema)
+			for _, c := range s.schema {
+				arrow := rustArrowType(c.val)
+				if strings.HasPrefix(c.val, "decimal:") {
+					decimals = append(decimals, sqlPair{c.col, arrow})
+					arrow = "DataType::Utf8"
+				}
+				g.line("    Field::new(%s, %s, true),", rustStr(c.col), arrow)
+			}
+			g.line("]);")
+			opts += ".schema(&" + schema + ")"
+		}
+		g.line("let %s = ctx.read_csv(%s, %s).await?;", name, paths, opts)
+		for _, d := range decimals {
+			g.line("let %s = %s.with_column(%s, cast(col(%s), %s))?;", name, name, rustStr(d.col), rustStr(d.col), d.val)
+		}
 	}
 	if len(s.columns) > 0 {
 		g.line("let %s = %s.select_columns(&[%s])?;", name, name, rustStrList(s.columns))

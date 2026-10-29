@@ -2,7 +2,7 @@
 
 Reference: DFC157
 Created: 2026-10-27
-Last modified: 2026-10-28
+Last modified: 2026-10-30
 Revisits: [DFC132](./dfc132_rust_target_datafusion.md) §4
 
 [Back to Index](./README.md)
@@ -340,6 +340,38 @@ branch.
 - **Numbers**: the first `cargo build` of the cache crate compiled
   DataFusion in 4m47s wall (60 CPU-minutes, 1.1–1.3 GB); the relink of a
   new program is 3–10 s; the binary is 174 MB.
+
+
+### 7a. The source refusals lifted (2026-10-30)
+
+Follow-up (1). `generate rust` sets `sqlForRust` while it assembles, and
+under it the datafusion dialect stops refusing three sources the
+DataFrame API can read: a `.tsv` (`CsvReadOptions::delimiter(b'\t')
+.file_extension(".tsv")`), a `.jsonl` (`JsonReadOptions::file_extension`),
+and a declared type — `-type`, a schema sidecar, or a column the sample
+shows holding an integer past int64 — which becomes the reader's whole
+schema (`sqlSource.schema`, from the file's header and ssql's own sampled
+kinds with the declarations on top: int → Int64, float → Float64, bool →
+Boolean, int128 → Decimal128(38, 0), decimal:S → Decimal128(38, S),
+string and time → Utf8). The SQL text the dialect renders is unchanged;
+`generate sql -dialect datafusion` still refuses them.
+
+The rust lane found two things the first time it ran the unblocked cases.
+DataFusion's CSV reader parses a cell with more digits than a declared
+decimal's scale by TRUNCATING (12.345 → 12.34), where ssql and
+DataFusion's own text-to-decimal cast round half away from zero — so a
+declared decimal is read as text and cast right after the read (six
+decimal cases failed before). And `trunc`/`sign` of a decimal were wrapped
+in the non-finite guard, which DataFusion evaluates by casting infinity to
+the decimal and failing; a function that keeps its argument's type skips
+the guard over a decimal column, in every dialect. A time column reads as
+text (ssql's zone rules are not DataFusion's timestamp parser). An http
+source and a JSON array file stay refused.
+
+Tests: `TestGenerateRustSourceOptions` (the three reader forms, the whole
+header under a `-columns` projection, no schema when nothing is
+declared, the SQL dialect still refusing), the rust lane over the
+equivalence suite (the decimal cases with `-type` now run there).
 
 ## 8. References
 
