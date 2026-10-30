@@ -166,6 +166,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC156 | 2026-10-26 | 2026-10-26 | [The Fold in SQL: `-stream-expr` as a Recursive CTE](./dfc156_fold_sql_recursive_cte.md) |
 | DFC157 | 2026-10-27 | 2026-10-30 | [`generate rust`: the Pipeline as a Rust Program on DataFusion](./dfc157_generate_rust.md) |
 | DFC158 | 2026-10-28 | 2026-10-29 | [Performance against the engines: what we found, what we fixed, what is left](./dfc158_performance_measured_fixed_next.md) |
+| DFC159 | 2026-10-30 | 2026-10-30 | [ssql for Rust Programmers: Pipelines as DataFusion Programs](./dfc159_ssql_for_rust_programmers.md) |
 
 <!-- DFC-INDEX-END -->
 

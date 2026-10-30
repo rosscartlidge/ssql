@@ -76,6 +76,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn as agg;
 use datafusion::functions_window::expr_fn as win;
+use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
 
 pub async fn pipeline(ctx: &SessionContext) -> Result<DataFrame> {
@@ -150,18 +151,31 @@ func TestGenerateRustLayers(t *testing.T) {
 		{"parquet source with columns",
 			[]string{"ssql from parquet x.parquet -columns a -columns b", "ssql limit 3"},
 			[]string{`let df = ctx.read_parquet("x.parquet", ParquetReadOptions::default()).await?;`, `let df = df.select_columns(&["a", "b"])?;`}},
-		{"range source is a SQL leaf",
+		{"range source is a SQL leaf, the stages after it calls",
 			[]string{"ssql from range 5 -start 10", "ssql update -set-expr sq 'n * n'"},
-			[]string{`let df = ctx.sql(r#"SELECT *, ("n" * "n") AS "sq"`, `FROM (SELECT value AS "n" FROM generate_series(10, 14, 1))"#).await?;`}},
-		{"rollup runs as SQL over a view",
-			[]string{"ssql from e.csv", "ssql group-by dept -count n -rollup", "ssql sort dept"},
-			[]string{`ctx.register_table("__q1", df.into_view())?;`, `WITH __src AS (SELECT * FROM (SELECT * FROM __q1))`, `ORDER BY "dept""#).await?;`}},
-		{"sample runs as SQL over a view, with the stage after it",
+			[]string{`let df = ctx.sql(r#"SELECT value AS "n" FROM generate_series(10, 14, 1)"#).await?;`, `let df = df.with_column("sq", e1)?;`}},
+		{"rollup aggregates per grouping set and joins on the set's keys",
+			[]string{"ssql from e.csv", "ssql group-by dept city -count n -rollup", "ssql sort dept"},
+			[]string{
+				`let __s0 = df.clone().aggregate(vec![], vec![agg::count(lit(1i64)).alias("n")])?.alias("__s0")?;`,
+				`let __s1 = df.clone().aggregate(vec![col("dept")], vec![agg::count(lit(1i64)).alias("dept_n")])?.alias("__s1")?;`,
+				`let __d = df.aggregate(vec![col("dept"), col("city")], vec![agg::count(lit(1i64)).alias("dept_city_n")])?.alias("__d")?;`,
+				`let df = __d.join_on(__s0, JoinType::Inner, [lit(true)])?;`,
+				`let df = df.join_on(__s1, JoinType::Inner, [binary_expr(col("__d.dept"), Operator::IsNotDistinctFrom, col("__s1.dept"))])?;`,
+				`let df = df.select(vec![col("__d.dept").alias("dept"), col("__d.city").alias("city"), col("__s0.n").alias("n"), col("__s1.dept_n").alias("dept_n"), col("__d.dept_city_n").alias("dept_city_n")])?;`,
+				`let df = df.sort(vec![col("dept").sort(true, false)])?;`}},
+		{"sample sorts by random() and limits, with the stage after it",
 			[]string{"ssql from e.csv", "ssql sample 3", "ssql where -if age gt 30"},
-			[]string{`ctx.register_table("__q1", df.into_view())?;`, `FROM (SELECT * FROM (SELECT * FROM __q1) ORDER BY random() LIMIT 3)`, `WHERE "age" > 30"#).await?;`}},
-		{"keyed except runs as SQL over a view",
+			[]string{`let df = df.sort(vec![random().sort(true, false)])?.limit(0, Some(3))?;`, `let df = df.filter(col("age").gt(lit(30i64)))?;`}},
+		{"sample -percent filters on random()",
+			[]string{"ssql from e.csv", "ssql sample -percent 25"},
+			[]string{`let df = df.filter(random().lt(lit(0.25f64)))?;`}},
+		{"keyed except is an anti join, deduplicated",
 			[]string{"ssql from e.csv", "ssql except -file c.csv -using id"},
-			[]string{`SELECT DISTINCT *`, `SELECT * FROM __q1`, `) AS __l`, `WHERE NOT EXISTS (SELECT 1 FROM (`}},
+			[]string{`let s1 = ctx.read_csv("c.csv"`, `let df = df.join(s1, JoinType::LeftAnti, &["id"], &["id"], None)?;`, `let df = df.distinct()?;`}},
+		{"keyed intersect -all is a semi join, duplicates kept",
+			[]string{"ssql from e.csv", "ssql intersect -file c.csv -on id cid -all"},
+			[]string{`let df = df.join(s1, JoinType::LeftSemi, &["id"], &["cid"], None)?;`}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -173,6 +187,47 @@ func TestGenerateRustLayers(t *testing.T) {
 					t.Fatalf("missing (after offset %d):\n  %s\nin body:\n%s", pos, w, body)
 				}
 				pos += i + len(w)
+			}
+		})
+	}
+}
+
+// TestGenerateRustHatchOverAFile pins the DataFrame forms of the layers
+// the SQL builds from the columns' names and kinds: unpivot's branch per
+// value column and -empty zero's coalesce per numeric column.
+func TestGenerateRustHatchOverAFile(t *testing.T) {
+	csv := rustTestCSV(t)
+	cases := []struct {
+		name  string
+		cmds  []string
+		wants []string
+	}{
+		{"unpivot is a branch per value column, concatenated",
+			[]string{"ssql from " + csv, "ssql include name age salary", "ssql unpivot -id name -col k"},
+			[]string{
+				`let s1 = df.clone().filter(col("age").is_not_null())?.select(vec![col("name"), lit("age").alias("k"), col("age").alias("value")])?;`,
+				`let s2 = df.clone().filter(col("salary").is_not_null())?.select(vec![col("name"), lit("salary").alias("k"), col("salary").alias("value")])?;`,
+				`let df = s1.union(s2)?;`}},
+		{"-empty zero coalesces the numeric columns",
+			[]string{"ssql from csv " + csv + " -empty zero"},
+			[]string{
+				`let df = df.with_column("age", coalesce(vec![col("age"), lit(0i64)]))?;`,
+				`let df = df.with_column("salary", coalesce(vec![col("salary"), lit(0i64)]))?;`}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code := rustFromCommands(t, "", c.cmds...)
+			body := strings.Join(rustFuncBody(code), "\n")
+			pos := 0
+			for _, w := range c.wants {
+				i := strings.Index(body[pos:], w)
+				if i < 0 {
+					t.Fatalf("missing (after offset %d):\n  %s\nin body:\n%s", pos, w, body)
+				}
+				pos += i + len(w)
+			}
+			if strings.Contains(code, "ctx.sql(") {
+				t.Errorf("the layer ran as SQL text:\n%s", code)
 			}
 		})
 	}

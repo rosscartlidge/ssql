@@ -161,6 +161,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn as agg;
 use datafusion::functions_window::expr_fn as win;
+use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
 
 `)

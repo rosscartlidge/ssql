@@ -241,6 +241,7 @@ type sqlQuery struct {
 	source       *sqlSource  // a leaf's file source
 	sqlOnly      string      // non-empty: the layer runs as SQL text over its inner layer (the reason names the stage)
 	fromTemplate string      // sqlOnly: fromClause with the inner layer's rendering replaced by sqlFromPlaceholder
+	hatch        *sqlHatch   // sqlOnly: what the layer does, for a renderer that builds it from calls
 	star         *sqlStar    // the `* …` modifier selectExprs begins with
 	includeCols  []string    // an explicit column list projection (include)
 	groupFields  []string    // group-by keys, in order
@@ -253,6 +254,44 @@ type sqlQuery struct {
 	sink         []string    // the `to` stage's arguments (table, csv, parquet FILE, …); nil: none seen
 }
 
+// sqlHatch is a sqlOnly layer's structure: what it does to the rows of
+// its inner layer (or, for from range, what it generates), for a renderer
+// that builds the layer from calls (generate rust's DataFrame forms)
+// rather than running its SQL text. One field is set; a sqlOnly layer
+// without a hatch runs as SQL text.
+type sqlHatch struct {
+	zero    []sqlPair  // from -empty zero: column → the SQL literal its absent cells become
+	sample  string     // sample N, from -sample N: the row count
+	percent string     // sample -percent P
+	series  bool       // from range: a leaf whose fromClause is the row generator
+	rollup  *sqlRollup // group-by -rollup/-cube
+	unpivot *sqlUnpivot
+	exists  *sqlExists // keyed except/intersect
+}
+
+// sqlRollup is the rollup/cube enrichment: one aggregate per grouping set
+// (ssql.RollupGroupingSets, the full set last), joined on the set's keys.
+type sqlRollup struct {
+	fields []string
+	aggs   []sqlAgg
+	sets   [][]string
+}
+
+// sqlUnpivot folds values into (col, val) rows beside ids.
+type sqlUnpivot struct {
+	ids, values []string
+	col, val    string
+}
+
+// sqlExists is a keyed except/intersect: per side, a correlated
+// (NOT) EXISTS on leftKey = rightKey — a semi join, an anti join for
+// except. The tests are the layer's first len(sides) whereClauses.
+type sqlExists struct {
+	anti              bool
+	leftKey, rightKey []string
+	sides             []*sqlQuery
+}
+
 // sqlFromPlaceholder stands, in a sqlOnly layer's fromTemplate, for the
 // inner layer's rendered SELECT; the Rust renderer substitutes a SELECT
 // over the view it registered for that layer.
@@ -260,9 +299,9 @@ const sqlFromPlaceholder = "__SSQL_FROM__"
 
 // sqlSource is a leaf layer's file source.
 type sqlSource struct {
-	format  string   // csv, tsv, json, jsonl, parquet, "" (bare: by extension)
-	files   []string // one or several (several: UNION ALL of the files)
-	columns []string // a parquet -columns projection
+	format  string    // csv, tsv, json, jsonl, parquet, "" (bare: by extension)
+	files   []string  // one or several (several: UNION ALL of the files)
+	columns []string  // a parquet -columns projection
 	schema  []sqlPair // generate rust: every column and its ssql kind, when a type is declared (nil = the reader infers)
 }
 
@@ -447,6 +486,7 @@ func sqlOnlyReset(q *sqlQuery, columns []string) {
 		inner:        q.inner,
 		sqlOnly:      q.sqlOnly,
 		fromTemplate: q.fromTemplate,
+		hatch:        q.hatch,
 	}
 }
 
@@ -935,6 +975,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 					}
 					cols := q.columns
 					wrapAsSQLOnly(q, "from -empty zero", func(src string) string { return coalesceEmptyCells(src, cols) })
+					q.hatch = &sqlHatch{zero: emptyZeroDefaults(cols)}
 				}
 			}
 		} else if emptyZeroFromArgs(rest) {
@@ -1007,6 +1048,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// percentage-only. Both sides are unseeded statistical samples
 		// of N rows; the duckdb equivalence lane asserts cardinality.
 		wrapAsSQLOnly(q, "from -sample", func(src string) string { return sqlSampleRows(src, sampleN) })
+		q.hatch = &sqlHatch{sample: sampleN}
 		q.sampled = true
 	}
 	if lastN != "" && lastN != "0" {
@@ -1080,7 +1122,8 @@ func translateRangeSource(q *sqlQuery, args []string) error {
 	}
 	q.columns = []string{o.field}
 	q.rangeColumn = o.field
-	q.sqlOnly = "from range" // a leaf the Rust renderer runs as SQL text
+	q.sqlOnly = "from range"
+	q.hatch = &sqlHatch{series: true}
 	sqlColumnKinds[o.field] = "int"
 	return nil
 }
@@ -1426,6 +1469,7 @@ func translateGroupByRollup(q *sqlQuery, fields []string, aggs []sqlAgg, mode ss
 		return sqlSubquery(rollupBody(src, fields, aggs, mode))
 	})
 	sqlOnlyReset(q, nil)
+	q.hatch = &sqlHatch{rollup: &sqlRollup{fields: fields, aggs: aggs, sets: ssql.RollupGroupingSets(fields, mode)}}
 	return nil
 }
 
@@ -1628,8 +1672,10 @@ func translateSample(q *sqlQuery, args []string) error {
 	switch {
 	case percent != "":
 		wrapAsSQLOnly(q, "sample -percent", func(src string) string { return sqlSamplePercent(src, percent) })
+		q.hatch = &sqlHatch{percent: percent}
 	case n != "":
 		wrapAsSQLOnly(q, "sample", func(src string) string { return sqlSampleRows(src, n) })
+		q.hatch = &sqlHatch{sample: n}
 	default:
 		return fmt.Errorf("sample: need N or -percent")
 	}
@@ -2150,16 +2196,18 @@ func translateSetOp(q *sqlQuery, name string, args []string, funcFrags []*lib.Co
 		columns:      q.columns,
 		inner:        &prev,
 		sqlOnly:      name + " -using/-on",
+		hatch:        &sqlHatch{exists: &sqlExists{anti: name == "except", leftKey: leftKey, rightKey: rightKey}},
 	}
 	exists := "EXISTS"
 	if name == "except" {
 		exists = "NOT EXISTS"
 	}
 	for _, f := range files {
-		sub, _, err := source(f)
+		sub, side, err := source(f)
 		if err != nil {
 			return err
 		}
+		q.hatch.exists.sides = append(q.hatch.exists.sides, side)
 		var conds []string
 		for i := range leftKey {
 			conds = append(conds, fmt.Sprintf("__r.%s = __l.%s", quoteIdent(rightKey[i]), quoteIdent(leftKey[i])))
@@ -3529,23 +3577,39 @@ func duckReadCSV(files []string, delim byte, extra string) string {
 // source. A text column is "" to ssql either way and is left alone. An
 // explicit column list rather than `* REPLACE`, which Postgres lacks.
 func coalesceEmptyCells(src string, columns []string) string {
+	zero := map[string]string{}
+	for _, p := range emptyZeroDefaults(columns) {
+		zero[p.col] = p.val
+	}
 	cols := make([]string, 0, len(columns))
 	for _, c := range columns {
 		id := quoteIdent(c)
+		if v, ok := zero[c]; ok {
+			cols = append(cols, "COALESCE("+id+", "+v+") AS "+id)
+		} else {
+			cols = append(cols, id)
+		}
+	}
+	return sqlSubquery("(SELECT " + strings.Join(cols, ", ") + " FROM " + src + ")")
+}
+
+// emptyZeroDefaults is -empty zero's default per column: 0 for a number,
+// FALSE for a bool; a string or time column keeps its absent cells.
+func emptyZeroDefaults(columns []string) []sqlPair {
+	var out []sqlPair
+	for _, c := range columns {
 		kind := sqlColumnKinds[c]
 		if base, _ := ssql.ParseWireType(kind); base == "decimal" {
 			kind = "decimal"
 		}
 		switch kind {
 		case "int", "float", "int128", "decimal":
-			cols = append(cols, "COALESCE("+id+", 0) AS "+id)
+			out = append(out, sqlPair{c, "0"})
 		case "bool":
-			cols = append(cols, "COALESCE("+id+", FALSE) AS "+id)
-		default:
-			cols = append(cols, id)
+			out = append(out, sqlPair{c, "FALSE"})
 		}
 	}
-	return sqlSubquery("(SELECT " + strings.Join(cols, ", ") + " FROM " + src + ")")
+	return out
 }
 
 // withSampledWideColumns adds the source columns the sampler typed int128
@@ -4111,6 +4175,7 @@ func translateUnpivot(q *sqlQuery, op *lib.Op, args []string) error {
 		return sqlSubquery(body)
 	})
 	sqlOnlyReset(q, append(append([]string(nil), ids...), col, val))
+	q.hatch = &sqlHatch{unpivot: &sqlUnpivot{ids: ids, values: values, col: col, val: val}}
 	return nil
 }
 
@@ -4198,6 +4263,7 @@ func translateFill(q *sqlQuery, op *lib.Op, args []string) error {
 		return err
 	}
 	q.selectExprs = []string{sel}
+	q.star = &sqlStar{replace: repl}
 	return nil
 }
 

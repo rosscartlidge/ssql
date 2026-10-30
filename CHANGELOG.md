@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`generate rust` builds every stage from DataFrame calls.** A rollup or cube is one aggregate per grouping set joined to the detail rows on its keys (absent keys matching), a keyed `except`/`intersect` an anti/semi join, `unpivot` a union of one branch per column, `sample` a sort or filter on `random()`, `-empty zero` a `coalesce` per numeric column. They ran as SQL text over a registered view before; `from range` keeps one SQL line as its source, the stages after it calls ([DFC157](doc/research/dfc157_generate_rust.md) §7b).
+
 - **`generate rust` reads TSV, JSONL and declared types.** The DataFrame API's readers take what DataFusion's SQL file table cannot, so `generate rust` no longer refuses a `.tsv` (its delimiter), a `.jsonl` (its extension), or `-type` / a schema sidecar / an integer column past int64 (a declared schema built from the header and ssql's own sampled kinds). A declared decimal is read as text and cast, because DataFusion's CSV reader truncates extra digits where ssql rounds. `generate sql -dialect datafusion` still refuses all three ([DFC157](doc/research/dfc157_generate_rust.md) §7a).
 
 - **Arg-max and arg-min over a window frame run typed.** `typed.ArgMaxOf(get, by)` / `ArgMinOf` (and Ptr forms): the field at the row with the extreme BY, ties to the first in frame order, absent when no row has both — the last registry aggregates `window` exposes that ran on the record path in a typed program (first, last, any and collect are group-by flags only).

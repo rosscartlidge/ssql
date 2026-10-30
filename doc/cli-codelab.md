@@ -1031,9 +1031,12 @@ the aggregates, the sort. The one expression-language stage, `-set-expr`,
 hands DataFusion the SQL expression the datafusion dialect renders —
 `parse_sql_expr` is DataFusion's own parser, so the expression has one
 translation, the one the oracle lane checks, not a second one in Rust.
-A stage with no DataFrame form yet (`-cube`, a keyed `except`, `unpivot`,
-`sample`, `from range`) runs as one `ctx.sql(…)` step over the DataFrame
-so far, named in the program's header; what `-dialect datafusion`
+Every stage is DataFrame calls — a `-cube` is an aggregate per grouping
+set joined on its keys, a keyed `except` an anti join, `unpivot` a union
+of one branch per column — except `from range`, whose source is one
+`ctx.sql("SELECT … FROM generate_series(…)")` line; a stage the renderer
+cannot express as calls would run as SQL over the DataFrame so far,
+named in the program's header. What `-dialect datafusion`
 refuses, `generate rust` refuses the same way, except the sources the
 DataFrame API's readers can take and DataFusion's SQL file table cannot:
 a `.tsv` (its delimiter), a `.jsonl` (its extension), and `-type` or a

@@ -32,6 +32,7 @@ import (
 	"time"
 
 	cf "github.com/rosscartlidge/autocli/v4"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // rustDataFusionCrate is the DataFusion crate the generated program
@@ -230,6 +231,7 @@ const rustImports = `use datafusion::arrow::datatypes::{DataType, Field, Schema}
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn as agg;
 use datafusion::functions_window::expr_fn as win;
+use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
 `
 
@@ -312,6 +314,9 @@ func (g *rustGen) layer(q *sqlQuery, name string, next *sqlQuery) {
 	switch {
 	case q.setOp != nil:
 		g.setOp(q, name)
+	case q.hatch != nil && rustHatchable(q.hatch) && g.plain(hatchRest(q)):
+		g.hatch(q, name)
+		q = hatchRest(q)
 	case q.sqlOnly != "" || !g.plain(q):
 		g.escape(q, name)
 		return
@@ -468,6 +473,162 @@ func (g *rustGen) source(s *sqlSource, name string) {
 	if len(s.columns) > 0 {
 		g.line("let %s = %s.select_columns(&[%s])?;", name, name, rustStrList(s.columns))
 	}
+}
+
+// hatchRest is a hatch layer without the clauses its hatch accounts for
+// (a keyed except/intersect's EXISTS tests): what the layer's later
+// stages added, rendered as any layer's clauses are.
+func hatchRest(q *sqlQuery) *sqlQuery {
+	rest := *q
+	if e := q.hatch.exists; e != nil {
+		rest.whereClauses = q.whereClauses[len(e.sides):]
+	}
+	return &rest
+}
+
+// rustHatchable reports whether the hatch's values have a Rust form.
+func rustHatchable(h *sqlHatch) bool {
+	if h.sample != "" {
+		if _, err := strconv.ParseInt(h.sample, 10, 64); err != nil {
+			return false
+		}
+	}
+	if h.percent != "" {
+		if _, err := strconv.ParseFloat(h.percent, 64); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// hatch builds a layer the SQL renders as text from its structure: the
+// inner layer (from range has none), then what the layer does to its
+// rows, as DataFrame calls.
+func (g *rustGen) hatch(q *sqlQuery, name string) {
+	h := q.hatch
+	if q.inner != nil {
+		g.layer(q.inner, name, nil)
+	}
+	switch {
+	case h.series:
+		// The source alone is SQL: DataFusion's DataFrame API reaches
+		// generate_series only through a deprecated call that fails at
+		// run time (TableFunction::create_table_provider) or a
+		// TableFunctionArgs built over the session state, which reads
+		// worse than the one SELECT. The stages after it are calls.
+		sql := strings.TrimSuffix(strings.TrimPrefix(q.fromClause, "("), ")")
+		g.line("let %s = ctx.sql(%s).await?;", name, rustRaw(sql))
+	case h.zero != nil:
+		for _, p := range h.zero {
+			zero := "lit(0i64)"
+			if p.val == "FALSE" {
+				zero = "lit(false)"
+			}
+			g.line("let %s = %s.with_column(%s, coalesce(vec![%s, %s]))?;", name, name, rustStr(p.col), rustCol(p.col), zero)
+		}
+	case h.sample != "":
+		g.line("let %s = %s.sort(vec![random().sort(true, false)])?.limit(0, Some(%s))?;", name, name, h.sample)
+	case h.percent != "":
+		p, _ := strconv.ParseFloat(h.percent, 64)
+		frac, _ := rustLit(strconv.FormatFloat(p/100, 'f', -1, 64))
+		g.line("let %s = %s.filter(random().lt(%s))?;", name, name, frac)
+	case h.unpivot != nil:
+		g.unpivot(h.unpivot, name)
+	case h.rollup != nil:
+		g.rollup(h.rollup, name)
+	case h.exists != nil:
+		e := h.exists
+		kind := "LeftSemi"
+		if e.anti {
+			kind = "LeftAnti"
+		}
+		for _, side := range e.sides {
+			g.sides++
+			s := fmt.Sprintf("s%d", g.sides)
+			g.layer(side, s, nil)
+			g.line("let %s = %s.join(%s, JoinType::%s, &[%s], &[%s], None)?;", name, name, s, kind, rustStrList(e.leftKey), rustStrList(e.rightKey))
+		}
+	}
+}
+
+// unpivot is one branch per value column — its non-absent cells beside
+// the ids, the column's name in u.col — concatenated.
+func (g *rustGen) unpivot(u *sqlUnpivot, name string) {
+	var branches []string
+	for _, v := range u.values {
+		g.sides++
+		s := fmt.Sprintf("s%d", g.sides)
+		var proj []string
+		for _, id := range u.ids {
+			proj = append(proj, rustCol(id))
+		}
+		proj = append(proj, fmt.Sprintf("lit(%s).alias(%s)", rustStr(v), rustStr(u.col)), fmt.Sprintf("%s.alias(%s)", rustCol(v), rustStr(u.val)))
+		g.line("let %s = %s.clone().filter(%s.is_not_null())?.select(vec![%s])?;", s, name, rustCol(v), strings.Join(proj, ", "))
+		branches = append(branches, s)
+	}
+	expr := branches[0]
+	for _, b := range branches[1:] {
+		expr += ".union(" + b + ")?"
+	}
+	g.line("let %s = %s;", name, expr)
+}
+
+// rollup aggregates the rows once per grouping set (the full set last,
+// the detail rows) and joins each set's totals to the detail rows on the
+// set's keys, absent keys matching (IS NOT DISTINCT FROM) — rollupBody's
+// shape.
+func (g *rustGen) rollup(r *sqlRollup, name string) {
+	detail := len(r.sets) - 1
+	alias := func(i int) string {
+		if i == detail {
+			return "__d"
+		}
+		return fmt.Sprintf("__s%d", i)
+	}
+	// Each set's DataFrame is bound to the name of its relation alias:
+	// shadowed by a second rollup, never read after the joins.
+	for i, set := range r.sets {
+		var groups, aggs []string
+		for _, f := range set {
+			groups = append(groups, rustCol(f))
+		}
+		prefix := ssql.RollupFieldPrefix(set)
+		for _, a := range r.aggs {
+			a.name = prefix + a.name
+			aggs = append(aggs, g.agg(a, name))
+		}
+		src := name + ".clone()"
+		if i == len(r.sets)-1 {
+			src = name
+		}
+		g.line("let %s = %s.aggregate(vec![%s], vec![%s])?.alias(%s)?;", alias(i), src, strings.Join(groups, ", "), strings.Join(aggs, ", "), rustStr(alias(i)))
+	}
+	from := alias(detail)
+	for i, set := range r.sets {
+		if i == detail {
+			continue
+		}
+		on := []string{"lit(true)"}
+		if len(set) > 0 {
+			on = nil
+			for _, f := range set {
+				on = append(on, fmt.Sprintf("binary_expr(%s, Operator::IsNotDistinctFrom, %s)", rustQualCol("__d", f), rustQualCol(alias(i), f)))
+			}
+		}
+		g.line("let %s = %s.join_on(%s, JoinType::Inner, [%s])?;", name, from, alias(i), strings.Join(on, ", "))
+		from = name
+	}
+	var sel []string
+	for _, f := range r.fields {
+		sel = append(sel, fmt.Sprintf("%s.alias(%s)", rustQualCol("__d", f), rustStr(f)))
+	}
+	for i, set := range r.sets {
+		prefix := ssql.RollupFieldPrefix(set)
+		for _, a := range r.aggs {
+			sel = append(sel, fmt.Sprintf("%s.alias(%s)", rustQualCol(alias(i), prefix+a.name), rustStr(prefix+a.name)))
+		}
+	}
+	g.line("let %s = %s.select(vec![%s])?;", name, name, strings.Join(sel, ", "))
 }
 
 // escape runs the layer as SQL text over a view of what is below it
@@ -869,6 +1030,14 @@ func rustCol(field string) string {
 		return "col(Column::from_name(" + rustStr(field) + "))"
 	}
 	return "col(" + rustStr(field) + ")"
+}
+
+// rustQualCol renders relation rel's column field.
+func rustQualCol(rel, field string) string {
+	if strings.ContainsAny(field, ".\"") {
+		return fmt.Sprintf("col(Column::new(Some(%s), %s))", rustStr(rel), rustStr(field))
+	}
+	return "col(" + rustStr(rel+"."+field) + ")"
 }
 
 // rustStr renders a Go string as a Rust string literal.

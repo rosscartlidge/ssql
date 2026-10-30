@@ -373,8 +373,50 @@ header under a `-columns` projection, no schema when nothing is
 declared, the SQL dialect still refusing), the rust lane over the
 equivalence suite (the decimal cases with `-type` now run there).
 
+### 7b. The escape hatches get DataFrame forms (2026-10-30)
+
+Follow-up (2). A layer the SQL renders as text over its inner layer
+(`sqlOnly`) now also records what it does (`sqlQuery.hatch`, a
+`sqlHatch` with one field set), and the Rust renderer builds it from
+calls; the layer's later stages (a `where` or `sort` after a cube, say)
+render as any layer's clauses do (`hatchRest`). Before, 30 equivalence
+cases ran some stage as `ctx.sql(…)` over a registered view; now none
+does.
+
+| Stage | DataFrame form |
+|---|---|
+| `group-by … -rollup` / `-cube` | one `aggregate` per grouping set (`ssql.RollupGroupingSets`, the full set last), each `.alias("__sN")` / `"__d"`, joined to the detail rows with `join_on` on `binary_expr(…, Operator::IsNotDistinctFrom, …)` per key (`lit(true)` for the grand total), then the wide `select` — `rollupBody`'s shape call for call |
+| keyed `except` / `intersect` | per side a `JoinType::LeftAnti` / `LeftSemi` join on the keys, `distinct()` unless `-all` (the SQL's correlated `NOT EXISTS` / `EXISTS`) |
+| `unpivot` | one branch per value column (`filter(is_not_null)` then `select` of the ids, `lit(name)` and the value), concatenated with `union` |
+| `sample N`, `from -sample N` | `sort(vec![random().sort(true, false)])?.limit(0, Some(N))` |
+| `sample -percent P` | `filter(random().lt(lit(P/100)))` |
+| `from … -empty zero` | `with_column(c, coalesce(vec![col(c), lit(0i64)]))` per numeric column (`lit(false)` for a bool), from the same `emptyZeroDefaults` the SQL uses |
+| `fill` | already a star replacement; the layer had not recorded it (`star` was unset), so it fell to the escape — one line |
+
+`from range` keeps one SQL line, as a source only: DataFusion 55
+reaches `generate_series` from the DataFrame side through
+`TableFunction::create_table_provider`, which is deprecated and fails at
+run time ("TableFunctionImpl::call is not implemented" — the rust lane's
+first run), or through a `TableFunctionArgs` built over the session
+state, which reads worse than `SELECT value AS "n" FROM
+generate_series(…)`. The stages after it are calls, where before the
+whole layer was SQL.
+
+Gate: the rust lane over the 30 cases (and every lane beside it) green;
+swapping the semi and anti joins fails `except_keyed_anti_join` and
+`intersect_keyed_semi_join_all` in the rust lane. Pinned text:
+`TestGenerateRustLayers` (rollup, sample, sample `-percent`, keyed
+except, keyed intersect `-all`, the range source) and
+`TestGenerateRustHatchOverAFile` (unpivot, `-empty zero`, no `ctx.sql`).
+A layer the renderer still cannot express as calls (no case in the
+suite reaches one) runs as SQL text over a view, as before, and the
+program's header names it.
+
 ## 8. References
 
+- [DFC159](./dfc159_ssql_for_rust_programmers.md) — the same work
+  explained for a Rust programmer: building, embedding with `-func`,
+  the semantics table, the edges.
 - [DFC132](./dfc132_rust_target_datafusion.md) — the decision this
   revisits, the DataFusion check, the fifteen-line harness.
 - [DFC099 §7](./codegen-ir-evolution.md) — "one IR, N backends", the
