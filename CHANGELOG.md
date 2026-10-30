@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.134.0] - 2026-10-30
+
 ### Added
 
 - **`generate rust` builds windows over a frame and every group-by aggregate as DataFrame calls.** An aggregate over a frame is `WindowFunction::new(sum_udaf(), …)` with its `WindowFrame` (bound once per clause), the definition DataFusion's SQL planner resolves the name to; first/last/nth value, lag and lead with a default, median, stddev, variance, string-agg, percentile, arg-max/arg-min, first, last and collect are builders. Only expressions and time-width RANGE frames are still parsed text ([DFC157](doc/research/dfc157_generate_rust.md) §7c).
