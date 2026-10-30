@@ -340,6 +340,10 @@ type sqlWin struct {
 	order     []string
 	desc      bool
 	frame      string   // the frame clause text ("" = default)
+	preceding  int      // the ROWS frame's bounds as typed (-1 unbounded, 0 current row)
+	following  int
+	rangeP     string   // the RANGE frame's bounds as typed ("" = a ROWS frame)
+	rangeF     string
 	orderTerms []string // the OVER clause's ORDER BY terms as rendered (a cast for a time column), DESC included
 	fn         string   // the function text before OVER
 	text      string // the whole `fn OVER (…) AS alias` select expression
@@ -2661,7 +2665,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 				expr = "CAST(" + expr + " AS " + sqlFloatType() + ")"
 			}
 			q.selectExprs = append(q.selectExprs, expr+alias)
-			w := sqlWin{flag: c.flags[fi], args: c.fargs[fi], partition: c.partitionBy, order: c.orderBy, desc: c.desc, frame: frameSQL, orderTerms: overOrder, fn: funcExpr, text: expr + alias}
+			w := sqlWin{flag: c.flags[fi], args: c.fargs[fi], partition: c.partitionBy, order: c.orderBy, desc: c.desc, frame: frameSQL, preceding: c.preceding, following: c.following, rangeP: c.rangeP, rangeF: c.rangeF, orderTerms: overOrder, fn: funcExpr, text: expr + alias}
 			if n := len(w.args); n > 0 {
 				w.alias = w.args[n-1]
 			}

@@ -412,6 +412,77 @@ A layer the renderer still cannot express as calls (no case in the
 suite reaches one) runs as SQL text over a view, as before, and the
 program's header names it.
 
+### 7c. Windows over a frame, every aggregate, and two checks that found bugs (2026-10-30)
+
+Follow-ups (3)–(6), Ross: "lets do the generate rust followups".
+
+**(3) Builders for windows over a frame and the remaining aggregates.**
+An inventory of the rust lane's crate (`SSQL_RUST_LANE_KEEP=1` keeps it)
+counted 221 `parse_sql_expr` calls: 47 window functions, 32 aggregates,
+the rest expression-language stages (text by design, §2). The window
+functions are now built with the definitions DataFusion's SQL planner
+resolves the same names to (`find_window_func`: an aggregate first,
+except `first_value`, `last_value` and `nth_value`, which are window
+functions):
+
+| Flag | Builder |
+|---|---|
+| `-sum` / `-avg` / `-min` / `-max` | `Expr::from(WindowFunction::new(sum_udaf(), vec![…]))` (an integer sum's argument cast to `Decimal128(38, 0)`, an average cast to `Float64` outside the window, as the SQL text does) |
+| `-count` / `-count-field` | `count_all_window()` / `WindowFunction::new(count_udaf(), …)` |
+| `-first` / `-last` / `-nth-value` | `win::first_value` / `win::last_value` / `win::nth_value` |
+| `-lag-default` / `-lead-default` | `win::lag(col, Some(n), Some(ScalarValue::from(…)))` |
+| the frame | `WindowFrame::new_bounds(WindowFrameUnits::Rows, …)` with `UInt64` offsets, an unbounded side a null — bound once per clause as `let frame1 = …;` and passed as `frame1.clone()` |
+| a numeric RANGE frame | `WindowFrameUnits::Range` with the offset as text (`ScalarValue::from("20")`), which the analyzer casts to the ORDER BY column's type — what the SQL planner leaves there too |
+
+A time-width RANGE frame (`-range-preceding 14d`) stays text: its ORDER
+BY is a cast to a timestamp and its offset an interval. The group-by
+registry's aggregates are all builders now: `agg::median`, `stddev`,
+`var_sample`, `string_agg` (from `functions_aggregate::string_agg`, not
+`expr_fn` — the first lane build failed on that), `percentile_cont(col.
+sort(true, false), lit(p))`, `first_value(field, vec![by.sort(…)])` for
+`-arg-max` / `-arg-min`, `first_value` / `last_value` / `array_agg`.
+The remaining text in the suite is expression-language stages and the
+time-width frames.
+
+**(4) DataFusion's int64 operators wrap.** Adding a datafusion row and a
+rust row to `TestIntOverflowEveryLane` found that `9223372036854775807 +
+n`, `n * 4611686018427387904` and `-n` on `i64::MIN` *wrap* on DataFusion
+where every other lane stops (DFC155 B): arrow's wrapping kernels are
+DataFusion's `+ - *`, and `enable_ansi_mode` covers only its Spark
+functions. Both `generate sql -dialect datafusion` and `generate rust`
+answered wrong without a test noticing. Fix (`generate_sql_expr.go`,
+`sqlCheckedIntArith`): under the datafusion dialect an integer `+ - *`
+or unary minus whose operands the translator can see are integers
+(literals, columns the sample or a declaration types as int, integer
+arithmetic over them) is computed in `DECIMAL(38,0)` — a product of two
+int64s has at most 38 digits — and cast back to `BIGINT`, which raises
+"value of 9223372036854775808 is out of range Int64". Each operation is
+cast back, so an intermediate overflow stops as it does in ssql. A
+column of unknown kind keeps DataFusion's operator (TODO). Watched fail:
+with the check off, `overflow_add`, `_sub`, `_mul` and `_neg` fail on
+both rows. `TestDataFusionCheckedIntArith` pins the text.
+
+`TestRustInterchange` (ssql's Parquet, with a NULL in the first row and
+`decimal:2` and `int128` columns, into the program; its Parquet and its
+CSV back, same rows, columns and kinds) found on its first run that a
+program ending in `to parquet` **did not compile** since v4.128.0 —
+`DataFrameWriteOptions` was never imported (now qualified as
+`datafusion::dataframe::DataFrameWriteOptions`). No test had built a
+`to parquet` program. Watched fail by restoring the unqualified name.
+The crate building is now one helper (`rustBuildCrate`, its own package
+name per caller so binaries in the shared target directory do not
+overwrite each other), and `make lanes`' filter, which read
+`TestInterchange` and so matched neither `TestDuckDBInterchange` nor
+`TestPostgresInterchange`, now runs every `…Interchange` test.
+
+**(5)** The playground has a **Generate Rust** button (`generate rust`
+is text only, so the slim build renders it), with a harness check.
+
+**(6)** `-time` under the optimiser's re-exec: the inner command carries
+`-time` with `-run`, so compile and run are reported as `generate go`
+reports them; the optimiser's few milliseconds are all it leaves out.
+Pinned by `TestGenerateRustTimeUnderOptimiser` rather than changed.
+
 ## 8. References
 
 - [DFC159](./dfc159_ssql_for_rust_programmers.md) — the same work

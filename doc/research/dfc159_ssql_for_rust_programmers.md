@@ -83,7 +83,10 @@ How to read it:
 - **Flags become builders.** `-if status eq active` is
   `col("status").eq(lit("active"))`, and a group-by is `aggregate` over
   the `agg::` helpers. Window flags such as `-rank` and `-lag` use the
-  `win::` helpers with `.partition_by(…).order_by(…).build()?`. Joins are
+  `win::` helpers with `.partition_by(…).order_by(…).build()?`; an
+  aggregate over a frame (`-sum … -preceding 3`) is
+  `Expr::from(WindowFunction::new(sum_udaf(), …))` with a
+  `.window_frame(…)`, the frame bound once per clause. Joins are
   `join` / `join_on`, and set operations are `union` / `except` /
   `intersect`. A rollup is one `aggregate` per grouping set joined on its
   keys, a keyed `except` an anti join, `unpivot` a `union` of branches.
@@ -94,13 +97,14 @@ How to read it:
   expression to one translation, the one the test lanes check (§5). It
   is bound to `e1`, `e2`… before the statement that consumes `df`,
   because Rust evaluates the receiver first and the inline form would be
-  a use after move. Some aggregates without a builder in the generator,
-  such as `median`, come through the same way.
+  a use after move.
 - **The semantics are spelled out in the code**, so nothing is hidden in
   a runtime. `avg` is cast to `Float64`, since ssql's average is always a
   float. An empty `sum` is `coalesce(…, 0)`, since ssql's empty sum is 0.
   An integer column sums through `cast(…, Decimal128(38, 0))` so it
-  cannot wrap past `i64::MAX`.
+  cannot wrap past `i64::MAX`, and integer `+ - *` in an expression go
+  through `DECIMAL(38,0)` and back to `BIGINT`, because DataFusion's
+  integer operators wrap where ssql stops with an overflow error.
 - **The header is the provenance.** It lists the pipeline as written,
   and the optimiser's rewrites when it applied any (`+O` turns them off).
   It also lists any stage that still runs as SQL text (§7), and in the
@@ -217,6 +221,7 @@ Semantics a Rust programmer should know:
 | `decimal:S` (declared only, never inferred) | `Decimal128(38, S)`, rounded half away from zero |
 | a time column | read as `Utf8`: ssql's zone rules are not DataFusion's timestamp parser |
 | `x / y` | always a float division, null when `y` is 0 |
+| int64 `+ - *` that overflows | an error ("out of range Int64"), as in ssql; DataFusion's own operators wrap, so the generator checks every integer operation it can see is integer. A column whose type the generator could not see keeps DataFusion's wrapping operator |
 | row order with no `sort` | **not guaranteed**. ssql keeps input order and DataFusion's parallel executor does not; add a `sort` stage if order matters |
 
 ## 6. Performance
@@ -264,11 +269,10 @@ When a pipeline refuses, `generate go` produces a Go program for it,
 and `generate sql` may produce DuckDB SQL for it.
 
 **What is still text.** Expressions go through `parse_sql_expr` by
-design (§2). Window aggregates over a frame (`-sum … -preceding 3`)
-are also text: in DataFusion 55 an aggregate used as a window has to be
-built through `WindowFunction::new(sum_udaf(), …)`, and the generator
-does not do that yet. Neither choice costs speed, because the parsed
-expression is the same logical `Expr` the builder would make. `from
+design (§2), and so does a window over a time-width RANGE frame
+(`-range-preceding 14d`, an interval over a cast). Neither costs speed,
+because the parsed expression is the same logical `Expr` a builder
+would make. `from
 range`'s source is one `ctx.sql("SELECT value AS n FROM
 generate_series(…)")` line, because the DataFrame-side route to
 `generate_series` is deprecated in 55 and fails at run time. The stages
@@ -276,9 +280,12 @@ after it are builder calls.
 
 **Coming back to ssql.** The program's output is ssql's input: `to
 jsonl` and `to csv` stream to stdout (`./report | ssql from jsonl - |
-…`), and `to parquet F` writes a file ssql reads. A dedicated
-interchange test for Parquet written by the Rust program is a TODO
-(DFC157 follow-up 4). JSONL and CSV are covered by the lane itself.
+…`), and `to parquet F` writes a file ssql reads. `TestRustInterchange`
+checks that both ways: ssql's Parquet (a null in the first row, a
+`decimal:2` and an `int128` column) into the program, and the program's
+Parquet and CSV back into ssql with the same rows, columns and types.
+Its first run found that a program ending in `to parquet` did not
+compile before 2026-10-30.
 
 ## 8. Workflow, end to end
 

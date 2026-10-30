@@ -371,3 +371,24 @@ func TestCalendarFunctionsSQL(t *testing.T) {
 	wantAll(t, sql, `CAST(date_part('hour', "hire_date") AS BIGINT) AS "h"`, `date_trunc('month', "hire_date") AS "m"`)
 	wantNone(t, sql, "SET ")
 }
+
+// TestDataFusionCheckedIntArith: DataFusion's int64 + - * and unary minus
+// wrap, so the datafusion dialect computes an integer operation it can
+// see through DECIMAL(38,0) and casts back, which raises on overflow
+// (DFC155 B; TestIntOverflowEveryLane runs it). Floats, columns of
+// unknown kind and the other dialects keep the plain operator.
+func TestDataFusionCheckedIntArith(t *testing.T) {
+	cmds := []string{"ssql from range 3", "ssql update -set-expr a 'n + 1' -set-expr b '-n' -set-expr c 'n * 2.5' -set-expr d 'n % 2'"}
+	sql := mustDialect(t, dialectDataFusion, cmds...)
+	wantAll(t, sql,
+		`CAST((CAST("n" AS DECIMAL(38,0)) + CAST(1 AS DECIMAL(38,0))) AS BIGINT) AS "a"`,
+		`CAST((-CAST("n" AS DECIMAL(38,0))) AS BIGINT) AS "b"`,
+		`("n" * CAST(2.5 AS DOUBLE)) AS "c"`,
+		`("n" % 2) AS "d"`)
+	for _, d := range []sqlDialect{dialectDuckDB, dialectPostgres} {
+		wantNone(t, mustDialect(t, d, cmds...), "DECIMAL(38,0)")
+	}
+	// A CSV column the sample types as int is checked; a float one is not.
+	csv := mustDialect(t, dialectDataFusion, "ssql from "+dialectFixture(t), "ssql update -set-expr x 'age + 1' -set-expr y 'score + 1'")
+	wantAll(t, csv, `CAST((CAST("age" AS DECIMAL(38,0)) + CAST(1 AS DECIMAL(38,0))) AS BIGINT) AS "x"`, `("score" + 1) AS "y"`)
+}

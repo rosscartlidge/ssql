@@ -22,6 +22,80 @@ func overflowed(out string) bool {
 	return strings.Contains(out, "integer overflow") || strings.Contains(out, "decimal overflow")
 }
 
+// dataFusionOverflowed reports DataFusion's words for the stop: the
+// checked int64 form's cast back to BIGINT, or decimal arithmetic.
+func dataFusionOverflowed(out string) bool {
+	return strings.Contains(out, "out of range Int64") || strings.Contains(out, "Overflow") || strings.Contains(out, "too large to store")
+}
+
+// dataFusionRows runs pipelines on DataFusion two ways: generate sql
+// -dialect datafusion through the Python bindings (SSQL_DATAFUSION_PYTHON)
+// and generate rust's program (SSQL_RUST_LANE=1), every pipeline's
+// function built into one crate up front. A refusal by design skips the
+// row; the overflow rows were added 2026-10-30, when they found
+// DataFusion's int64 operators wrapping.
+type dataFusionRows struct {
+	py      string
+	rustBin string
+	rustFns map[string]string // pipeline name → function, when it rendered
+}
+
+func newDataFusionRows(t *testing.T, bin string, pipelines map[string]string) *dataFusionRows {
+	r := &dataFusionRows{py: os.Getenv("SSQL_DATAFUSION_PYTHON"), rustFns: map[string]string{}}
+	if !rustLaneEnabled() {
+		return r
+	}
+	var funcs, names []string
+	for name, pipeline := range pipelines {
+		fn := rustCaseFunc("overflow_" + name)
+		code, refused, err := rustGenerateFunc(bin, pipeline, fn, nil)
+		if err != nil {
+			// The pipelines were written for the Go lanes; one SQL cannot
+			// express (a limit -last without a sort) is the dialect's
+			// refusal in other words, as the rust lane logs it.
+			first, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
+			t.Logf("rust: %s did not generate: %s", name, first)
+			continue
+		}
+		if refused != "" {
+			continue
+		}
+		funcs, names = append(funcs, code), append(names, fn)
+		r.rustFns[name] = fn
+	}
+	b, err := rustBuildCrate(t, "ssqloverflow", funcs, names)
+	if err != nil {
+		t.Fatalf("rust: %v", err)
+	}
+	r.rustBin = b
+	return r
+}
+
+// each runs the pipeline on every DataFusion row there is (lane is
+// "datafusion" or "rust"); a row that refuses it by design is not called.
+func (r *dataFusionRows) each(t *testing.T, bin, name, pipeline string, f func(lane, out string, err error)) {
+	if r.py != "" {
+		sql, err := shell("export SSQL_MODE=record && " + pipeline + " | " + bin + " to jsonl | " + bin + " generate sql -dialect datafusion")
+		switch {
+		case err != nil:
+			t.Logf("datafusion: %s does not generate: %s", name, strings.TrimSpace(sql))
+		default:
+			script := filepath.Join(t.TempDir(), "run.py")
+			if err := os.WriteFile(script, []byte(datafusionRunner), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(r.py, script)
+			cmd.Stdin = strings.NewReader(sql)
+			out, err := cmd.CombinedOutput()
+			f("datafusion", string(out), err)
+		}
+	}
+	if fn, ok := r.rustFns[name]; ok {
+		out, err := exec.Command(r.rustBin, fn).CombinedOutput()
+		f("rust", string(out), err)
+	}
+}
+
 func TestIntOverflowEveryLane(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs generated programs")
@@ -42,6 +116,36 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		// E (2026-10-27): the 38-digit decimal bound
 		"dec_mul": bin + " from range 3 | " + bin + " cast -type n decimal:2 | " + bin + " update -set-expr big 'n * decimal(\"999999999999999999999999999999999999.99\")'",
 	}
+	// An integer sum is exact past 2^53 in every lane, wherever a sum is
+	// made: group-by -sum, -expr sum(), window -sum running and sliding —
+	// and past 2^63 it widens to an int128 instead of stopping (DFC155 C).
+	sums := map[string]struct{ pipeline, want string }{
+		"group_by_sum":        {bin + " from range 2 -start 9007199254740993 | " + bin + " group-by -sum n t", "18014398509481987"},
+		"group_by_sum_widens": {bin + " from range 2 -start 9223372036854775806 | " + bin + " group-by -sum n t", "18446744073709551613"},
+		"expr_sum_widens":     {bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18446744073709551613"},
+		"window_sum_widens":   {bin + " from range 2 -start 9223372036854775806 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18446744073709551613"},
+		"expr_sum":            {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18014398509481987"},
+		"window_running_sum":  {bin + " from range 2 -start 9007199254740993 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18014398509481987"},
+		"window_sliding_sum":  {bin + " from range 3 -start 9007199254740993 | " + bin + " window -sum n t -preceding 1 | " + bin + " limit -last 1", "18014398509481989"},
+		"pivot_sum":           {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr d '\"a\"' -set-expr q '\"x\"' | " + bin + " pivot -row d -col q -val n -func sum", "18014398509481987"},
+		// the window sums with an -order SQL can see (the datafusion and
+		// rust rows; the forms above end in limit -last, which SQL refuses)
+		"window_ordered_sum_widens": {bin + " from range 2 -start 9223372036854775806 | " + bin + " window -order n -sum n t | " + bin + " where -if n eq 9223372036854775807", "18446744073709551613"},
+		"window_ordered_sliding":    {bin + " from range 3 -start 9007199254740993 | " + bin + " window -order n -sum n t -preceding 1 | " + bin + " where -if n eq 9007199254740995", "18014398509481989"},
+		// E: decimal sums past 2^53 cents, exact at the scale
+		"dec_group_by_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " group-by -sum n t", "27021597764222982.00"},
+		"dec_expr_sum":     {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "27021597764222982.00"},
+		"dec_window_sum":   {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " window -sum n t | " + bin + " limit -last 1", "27021597764222982.00"},
+	}
+	all := map[string]string{}
+	for name, p := range overflow {
+		all[name] = p
+	}
+	for name, c := range sums {
+		all["sum_"+name] = c.pipeline
+	}
+	df := newDataFusionRows(t, bin, all)
+
 	for name, pipeline := range overflow {
 		t.Run("overflow_"+name, func(t *testing.T) {
 			// exec
@@ -60,6 +164,12 @@ func TestIntOverflowEveryLane(t *testing.T) {
 					t.Errorf("%s: want an overflow failure, got err=%v\n%s", mode, err, out)
 				}
 			}
+			// DataFusion, as SQL and as the Rust program.
+			df.each(t, bin, name, pipeline, func(lane, out string, err error) {
+				if err == nil || !dataFusionOverflowed(out) {
+					t.Errorf("%s: want an overflow failure, got err=%v\n%s", lane, err, out)
+				}
+			})
 			// DuckDB: its own words for the same stop. No SQL form: -stream-expr.
 			if duckdb == "" || name == "fold" || name == "wide_fold" {
 				return
@@ -76,23 +186,7 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		})
 	}
 
-	// An integer sum is exact past 2^53 in every lane, wherever a sum is
-	// made: group-by -sum, -expr sum(), window -sum running and sliding —
-	// and past 2^63 it widens to an int128 instead of stopping (DFC155 C).
-	for name, c := range map[string]struct{ pipeline, want string }{
-		"group_by_sum":        {bin + " from range 2 -start 9007199254740993 | " + bin + " group-by -sum n t", "18014398509481987"},
-		"group_by_sum_widens": {bin + " from range 2 -start 9223372036854775806 | " + bin + " group-by -sum n t", "18446744073709551613"},
-		"expr_sum_widens":     {bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18446744073709551613"},
-		"window_sum_widens":   {bin + " from range 2 -start 9223372036854775806 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18446744073709551613"},
-		"expr_sum":            {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18014398509481987"},
-		"window_running_sum":  {bin + " from range 2 -start 9007199254740993 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18014398509481987"},
-		"window_sliding_sum":  {bin + " from range 3 -start 9007199254740993 | " + bin + " window -sum n t -preceding 1 | " + bin + " limit -last 1", "18014398509481989"},
-		"pivot_sum":           {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr d '\"a\"' -set-expr q '\"x\"' | " + bin + " pivot -row d -col q -val n -func sum", "18014398509481987"},
-		// E: decimal sums past 2^53 cents, exact at the scale
-		"dec_group_by_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " group-by -sum n t", "27021597764222982.00"},
-		"dec_expr_sum":     {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "27021597764222982.00"},
-		"dec_window_sum":   {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " window -sum n t | " + bin + " limit -last 1", "27021597764222982.00"},
-	} {
+	for name, c := range sums {
 		t.Run("int_sum_exact_past_2_53_"+name, func(t *testing.T) {
 			want := c.want // odd: no float64 holds it (DuckDB -json quotes its HUGEINT)
 			check := func(lane, out string) {
@@ -116,6 +210,12 @@ func TestIntOverflowEveryLane(t *testing.T) {
 				}
 				check(mode, out)
 			}
+			df.each(t, bin, "sum_"+name, c.pipeline, func(lane, out string, err error) {
+				if err != nil {
+					t.Fatalf("%s: %v\n%s", lane, err, out)
+				}
+				check(lane, out)
+			})
 			if duckdb != "" && strings.HasPrefix(name, "group_by_sum") { // the window forms need -order for SQL; the -expr form has no translation
 				sql, err := shell("export SSQL_MODE=record && " + c.pipeline + " | " + bin + " to jsonl | " + bin + " generate sql")
 				if err != nil {

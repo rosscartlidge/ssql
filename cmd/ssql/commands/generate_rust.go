@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,10 +179,11 @@ func assembleRust(input io.Reader, funcName string) (string, error) {
 // rustGen accumulates the pipeline function's body.
 type rustGen struct {
 	lines   []string
-	views   int      // escape-hatch views registered (__q1, __q2, …)
-	sides   int      // side DataFrames bound (s1, s2, …)
-	exprs   int      // expression bindings (e1, e2, …)
-	escapes []string // the reasons layers ran as SQL text, for the header
+	views   int               // escape-hatch views registered (__q1, __q2, …)
+	sides   int               // side DataFrames bound (s1, s2, …)
+	exprs   int               // expression bindings (e1, e2, …)
+	frames  map[string]string // window frames bound (frame1, …), by their constructor
+	escapes []string          // the reasons layers ran as SQL text, for the header
 }
 
 func (g *rustGen) line(format string, a ...any) {
@@ -213,7 +215,7 @@ func renderRust(q *sqlQuery, funcName string) string {
 			sb.WriteString("//\n// Stages run as SQL over the DataFrame so far (no DataFrame form yet): " + strings.Join(g.escapes, ", ") + "\n")
 		}
 		sb.WriteString("\n#![allow(unused_imports)]\n\n")
-		sb.WriteString(rustImports)
+		sb.WriteString(RustImports)
 		sb.WriteString("\n")
 	}
 	fmt.Fprintf(&sb, "pub async fn %s(ctx: &SessionContext) -> Result<DataFrame> {\n", fn)
@@ -227,12 +229,17 @@ func renderRust(q *sqlQuery, funcName string) string {
 	return sb.String()
 }
 
-const rustImports = `use datafusion::arrow::datatypes::{DataType, Field, Schema};
+// RustImports is the use block every generated program (and the rust
+// lane's one crate) starts with.
+const RustImports = `use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn as agg;
+use datafusion::functions_aggregate::{average::avg_udaf, count::{count_all_window, count_udaf}, min_max::{max_udaf, min_udaf}, string_agg::string_agg, sum::sum_udaf};
 use datafusion::functions_window::expr_fn as win;
-use datafusion::logical_expr::Operator;
+use datafusion::logical_expr::expr::WindowFunction;
+use datafusion::logical_expr::{Operator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion::prelude::*;
+use datafusion::scalar::ScalarValue;
 `
 
 // rustArrowType is the Arrow type a declared ssql column kind reads as:
@@ -278,7 +285,7 @@ func rustMain(fn string, sink []string) string {
 	case kind == "table":
 		sb.WriteString("    df.show().await?;\n")
 	case kind == "parquet" && file != "":
-		fmt.Fprintf(&sb, "    df.write_parquet(%s, DataFrameWriteOptions::new().with_single_file_output(true), None).await?;\n", rustStr(file))
+		fmt.Fprintf(&sb, "    df.write_parquet(%s, datafusion::dataframe::DataFrameWriteOptions::new().with_single_file_output(true), None).await?;\n", rustStr(file))
 	case kind == "csv":
 		sb.WriteString(`    let mut w = datafusion::arrow::csv::WriterBuilder::new().with_header(true).build(std::io::BufWriter::new(std::io::stdout().lock()));
     let mut stream = df.execute_stream().await?;
@@ -897,68 +904,74 @@ func rustLit(sql string) (string, bool) {
 	return "", false
 }
 
-// agg renders a group-by aggregate: builders for the common flags, the
-// registry's SQL text (parsed by DataFusion) for the rest.
+// agg renders a group-by aggregate: a builder for every registry
+// aggregate the datafusion dialect renders as one plain call (the
+// registry renders a.expr from the quoted field, so the builder and the
+// text name the same function on the same column); the text, parsed by
+// DataFusion, for an -expr term.
 func (g *rustGen) agg(a sqlAgg, name string) string {
 	alias := rustStr(a.name)
+	c := rustCol(a.field)
+	e := ""
 	switch a.fn {
 	case "count":
-		return "agg::count(lit(1i64)).alias(" + alias + ")"
-	case "min", "max":
-		return fmt.Sprintf("agg::%s(%s).alias(%s)", a.fn, rustCol(a.field), alias)
+		e = "agg::count(lit(1i64))"
+	case "min", "max", "median":
+		e = fmt.Sprintf("agg::%s(%s)", a.fn, c)
 	case "count-distinct":
-		return fmt.Sprintf("agg::count_distinct(%s).alias(%s)", rustCol(a.field), alias)
+		e = "agg::count_distinct(" + c + ")"
 	case "avg":
 		// A float in every lane (sqlAggAvg's rule).
-		return fmt.Sprintf("cast(agg::avg(%s), DataType::Float64).alias(%s)", rustCol(a.field), alias)
+		e = "cast(agg::avg(" + c + "), DataType::Float64)"
 	case "sum":
 		// The empty sum is 0 (sqlSumOrZero); an integer column sums as
 		// DECIMAL(38,0) so it cannot wrap (sqlSumArg) — the text says
 		// which it rendered.
-		arg := rustCol(a.field)
 		if strings.Contains(a.expr, "AS DECIMAL(38,0)") {
-			arg = "cast(" + arg + ", DataType::Decimal128(38, 0))"
+			c = "cast(" + c + ", DataType::Decimal128(38, 0))"
 		}
-		return fmt.Sprintf("coalesce(vec![agg::sum(%s), lit(0i64)]).alias(%s)", arg, alias)
+		e = "coalesce(vec![agg::sum(" + c + "), lit(0i64)])"
+	case "collect":
+		e = "agg::array_agg(" + c + ")"
+	case "first", "any":
+		e = "agg::first_value(" + c + ", vec![])"
+	case "last":
+		e = "agg::last_value(" + c + ", vec![])"
+	case "string-agg":
+		e = "string_agg(" + c + ", lit(" + rustStr(a.extra) + "))"
+	case "stddev":
+		e = "agg::stddev(" + c + ")"
+	case "variance":
+		e = "agg::var_sample(" + c + ")"
+	case "percentile":
+		// WITHIN GROUP (ORDER BY field): ascending, nulls last.
+		if p, err := strconv.ParseFloat(strings.TrimSpace(a.extra), 64); err == nil {
+			e = fmt.Sprintf("agg::percentile_cont(%s.sort(true, false), lit(%sf64))", c, strconv.FormatFloat(p, 'f', -1, 64))
+		}
+	case "arg-max", "arg-min":
+		// first_value(field ORDER BY by DESC|ASC), the dialect's form;
+		// nulls sort as the largest value, as in the SQL.
+		desc := a.fn == "arg-max"
+		e = fmt.Sprintf("agg::first_value(%s, vec![%s.sort(%v, %v)])", c, rustCol(a.extra), !desc, desc)
 	}
-	return g.bind(name, rustParse(name, a.expr+" AS "+quoteIdent(a.name)))
+	if e == "" {
+		return g.bind(name, rustParse(name, a.expr+" AS "+quoteIdent(a.name)))
+	}
+	return e + ".alias(" + alias + ")"
 }
 
-// window renders a window function: builders for the ranking and offset
-// functions by flag, the translator's text for the rest (an aggregate
-// over a frame needs DataFusion's WindowFunction constructor).
+// window renders a window function as DataFusion's builders: a ranking,
+// offset or value function from functions_window, an aggregate over a
+// frame as WindowFunction::new(<aggregate>_udaf(), …) — the definition
+// DataFusion's SQL planner resolves the same name to (an aggregate
+// first, except first_value, last_value and nth_value, which are window
+// functions). The translator's text is the fallback: a registry
+// aggregate, an ORDER BY over an expression, a time-width RANGE frame.
 func (g *rustGen) window(w sqlWin, name string) string {
-	fn := ""
-	switch w.flag {
-	case "-row-number":
-		fn = "win::row_number()"
-	case "-rank":
-		fn = "win::rank()"
-	case "-dense-rank":
-		fn = "win::dense_rank()"
-	case "-percent-rank":
-		fn = "win::percent_rank()"
-	case "-cume-dist":
-		fn = "win::cume_dist()"
-	case "-ntile":
-		if len(w.args) == 2 {
-			if _, err := strconv.ParseInt(w.args[0], 10, 64); err == nil {
-				fn = "win::ntile(lit(" + w.args[0] + "i64))"
-			}
-		}
-	case "-lag", "-lead":
-		if len(w.args) == 3 {
-			if _, err := strconv.ParseInt(w.args[1], 10, 64); err == nil {
-				fn = fmt.Sprintf("win::%s(%s, Some(%s), None)", w.flag[1:], rustCol(w.args[0]), w.args[1])
-			}
-		}
-	}
-	// The ranking and offset functions ignore the frame (it is in the
-	// text for the clause's aggregates), so a frame does not stop the
-	// builder form.
+	text := func() string { return rustParse(name, strings.TrimSuffix(w.text, " AS "+quoteIdent(w.alias))) }
+	fn, framed := rustWindowFunc(w)
 	if fn == "" {
-		text := strings.TrimSuffix(w.text, " AS "+quoteIdent(w.alias))
-		return rustParse(name, text)
+		return text()
 	}
 	var parts []string
 	if len(w.partition) > 0 {
@@ -974,14 +987,174 @@ func (g *rustGen) window(w sqlWin, name string) string {
 			term, desc := splitSortTerm(o)
 			e := rustTerm(name, term)
 			if strings.Contains(e, "parse_sql_expr") {
-				text := strings.TrimSuffix(w.text, " AS "+quoteIdent(w.alias))
-				return rustParse(name, text)
+				return text()
 			}
 			sorts = append(sorts, fmt.Sprintf("%s.sort(%v, %v)", e, !desc, desc))
 		}
 		parts = append(parts, ".order_by(vec!["+strings.Join(sorts, ", ")+"])")
 	}
-	return fn + strings.Join(parts, "") + ".build()?"
+	// The ranking and offset functions ignore the frame, so it is set
+	// only where it decides the value.
+	if framed {
+		frame, ok := rustFrame(w)
+		if !ok {
+			return text()
+		}
+		parts = append(parts, ".window_frame("+g.frame(frame)+".clone())")
+	}
+	e := fn + strings.Join(parts, "") + ".build()?"
+	if w.flag == "-avg" && strings.HasPrefix(w.text, "CAST(") {
+		// A window average is a float in every lane (sqlAggAvg's rule).
+		e = "cast(" + e + ", DataType::Float64)"
+	}
+	return e
+}
+
+// frame binds a window frame once (a clause's functions share it) and
+// returns its name.
+func (g *rustGen) frame(ctor string) string {
+	if v, ok := g.frames[ctor]; ok {
+		return v
+	}
+	if g.frames == nil {
+		g.frames = map[string]string{}
+	}
+	v := fmt.Sprintf("frame%d", len(g.frames)+1)
+	g.frames[ctor] = v
+	g.line("let %s = %s;", v, ctor)
+	return v
+}
+
+// rustWindowFunc renders the function a window flag names, before its
+// OVER clause, and whether its value depends on the frame; "" when the
+// flag has no builder form.
+func rustWindowFunc(w sqlWin) (fn string, framed bool) {
+	n := len(w.args)
+	field := ""
+	if n > 1 {
+		field = rustCol(w.args[0])
+	}
+	udaf := func(def, arg string) string {
+		return "Expr::from(WindowFunction::new(" + def + "(), vec![" + arg + "]))"
+	}
+	switch w.flag {
+	case "-row-number":
+		return "win::row_number()", false
+	case "-rank":
+		return "win::rank()", false
+	case "-dense-rank":
+		return "win::dense_rank()", false
+	case "-percent-rank":
+		return "win::percent_rank()", false
+	case "-cume-dist":
+		return "win::cume_dist()", false
+	case "-ntile":
+		if _, err := strconv.ParseInt(w.args[0], 10, 64); n == 2 && err == nil {
+			return "win::ntile(lit(" + w.args[0] + "i64))", false
+		}
+	case "-lag", "-lead":
+		if _, err := strconv.ParseInt(w.args[1], 10, 64); n == 3 && err == nil {
+			return fmt.Sprintf("win::%s(%s, Some(%s), None)", w.flag[1:], field, w.args[1]), false
+		}
+	case "-lag-default", "-lead-default":
+		if _, err := strconv.ParseInt(w.args[1], 10, 64); n == 4 && err == nil {
+			if d, ok := rustScalar(windowDefaultLiteral(w.args[2])); ok {
+				return fmt.Sprintf("win::%s(%s, Some(%s), Some(%s))", strings.TrimSuffix(w.flag[1:], "-default"), field, w.args[1], d), false
+			}
+		}
+	case "-first":
+		return "win::first_value(" + field + ")", true
+	case "-last":
+		return "win::last_value(" + field + ")", true
+	case "-nth-value":
+		if _, err := strconv.ParseInt(w.args[1], 10, 64); n == 3 && err == nil {
+			return "win::nth_value(" + field + ", " + w.args[1] + ")", true
+		}
+	case "-count":
+		return "count_all_window()", true
+	case "-count-field":
+		return udaf("count_udaf", field), true
+	case "-sum":
+		// An integer column sums as DECIMAL(38,0) (sqlSumArg).
+		if strings.Contains(w.fn, "AS DECIMAL(38,0)") {
+			field = "cast(" + field + ", DataType::Decimal128(38, 0))"
+		}
+		return udaf("sum_udaf", field), true
+	case "-avg":
+		return udaf("avg_udaf", field), true
+	case "-min":
+		return udaf("min_udaf", field), true
+	case "-max":
+		return udaf("max_udaf", field), true
+	}
+	return "", false
+}
+
+// rustFrame renders the clause's frame as DataFusion's SQL planner
+// builds it: ROWS offsets as UInt64, RANGE offsets as text the analyzer
+// casts to the ORDER BY column's type, an unbounded side as a null. A
+// time-width RANGE frame stays text (its ORDER BY is a cast and its
+// offset an interval).
+func rustFrame(w sqlWin) (string, bool) {
+	units := "Rows"
+	bound := func(n int, side string) string {
+		switch {
+		case n < 0:
+			return "WindowFrameBound::" + side + "(ScalarValue::UInt64(None))"
+		case n == 0:
+			return "WindowFrameBound::CurrentRow"
+		}
+		return fmt.Sprintf("WindowFrameBound::%s(ScalarValue::UInt64(Some(%d)))", side, n)
+	}
+	start, end := bound(w.preceding, "Preceding"), bound(w.following, "Following")
+	if w.rangeP != "" || w.rangeF != "" {
+		units = "Range"
+		rangeBound := func(s, side string) (string, bool) {
+			if s == "" {
+				return "WindowFrameBound::CurrentRow", true
+			}
+			v, isTime, err := parseRangeBound(s)
+			switch {
+			case err != nil || isTime:
+				return "", false
+			case v < 0:
+				return "WindowFrameBound::" + side + "(ScalarValue::UInt64(None))", true
+			case v == 0:
+				return "WindowFrameBound::CurrentRow", true
+			}
+			return fmt.Sprintf("WindowFrameBound::%s(ScalarValue::from(%q))", side, strconv.FormatFloat(v, 'f', -1, 64)), true
+		}
+		var ok1, ok2 bool
+		start, ok1 = rangeBound(w.rangeP, "Preceding")
+		end, ok2 = rangeBound(w.rangeF, "Following")
+		if !ok1 || !ok2 {
+			return "", false
+		}
+	}
+	return fmt.Sprintf("WindowFrame::new_bounds(WindowFrameUnits::%s, %s, %s)", units, start, end), true
+}
+
+// rustScalar renders a typed CLI literal (windowDefaultLiteral) as a
+// ScalarValue.
+func rustScalar(v any) (string, bool) {
+	switch x := v.(type) {
+	case int64:
+		return fmt.Sprintf("ScalarValue::from(%di64)", x), true
+	case float64:
+		if math.IsInf(x, 0) || math.IsNaN(x) {
+			return "", false
+		}
+		f := strconv.FormatFloat(x, 'f', -1, 64)
+		if !strings.Contains(f, ".") {
+			f += ".0"
+		}
+		return "ScalarValue::from(" + f + "f64)", true
+	case bool:
+		return fmt.Sprintf("ScalarValue::from(%v)", x), true
+	case string:
+		return "ScalarValue::from(" + rustStr(x) + ")", true
+	}
+	return "", false
 }
 
 // splitSortTerm splits an ORDER BY term into its expression and direction.

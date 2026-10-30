@@ -75,9 +75,12 @@ func TestGenerateRustProgram(t *testing.T) {
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn as agg;
+use datafusion::functions_aggregate::{average::avg_udaf, count::{count_all_window, count_udaf}, min_max::{max_udaf, min_udaf}, string_agg::string_agg, sum::sum_udaf};
 use datafusion::functions_window::expr_fn as win;
-use datafusion::logical_expr::Operator;
+use datafusion::logical_expr::expr::WindowFunction;
+use datafusion::logical_expr::{Operator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion::prelude::*;
+use datafusion::scalar::ScalarValue;
 
 pub async fn pipeline(ctx: &SessionContext) -> Result<DataFrame> {
     let df = ctx.read_csv("employees.csv", CsvReadOptions::new().has_header(true)).await?;
@@ -127,15 +130,37 @@ func TestGenerateRustLayers(t *testing.T) {
 		{"count sink",
 			[]string{"ssql from e.csv", "ssql where -if age gt 30", "ssql count"},
 			[]string{`let df = df.aggregate(vec![], vec![agg::count(lit(1i64)).alias("count")])?;`}},
-		{"aggregate without a builder keeps the registry's text",
-			[]string{"ssql from e.csv", "ssql group-by dept -median salary med -count-distinct city cities"},
-			[]string{`let e1 = df.parse_sql_expr(r#"`, `AS "med""#)?;`, `agg::count_distinct(col("city")).alias("cities")`}},
-		{"ranking window by flag is a builder; a frame aggregate is text",
-			[]string{"ssql from e.csv", "ssql window -partition dept -order salary -desc -rank r -sum salary run"},
+		{"every registry aggregate is a builder",
+			[]string{"ssql from e.csv", "ssql group-by dept -median salary med -count-distinct city cities -stddev salary sd -variance salary v -string-agg name , m -percentile salary 0.9 p90 -arg-max name salary top -arg-min name salary low -first name f -last name l -collect name ns"},
+			[]string{`agg::median(col("salary")).alias("med")`, `agg::count_distinct(col("city")).alias("cities")`,
+				`agg::stddev(col("salary")).alias("sd")`, `agg::var_sample(col("salary")).alias("v")`,
+				`string_agg(col("name"), lit(",")).alias("m")`,
+				`agg::percentile_cont(col("salary").sort(true, false), lit(0.9f64)).alias("p90")`,
+				`agg::first_value(col("name"), vec![col("salary").sort(false, true)]).alias("top")`,
+				`agg::first_value(col("name"), vec![col("salary").sort(true, false)]).alias("low")`,
+				`agg::first_value(col("name"), vec![]).alias("f")`, `agg::last_value(col("name"), vec![]).alias("l")`,
+				`agg::array_agg(col("name")).alias("ns")`}},
+		{"ranking window is a builder; a frame aggregate builds its frame once",
+			[]string{"ssql from e.csv", "ssql window -partition dept -order salary -desc -rank r -sum salary run -avg salary a"},
 			[]string{`let df = df.with_column("r", win::rank().partition_by(vec![col("dept")]).order_by(vec![col("salary").sort(false, true)]).build()?)?;`,
-				`let e1 = df.parse_sql_expr(r#"SUM("salary") OVER (PARTITION BY "dept" ORDER BY "salary" DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"#)?;`,
-				`let df = df.with_column("run", e1)?;`,
+				`let frame1 = WindowFrame::new_bounds(WindowFrameUnits::Rows, WindowFrameBound::Preceding(ScalarValue::UInt64(None)), WindowFrameBound::CurrentRow);`,
+				`let df = df.with_column("run", Expr::from(WindowFunction::new(sum_udaf(), vec![col("salary")])).partition_by(vec![col("dept")]).order_by(vec![col("salary").sort(false, true)]).window_frame(frame1.clone()).build()?)?;`,
+				`let df = df.with_column("a", cast(Expr::from(WindowFunction::new(avg_udaf(), vec![col("salary")])).partition_by(vec![col("dept")]).order_by(vec![col("salary").sort(false, true)]).window_frame(frame1.clone()).build()?, DataType::Float64))?;`,
 				`let df = df.sort(vec![col("dept").sort(true, false), col("salary").sort(false, true)])?;`}},
+		{"bounded rows frame, value functions and a lag default",
+			[]string{"ssql from e.csv", "ssql window -partition dept -order salary -count n -count-field name nn -first name f -last name l -nth-value name 2 n2 -min salary lo -lag-default name 1 none prev -preceding 1 -following 1"},
+			[]string{`let frame1 = WindowFrame::new_bounds(WindowFrameUnits::Rows, WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))), WindowFrameBound::Following(ScalarValue::UInt64(Some(1))));`,
+				`count_all_window().partition_by(`, `Expr::from(WindowFunction::new(count_udaf(), vec![col("name")]))`,
+				`win::first_value(col("name"))`, `win::last_value(col("name"))`, `win::nth_value(col("name"), 2)`,
+				`Expr::from(WindowFunction::new(min_udaf(), vec![col("salary")]))`,
+				`win::lag(col("name"), Some(1), Some(ScalarValue::from("none"))).partition_by(vec![col("dept")]).order_by(vec![col("salary").sort(true, false)]).build()?`}},
+		{"numeric range frame bounds are text the analyzer casts, as the SQL planner leaves them",
+			[]string{"ssql from e.csv", "ssql window -order ts -range-preceding 20 -range-following 10 -max salary mx"},
+			[]string{`let frame1 = WindowFrame::new_bounds(WindowFrameUnits::Range, WindowFrameBound::Preceding(ScalarValue::from("20")), WindowFrameBound::Following(ScalarValue::from("10")));`,
+				`Expr::from(WindowFunction::new(max_udaf(), vec![col("salary")])).order_by(vec![col("ts").sort(true, false)]).window_frame(frame1.clone()).build()?`}},
+		{"a time-width range frame keeps the translator's text",
+			[]string{"ssql from e.csv", "ssql window -order date -range-preceding 14d -count n"},
+			[]string{`parse_sql_expr(r#"COUNT(*) OVER (ORDER BY CAST("date" AS TIMESTAMP) RANGE BETWEEN INTERVAL '1209600 seconds' PRECEDING AND CURRENT ROW)"#)`}},
 		{"join using drops the right key",
 			[]string{"ssql from o.csv", "ssql join c.csv -using customer_id -type left", "ssql include customer_id name"},
 			[]string{`let s1 = ctx.read_csv("c.csv", CsvReadOptions::new().has_header(true)).await?;`,

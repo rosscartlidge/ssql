@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -163,4 +164,43 @@ INSERT INTO %[1]s VALUES (1, NULL, '2026-01-02 10:30:00', '2026-01-02 10:30:00+0
 	jl := ixRun(t, nd, bin+" from jsonl - | "+bin+" include id note | "+bin+" to jsonl")
 	got = psql(fmt.Sprintf("CREATE TEMP TABLE stage (doc jsonb);\n\\copy stage FROM STDIN\n%s\\.\nSELECT doc->>'id', doc ? 'note' FROM stage ORDER BY 1;", jl))
 	ixWant(t, "ssql to jsonl → jsonb (absent field, not null)", got, "1|f\n2|t\n")
+}
+
+// TestRustInterchange: ssql's files go into a generate rust program and
+// the program's files come back (DFC157 follow-up). ssql writes the
+// Parquet (a NULL in the first row, a decimal:2 and an int128 column);
+// the Rust program reads it with DataFusion and writes Parquet of its
+// own, and CSV on stdout; ssql reads both back with the same columns,
+// kinds and rows as exec. Its first run found that a program ending in
+// `to parquet` did not compile (DataFrameWriteOptions was never
+// imported). Gated like the rust lane: SSQL_RUST_LANE=1 and cargo.
+func TestRustInterchange(t *testing.T) {
+	if testing.Short() || !rustLaneEnabled() {
+		t.Skip("SSQL_RUST_LANE=1 and cargo needed (builds a Rust program)")
+	}
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	in := "cd " + dir + " && "
+	os.WriteFile(filepath.Join(dir, "f.csv"), []byte("id,name,amount,big\n1,,10.5,1\n3,carol,30.25,9223372036854775807\n2,bob,20,2\n"), 0o644)
+	ixRun(t, "", in+bin+" from f.csv | "+bin+" cast -type amount decimal:2 -type big int128 | "+bin+" to parquet in.parquet")
+	const stages = " from in.parquet | %[1]s where -if amount gt 15"
+	pipeline := fmt.Sprintf("%[1]s"+stages, bin)
+	sorted := func(s string) string {
+		lines := strings.Split(strings.TrimSpace(s), "\n")
+		slices.Sort(lines)
+		return strings.Join(lines, "\n")
+	}
+
+	// Parquet: DataFusion reads ssql's file and writes its own.
+	ixRun(t, "", in+"export SSQL_MODE=record && "+pipeline+" | "+bin+" to parquet out.parquet | "+bin+" generate rust -run")
+	want := ixRun(t, "", in+pipeline+" | "+bin+" to jsonl")
+	got := ixRun(t, "", in+bin+" from out.parquet | "+bin+" to jsonl")
+	ixWant(t, "rust to parquet → ssql from parquet (rows)", sorted(got), sorted(want))
+	ixWant(t, "rust to parquet → ssql from parquet (columns and kinds)",
+		ixRun(t, "", in+bin+" from out.parquet | head -1"), ixRun(t, "", in+pipeline+" | head -1"))
+
+	// CSV on stdout, read back as ssql reads its own CSV.
+	want = ixRun(t, "", in+pipeline+" | "+bin+" to csv | "+bin+" from csv - | "+bin+" to jsonl")
+	got = ixRun(t, "", in+"(export SSQL_MODE=record && "+pipeline+" | "+bin+" to csv | "+bin+" generate rust -run) | "+bin+" from csv - | "+bin+" to jsonl")
+	ixWant(t, "rust to csv → ssql from csv -", sorted(got), sorted(want))
 }

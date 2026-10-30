@@ -223,6 +223,15 @@ async function run() {
         /\["from",\s*"employees.csv"/.test(jsonDoc) && /\["where",\s*"-if",\s*"age",\s*"gt",\s*"30"\]/.test(jsonDoc) && /\["to",\s*"table"\]/.test(jsonDoc) && /ssql run/.test(label()),
         label() + " :: " + jsonDoc.slice(0, 200));
 
+    // 11a'. Generate Rust: DataFrame calls on DataFusion, rendered by the
+    //       slim build (text only; DFC157).
+    setLine("ssql from employees.csv | ssql where -if age gt 30 | ssql group-by dept -count n | ssql to table");
+    w.generateRust();
+    const rustSrc = doc.getElementById('output').textContent;
+    record("generate-rust-program",
+        /ctx\.read_csv\("employees\.csv"/.test(rustSrc) && /\.filter\(col\("age"\)\.gt\(lit\(30i64\)\)\)/.test(rustSrc) && /\.aggregate\(/.test(rustSrc) && /DataFusion/.test(label()),
+        label() + " :: " + rustSrc.slice(0, 250));
+
     // 11b. Files created by a run get a download bar (write-log driven),
     //      excluding the executor's tmp/procsub plumbing; a run that
     //      creates nothing hides the bar.

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`generate rust` builds windows over a frame and every group-by aggregate as DataFrame calls.** An aggregate over a frame is `WindowFunction::new(sum_udaf(), …)` with its `WindowFrame` (bound once per clause), the definition DataFusion's SQL planner resolves the name to; first/last/nth value, lag and lead with a default, median, stddev, variance, string-agg, percentile, arg-max/arg-min, first, last and collect are builders. Only expressions and time-width RANGE frames are still parsed text ([DFC157](doc/research/dfc157_generate_rust.md) §7c).
+- **A Generate Rust button in the playground.**
+- **`generate rust` and `generate sql -dialect datafusion` in the overflow and interchange gates.** `TestIntOverflowEveryLane` has DataFusion and rust rows; `TestRustInterchange` sends ssql's Parquet through a generated program and reads its Parquet and CSV back. `make lanes` runs every interchange test (its filter matched none).
+
 - **`generate rust` builds every stage from DataFrame calls.** A rollup or cube is one aggregate per grouping set joined to the detail rows on its keys (absent keys matching), a keyed `except`/`intersect` an anti/semi join, `unpivot` a union of one branch per column, `sample` a sort or filter on `random()`, `-empty zero` a `coalesce` per numeric column. They ran as SQL text over a registered view before; `from range` keeps one SQL line as its source, the stages after it calls ([DFC157](doc/research/dfc157_generate_rust.md) §7b).
 
 - **`generate rust` reads TSV, JSONL and declared types.** The DataFrame API's readers take what DataFusion's SQL file table cannot, so `generate rust` no longer refuses a `.tsv` (its delimiter), a `.jsonl` (its extension), or `-type` / a schema sidecar / an integer column past int64 (a declared schema built from the header and ssql's own sampled kinds). A declared decimal is read as text and cast, because DataFusion's CSV reader truncates extra digits where ssql rounds. `generate sql -dialect datafusion` still refuses all three ([DFC157](doc/research/dfc157_generate_rust.md) §7a).
@@ -18,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Integer overflow on DataFusion wrapped instead of failing.** DataFusion's int64 `+ - *` and unary minus wrap (`9223372036854775807 + 1` was `-9223372036854775808`) where every other lane stops; `generate sql -dialect datafusion` and `generate rust` now compute an integer operation in `DECIMAL(38,0)` and cast back to `BIGINT`, which raises. Operands whose kind the translator cannot see keep DataFusion's operator (TODO).
+- **A `generate rust` program ending in `to parquet` did not compile** (`DataFrameWriteOptions` was not imported), since v4.128.0.
 - **`trunc` and `sign` of a decimal column in `generate sql`.** They were wrapped in the non-finite guard, which DataFusion evaluates by casting infinity to the decimal and failing ("Overflowing on inf"); a decimal has no infinity, so the guard is left off.
 - **A shard's panic could go unraised in the channel-based `typed.Parallel`.** A panicking goroutine's own defers run before the group's recover stores the panic, so a consumer that drained the channel the defer closed, in that gap, read no panic and returned normally — about one run in a hundred under the race detector. `shardGroup.rethrow` waits for the goroutine first; the JSON scanner and `ParallelBatched` had the same gap.
 

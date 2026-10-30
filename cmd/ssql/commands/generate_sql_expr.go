@@ -178,11 +178,54 @@ func exprUnaryToSQL(n *ast.UnaryNode) (string, error) {
 	case "not", "!":
 		return "(NOT " + operand + ")", nil
 	case "-":
+		if sqlCheckedIntArith() && sqlIntOperand(n.Node) {
+			return sqlCheckedInt("(-" + sqlAsDecimal0(operand) + ")"), nil
+		}
 		return "(-" + operand + ")", nil
 	case "+":
 		return operand, nil
 	}
 	return "", fmt.Errorf("operator %q has no SQL translation", n.Operator)
+}
+
+// sqlCheckedIntArith reports whether int64 + - * need the checked form:
+// DataFusion's integer operators wrap (9223372036854775807 + 1 is
+// -9223372036854775808) and it has no setting that checks them, where
+// every other lane stops with an overflow error (DFC155 B; found
+// 2026-10-30 adding the datafusion and rust rows to
+// TestIntOverflowEveryLane). DuckDB and Postgres raise on their own.
+func sqlCheckedIntArith() bool { return sqlDialectCur == dialectDataFusion }
+
+// sqlCheckedInt casts an exact DECIMAL(38,0) result back to BIGINT; the
+// cast raises "out of range Int64" where the int64 operation would have
+// overflowed (a product of two int64s has at most 38 digits).
+func sqlCheckedInt(decimalExpr string) string { return "CAST(" + decimalExpr + " AS BIGINT)" }
+
+func sqlAsDecimal0(e string) string { return "CAST(" + e + " AS DECIMAL(38,0))" }
+
+// sqlIntOperand reports whether an expression is an int64 the translator
+// can see: an integer literal, a column the source sample or a
+// declaration types as int, or integer arithmetic over them. A column of
+// unknown kind keeps the engine's own operator (DataFusion's wraps; the
+// gap is in TODO.md).
+func sqlIntOperand(node ast.Node) bool {
+	switch n := node.(type) {
+	case *ast.IntegerNode:
+		return true
+	case *ast.IdentifierNode:
+		if _, ok := sqlExprParams[n.Value]; ok || sqlIdentResolver != nil {
+			return false
+		}
+		return sqlColumnKinds[n.Value] == "int"
+	case *ast.UnaryNode:
+		return (n.Operator == "-" || n.Operator == "+") && sqlIntOperand(n.Node)
+	case *ast.BinaryNode:
+		switch n.Operator {
+		case "+", "-", "*", "%":
+			return sqlIntOperand(n.Left) && sqlIntOperand(n.Right)
+		}
+	}
+	return false
 }
 
 func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
@@ -245,6 +288,9 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 			}
 		}
 		return sqlDivide(left, right), nil
+	}
+	if (n.Operator == "+" || n.Operator == "-" || n.Operator == "*") && sqlCheckedIntArith() && sqlIntOperand(n.Left) && sqlIntOperand(n.Right) {
+		return sqlCheckedInt("(" + sqlAsDecimal0(left) + " " + n.Operator + " " + sqlAsDecimal0(right) + ")"), nil
 	}
 	if op, ok := exprBinaryOps[n.Operator]; ok {
 		return "(" + left + " " + op + " " + right + ")", nil
