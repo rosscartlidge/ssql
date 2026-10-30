@@ -77,6 +77,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button id="btnGenerateGo" onclick="generateGo()" disabled>Generate Go</button>
     <button id="btnGenerateTypedGo" onclick="generateGo('typed')" disabled title="Typed/parallel code generation: derived row structs, planner-selected Stream/parallel forms">Generate Typed Go</button>
     <button id="btnGenerateSQL" onclick="generateSQL()" disabled>Generate SQL</button>
+    <button id="btnGenerateRust" onclick="generateRust()" disabled title="The pipeline as a Rust program on Apache DataFusion's DataFrame API (build it with cargo, or ssql generate rust -run)">Generate Rust</button>
     <button id="btnGenerateJSON" onclick="generateJSON()" disabled title="The pipeline as a document for ssql run: a JSON list of stages, each the stage's own argv">Generate JSON</button>
     <input type="file" id="fileUpload" accept=".csv,.tsv,.json,.jsonl" style="display:none" onchange="uploadFile(event)">
     <button onclick="document.getElementById('fileUpload').click()">Upload CSV</button>
@@ -145,9 +146,9 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <!-- ?v= busts the browser cache per deploy: a stale fs-polyfill.js with a
      fresh playground.html made runs die silently (missing new helpers). -->
-<script src="fs-polyfill.js?v=669843e1"></script>
-<script src="wasm_exec.js?v=669843e1"></script>
-<script src="ssql-ui.js?v=669843e1"></script>
+<script src="fs-polyfill.js?v=f577a865"></script>
+<script src="wasm_exec.js?v=f577a865"></script>
+<script src="ssql-ui.js?v=f577a865"></script>
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
@@ -367,7 +368,7 @@ let wasmReady = false;
 
 async function initWasm() {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=669843e1'), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=f577a865'), go.importObject);
     go.run(result.instance);
 
     // Wait for ssqlReady
@@ -398,6 +399,7 @@ async function initWasm() {
     document.getElementById('btnGenerateGo').disabled = false;
     document.getElementById('btnGenerateTypedGo').disabled = false;
     document.getElementById('btnGenerateSQL').disabled = false;
+    document.getElementById('btnGenerateRust').disabled = false;
     document.getElementById('btnGenerateJSON').disabled = false;
     document.getElementById('btnHelpAt').disabled = false;
 
@@ -585,6 +587,18 @@ function generateSQL() {
     showOutput(result, 'Generated SQL (DuckDB)', false, 'sql');
 }
 
+// generateRust: the pipeline as a Rust program on DataFusion's DataFrame
+// API (DFC157) — text only, so the slim build renders it; building and
+// running it needs cargo (ssql generate rust -run on a desktop).
+function generateRust() {
+    hideUseButton();
+    hideChart();
+    const pipeline = document.getElementById('pipeline').value.trim();
+    if (!pipeline) return;
+    const result = executePipeline(pipeline + ' | ssql generate rust', true);
+    showOutput(result, 'Generated Rust (Apache DataFusion)', false, 'rust');
+}
+
 // generateJSON: the pipeline as a document for `ssql run` — a JSON list
 // of stages, each the stage's own argv (no shell; the form a program or
 // a config file carries a pipeline in).
@@ -631,5 +645,6 @@ initWasm().catch(err => {
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-go.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-sql.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-rust.min.js"></script>
 </body>
 </html>
