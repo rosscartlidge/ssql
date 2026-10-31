@@ -215,28 +215,7 @@ func emitTypedAsofJoin(inputVar, funcName string, leftSchema, rightSchema *lib.T
 	fail := func(err error) error {
 		return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: %w", err))
 	}
-	typeOf := func(s *lib.TypedSchema) func(string) string {
-		return func(name string) string {
-			f, ok := lookupSchemaField(s, name)
-			if !ok {
-				return ""
-			}
-			switch f.GoType {
-			case "int64":
-				return lib.TypeInt
-			case "ssql.Int128":
-				return lib.TypeInt128
-			case "ssql.Decimal":
-				return lib.WireDecimal(f.Scale)
-			case "float64":
-				return lib.TypeFloat
-			case "time.Time":
-				return lib.TypeTime
-			}
-			return lib.TypeString
-		}
-	}
-	if err := asofCheck(typedFieldNames(leftSchema), typedFieldNames(rightSchema), typeOf(leftSchema), typeOf(rightSchema), clauses, a, opts); err != nil {
+	if err := asofCheck(typedFieldNames(leftSchema), typedFieldNames(rightSchema), typedWireType(leftSchema), typedWireType(rightSchema), clauses, a, opts); err != nil {
 		return fail(err)
 	}
 	cfg, err := asofConfig(clauses, a, joinType)

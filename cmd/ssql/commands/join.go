@@ -656,8 +656,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		leftKeys = append(leftKeys, asof.leftTime)
 		rightKeys = append(rightKeys, asof.rightTime)
 	}
-	// A traversal has no typed form yet: it joins in record mode.
-	pathKey := nestedPathIn(leftSchema, leftKeys...) || follow.active()
+	pathKey := nestedPathIn(leftSchema, leftKeys...)
 	// A right side whose last stage is record-shaped joins in record mode
 	// too (the func returns records; it exited as "no typed schema" before).
 	typedJoin := func(rightSchema *lib.TypedSchema) bool {
@@ -694,13 +693,23 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		}
 		return generateAsofStmt(inputVar, funcName, cfg)
 	}
-	// Record-mode traversal: the same, with ssql.Follow.
+	// Record-mode traversal: the same, with ssql.Follow; followNotes is
+	// why a typed pipeline's traversal fell back (surfaced by -explain).
+	var followNotes []string
 	followRecord := func(rightFields []string, rightType func(string) string) error {
 		cfg, err := followCheck(leftFields, rightFields, rightType, clauses, follow, joinType, opts, asof)
 		if err != nil {
 			return lib.WriteErrorAndExit(getCommandString(), err)
 		}
-		return generateFollowStmt(inputVar, funcName, cfg)
+		return generateFollowStmt(inputVar, funcName, cfg, followNotes)
+	}
+	// typedFollow emits the typed traversal, or records why it cannot.
+	typedFollow := func(rightSchema *lib.TypedSchema, rightFragments []*lib.CodeFragment, subCommandStr string) (bool, error) {
+		handled, reason, err := emitTypedFollow(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, follow, joinType, opts, asof)
+		if !handled && err == nil {
+			followNotes = []string{fmt.Sprintf("record fallback (%s)", reason)}
+		}
+		return handled, err
 	}
 
 	// Check if rightFile is a non-regular file (e.g., /dev/fd/N, named pipe)
@@ -728,10 +737,17 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 					return lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
 				}
-				if asof.active() {
+				switch {
+				case follow.active():
+					if handled, err := typedFollow(rightSchema, rightFragments, subCommandStr); handled || err != nil {
+						return err
+					}
+					// no typed form: the record traversal below
+				case asof.active():
 					return emitTypedAsofJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, asof, joinType, opts)
+				default:
+					return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, joinType, opts)
 				}
-				return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, joinType, opts)
 			}
 
 			// The record join reads records: a right side that ends typed
@@ -813,17 +829,25 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		)
 		rightInit.OutputTypedSchema = rightSchema
 		rightInit.StructDefs = []string{rightStructDef}
-		if asof.active() {
+		if follow.active() {
+			handled, err := typedFollow(rightSchema, []*lib.CodeFragment{rightInit}, fmt.Sprintf("ssql from %s", rightFile))
+			if handled || err != nil {
+				return err
+			}
+			// no typed form: fall through to the record traversal below
+		} else if asof.active() {
 			return emitTypedAsofJoin(inputVar, funcName, leftSchema, rightSchema,
 				[]*lib.CodeFragment{rightInit}, fmt.Sprintf("ssql from %s", rightFile), clauses, asof, joinType, opts)
 		}
-		return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema,
-			[]*lib.CodeFragment{rightInit},
-			fmt.Sprintf("ssql from %s", rightFile),
-			clauses,
-			joinType,
-			opts,
-		)
+		if !follow.active() {
+			return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema,
+				[]*lib.CodeFragment{rightInit},
+				fmt.Sprintf("ssql from %s", rightFile),
+				clauses,
+				joinType,
+				opts,
+			)
+		}
 	}
 
 	var plan joinPlan
