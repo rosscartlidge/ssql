@@ -621,6 +621,46 @@ codelab takes this further — a list of item objects to a revenue table,
 the rules `flatten` enforces, and how the same pipelines come out as Go
 and as SQL.
 
+### Graphs: follow a join until it stops
+
+Some questions are a join repeated an unknown number of times: every
+city you can reach from Sydney, however many flights it takes; everyone
+under a manager, at any depth; every part inside an assembly.
+`flights.csv` is an edge list — `src`, `dst`, `mins`. `join -follow`
+starts from each row of the stream, joins it to the edges, and joins the
+cities it found again, round after round, until a round finds nothing
+new. The seed is a one-line CSV on stdin:
+
+```bash
+printf 'city\nSYD\n' | ssql from csv - | ssql join flights.csv -on city src -follow dst -depth hops -path route | ssql to table
+```
+
+Each city appears once, reached by the fewest hops (the default mode,
+`-fewest-hops`); the seed is the row at depth 0, and its other columns
+come along. Perth is two hops away through Brisbane — but three hops
+through Melbourne and Adelaide is quicker. `-lowest-sum FIELD NAME`
+keeps each city's cheapest route instead:
+
+```bash
+printf 'city\nSYD\n' | ssql from csv - | ssql join flights.csv -on city src -follow dst -lowest-sum mins total -path route | ssql to table
+```
+
+`-all-paths` keeps every route that never visits a city twice — Darwin
+three times here, which on a dense graph is a very large number of rows,
+so the cheap modes are the default. `-sum FIELD NAME` totals any edge
+field along the route, `-max-depth N` stops after N hops, and `-both`
+treats every edge as usable either way:
+
+```bash
+printf 'city\nSYD\n' | ssql from csv - | ssql join flights.csv -on city src -follow dst -all-paths -sum mins total -depth hops | ssql where -if city eq DRW | ssql to table
+```
+
+A tie is broken by value — fewer hops, then the route compared city by
+city — never by the order of the file, so every way of running the
+pipeline keeps the same row. `generate sql` writes it as a recursive
+CTE: all three modes on DuckDB, `-all-paths` on Postgres and DataFusion,
+which have no way to visit each node only once.
+
 That is the everyday toolkit. Everything in Part 2 makes these same
 pipelines faster, bigger, or shareable — the vocabulary does not change.
 

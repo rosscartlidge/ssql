@@ -452,6 +452,35 @@ nanoseconds for a time field (`l.Ts.UnixNano()`) or the number itself. Inner
 semantics; the right side is indexed once, the left streams in input order.
 Behind `join -asof`.
 
+## Follow (graph traversal)
+
+```go
+type FollowSpec[S any, E comparable, O, A any, K cmp.Ordered] struct {
+    Mode     FollowMode // FollowFewestHops (default), FollowLowestSum, FollowAllPaths
+    MaxDepth int
+    Both     bool               // undirected; Swap reverses an edge
+    SeedNode func(S) (K, bool)  // false: no node
+    Src, Dst func(E) (K, bool)
+    Swap     func(E) E
+    Zero     A                  // the totals on the seed row
+    Step     func(acc A, e E) A // one more hop
+    CmpLowest, CmpSums func(a, b A) int
+    Negative    func(E) bool    // a FollowLowestSum weight below zero (refused)
+    LowestField string
+    Emit     func(s S, node K, depth int64, acc A) O
+}
+func Follow[S any, E comparable, O, A any, K cmp.Ordered](edges iter.Seq[E], fs FollowSpec[S, E, O, A, K]) func(iter.Seq[S]) iter.Seq[O]
+func FollowParallel[S any, E comparable, O, A any, K cmp.Ordered](seeds Stream[S], edges iter.Seq[E], fs FollowSpec[S, E, O, A, K]) Stream[O]
+```
+
+Walks the graph of `edges` from every seed: one output row per route the
+mode keeps, the seed itself first at depth 0 — each node once by the fewest
+hops (BFS), once by the lowest total (Dijkstra), or every simple path. Ties
+are broken by value (hops, path, totals), never by input order. The walk is
+the same code as `ssql.Follow`'s, so the typed and record lanes agree row for
+row. `FollowParallel` builds the adjacency once and walks each seed shard
+independently. Behind `join -follow` ([DFC161](research/dfc161_graph_traversal_join_follow.md)).
+
 ## JSONL and JSON array I/O
 
 For newline-delimited JSON (`one object per line`), use the JSONL pair;

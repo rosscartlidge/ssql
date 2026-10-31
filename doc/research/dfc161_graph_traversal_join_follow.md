@@ -6,8 +6,8 @@ Last modified: 2026-10-31
 
 [Back to Index](./README.md)
 
-Status: **exploratory, 2026-10-31; design questions answered the same
-day (§7). Nothing built.** Ross, after DFC160:
+Status: **built 2026-10-31 (§9); design questions answered the same day
+(§7).** Ross, after DFC160:
 "I actually think our biggest gap is not being able to do recursive joins
 so we can do graph traversal … we wouldn't need recursion — I think we
 could do it with a loop inside join. What is your feeling on the best way
@@ -312,6 +312,61 @@ margin. That belongs in the scale gate.
    would be the first join flag that invents a row.
 6. **`-both`** makes the graph undirected (§3.7). Rejected: a documented
    `union` of the reversed edges.
+
+## 9. Built (2026-10-31)
+
+All six lanes, in seven commits on main (860c62c … the docs commit).
+
+- **One walk, two adapters.** The three searches live in
+  `internal/follow` (BFS by rounds with the frontier sorted by path,
+  Dijkstra on the composite key, DFS with an on-path set).
+  `ssql.Follow` (`follow.go`) adapts records — keys by `followKey`,
+  totals as `followAcc` of the column's kind, the output schema built once
+  per seed schema — and `typed.Follow` / `typed.FollowParallel`
+  (`typed/follow.go`) adapt structs through a `typed.FollowSpec` the
+  emitter fills (`join_follow.go`: key accessors, a totals struct with
+  Int128/float64/Decimal fields, `Step`, `CmpSums`/`CmpLowest`,
+  `Negative`, `Emit`). The record and typed lanes cannot drift: the
+  typed test compares them row for row.
+- **CLI.** `join_follow.go`: `parseFollowSpec`, `followCheck` (the
+  refusals of §3 plus a target equal to the source), `execFollowJoin`,
+  record codegen (one `ssql.Follow` call), and the typed emitter with a
+  soft fallback and plan note for `-path` and mixed node types. `-using
+  X` is accepted as `-on X X`.
+- **Optimiser.** A traversal is a barrier for `generate ssql`: no
+  predicate pushdown either side (a where after it is about routes),
+  no column pruning through it (`TestFollowJoinPushdownGuard`).
+- **SQL.** `generate_sql_follow.go`: the CTE of §4, the seed's columns
+  listed when known (Postgres has no `* EXCLUDE … REPLACE`), totals
+  cast in anchor and step to `sqlInt128Type()` / float / decimal, an
+  edge field's kind from the side file's schema, the side fragment's
+  advisory types, or the side translation's own integer kinds. A
+  SQL-only layer, so `generate rust` runs it through `ctx.sql`.
+- **Tests.** Library (`follow_test.go`, ties, `-both`, self-loop,
+  int128, errors), typed (`TestFollowMatchesRecordLane`, parallel vs
+  serial under `-race`), dialect text and refusals
+  (`TestFollowSQL`), nine equivalence cases on every lane, two corpus
+  cases, a scale case (1 M edges; 797,161 DAG routes) and two overflow
+  rows. Watched fail: the tie rule reversed, the `-both` dedupe off,
+  the pushdown guard off, the in-round QUALIFY dropped (the 565-minute
+  Darwin on DuckDB), the DataFusion guard broken, BIGINT totals.
+
+What building it found:
+
+1. **The typed renderer did not rewrite a record-mode side reader's
+   error return.** A typed program whose join fell back to record mode
+   over a CSV file did not compile (it affected joins on a dotted path
+   key too); fixed in `generateTypedSubprocessFunction`.
+2. **`generate sql` silently dropped unknown join flags.** Before the
+   translation existed, `join -follow` rendered as a plain join; the
+   flags were refused by name in between, and `-follow` now dispatches.
+3. **A total over a computed edge column** had no SQL type: the side
+   pipeline's fragment advertised none. The side translation's integer
+   kinds (an `update` records them since 4487576) are now read.
+4. **`from range` starts at 1**, which the first DAG fixture forgot
+   (649,539 routes instead of 797,161 — the count assertion caught it).
+
+Follow-ups are in TODO.md.
 
 ## 8. Fixture
 

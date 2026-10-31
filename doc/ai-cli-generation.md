@@ -68,7 +68,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `include F…` / `exclude F…` | keep / drop columns | positional field names |
 | `rename -as OLD NEW` | rename columns | repeat `-as` |
 | `cast -type FIELD TYPE` | convert types (`string`, `int`, `int128`, `decimal:S` — fixed-point with S digits after the point, exact money — `float`, `bool`, `time`) | `-invalid missing` leaves unconvertible values empty instead of failing |
-| `join FILE` | join with a file or `<(pipeline)` | `-using F` (same name both sides), `-on LEFT RIGHT`, `-as RIGHTFIELD NEWNAME`, `-type inner|left|right|full`, `-suffix _r` (for colliding names), `-exclude-left` / `-exclude-right`; `-asof TIMEFIELD [-tolerance 5m] [-after] [-strict]` for as-of joins; `-` separates several lookups from the same file |
+| `join FILE` | join with a file or `<(pipeline)` | `-using F` (same name both sides), `-on LEFT RIGHT`, `-as RIGHTFIELD NEWNAME`, `-type inner|left|right|full`, `-suffix _r` (for colliding names), `-exclude-left` / `-exclude-right`; `-asof TIMEFIELD [-tolerance 5m] [-after] [-strict]` for as-of joins; `-follow DST` for graph traversal (see below); `-` separates several lookups from the same file |
 | `except -file FILE` / `intersect -file FILE` | rows of stdin not in / also in FILE (SQL EXCEPT / INTERSECT) | `-using F` or `-on L R` compares by key (anti-join / semi-join); `-all` keeps duplicates |
 | `union -file FILE` | append another file's rows (SQL UNION) | duplicates removed unless `-all`; repeat `-file` |
 | `merge FILE…` | k-way merge of already sorted files | `-by FIELD` |
@@ -179,6 +179,9 @@ ssql from data.csv   | ssql join kinds.csv -on a_kind kind -as kind_name a_kind_
                                           - -on z_kind kind -as kind_name z_kind_name   # two lookups, `-` separates clauses
 ssql from trades.csv | ssql join quotes.csv -using sym -asof ts -tolerance 5m       # the quote in force at each trade's time
 ssql from orders.csv | ssql join <(ssql from customers.csv | ssql where -if tier eq gold) -using customer_id  # a filtered right side
+ssql from seeds.csv  | ssql join flights.csv -on city src -follow dst -depth hops     # every city reachable from each seed, by fewest hops
+ssql from seeds.csv  | ssql join flights.csv -on city src -follow dst -lowest-sum mins total -path route  # cheapest route to each city
+ssql from seeds.csv  | ssql join flights.csv -on city src -follow dst -all-paths -max-depth 3   # every route of at most 3 hops
 ```
 
 A field present on both sides with different values is an error (a silent collision would lose data): rename with `-as`, suffix with `-suffix`, or drop a side's non-key fields altogether with `-exclude-left` / `-exclude-right`.
@@ -458,6 +461,7 @@ ssql from lines app.log \
 | a random sample | `ssql sample N` or `from csv FILE -sample N` |
 | join / combine / look up | `ssql join FILE -using F` or `-on L R`; keep unmatched: `-type left` |
 | as of / latest before / most recent quote | `ssql join FILE -using KEY -asof TIME` |
+| reachable / route / path / hierarchy / transitive closure / graph traversal | `ssql join EDGES -on NODE SRC -follow DST` (fewest hops; `-lowest-sum W NAME` cheapest; `-all-paths`; `-both` undirected; `-depth`, `-sum`, `-path`) |
 | not in / never / missing from | `ssql except -file FILE -using KEY` |
 | also in / at least one | `ssql intersect -file FILE -using KEY` |
 | union / append / stack | `ssql union -file FILE` |
