@@ -2919,6 +2919,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		conds    []string // filled at CASE-build time: own group + first-match-wins guards
 		field    string
 		valueSQL string
+		kind     string // the value's kind when the translator can see it ("int"), else ""
 	}
 	var assignments []assignment
 	var currentConds []string
@@ -2978,6 +2979,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				clause:   clauseIdx,
 				field:    args[i+1],
 				valueSQL: quoteIdent(args[i+2]),
+				kind:     sqlColumnKinds[args[i+2]],
 			})
 			i += 3
 		case "-if", "-i", "+if", "+i":
@@ -3007,17 +3009,23 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			if i+2 >= len(args) {
 				return fmt.Errorf("incomplete -set in update")
 			}
+			valueSQL := sqlLiteralFor(args[i+1], args[i+2])
+			kind := ""
+			if _, err := strconv.ParseInt(valueSQL, 10, 64); err == nil {
+				kind = "int"
+			}
 			assignments = append(assignments, assignment{
 				clause:   clauseIdx,
 				field:    args[i+1],
-				valueSQL: sqlLiteralFor(args[i+1], args[i+2]),
+				valueSQL: valueSQL,
+				kind:     kind,
 			})
 			i += 3
 		case "-set-expr", "-e":
 			if i+2 >= len(args) {
 				return fmt.Errorf("incomplete -set-expr in update")
 			}
-			valueSQL, err := exprToSQLParams(args[i+2], clauseParams[clauseIdx])
+			valueSQL, kind, err := exprToSQLKind(args[i+2], clauseParams[clauseIdx])
 			if err != nil {
 				return fmt.Errorf("update -set-expr: %w", err)
 			}
@@ -3033,6 +3041,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				clause:   clauseIdx,
 				field:    args[i+1],
 				valueSQL: valueSQL,
+				kind:     kind,
 			})
 			i += 3
 		case "-set-bucket", "-b":
@@ -3081,6 +3090,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 
 	var replacements []sqlPair
 	var additions []string
+	resultKinds := map[string]string{} // read by later stages, so recorded after every value here is rendered against the input's kinds
 	for _, field := range fieldOrder {
 		cases := fieldCases[field]
 		// `* REPLACE` requires the column to exist; a NEW field (exec creates
@@ -3140,6 +3150,20 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			sb.WriteString(" ELSE " + elseSQL + " END")
 			exprSQL = sb.String()
 		}
+		// The column is an int when every value it can take is one the
+		// translator sees as an int: each assignment's, and its own where
+		// a row keeps it. Only "int" is decided: it selects DataFusion's
+		// checked arithmetic (sqlCheckedIntArith).
+		kind := "int"
+		if elseSQL == quoteIdent(field) && sqlColumnKinds[field] != "int" {
+			kind = ""
+		}
+		for _, c := range cases {
+			if c.kind != "int" {
+				kind = ""
+			}
+		}
+		resultKinds[field] = kind
 		if isNew {
 			additions = append(additions, fmt.Sprintf("%s AS %s", exprSQL, quoteIdent(field)))
 			q.assigns = append(q.assigns, sqlAssign{name: field, text: exprSQL})
@@ -3161,6 +3185,14 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		q.star = &sqlStar{}
 	}
 	q.selectExprs = append(q.selectExprs, additions...)
+	for field, kind := range resultKinds {
+		switch {
+		case kind == "int":
+			sqlColumnKinds[field] = "int"
+		case sqlColumnKinds[field] == "int":
+			delete(sqlColumnKinds, field) // overwritten with a value the translator cannot type: the int claim is stale
+		}
+	}
 	return nil
 }
 

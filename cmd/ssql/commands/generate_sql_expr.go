@@ -53,17 +53,33 @@ func exprNodeToSQLWith(node ast.Node, resolve func(string) (string, error)) (str
 
 // exprToSQLParams is exprToSQL with a clause's -param bindings.
 func exprToSQLParams(expression string, params map[string]ExprParam) (string, error) {
+	sql, _, err := exprToSQLKind(expression, params)
+	return sql, err
+}
+
+// exprToSQLKind is exprToSQLParams that also reports the result's kind
+// when the translator can see it: "int" for integer arithmetic over
+// integer literals and int columns (sqlIntOperand), "" otherwise. A stage
+// that adds a column from an expression records it in sqlColumnKinds, so
+// a later stage's arithmetic over that column is checked on DataFusion
+// like arithmetic over a source column (`update -set-expr c 'b * 2' |
+// update -set-expr d 'a + c'` wrapped there until 2026-10-31).
+func exprToSQLKind(expression string, params map[string]ExprParam) (string, string, error) {
 	tree, err := parser.Parse(expression)
 	if err != nil {
-		return "", fmt.Errorf("expression %q: %w", expression, err)
+		return "", "", fmt.Errorf("expression %q: %w", expression, err)
 	}
 	sqlExprParams = params
 	defer func() { sqlExprParams = nil }()
 	sql, err := exprNodeToSQL(tree.Node)
 	if err != nil {
-		return "", fmt.Errorf("expression %q: %w — rewrite with SQL-translatable constructs, or use -if", expression, err)
+		return "", "", fmt.Errorf("expression %q: %w — rewrite with SQL-translatable constructs, or use -if", expression, err)
 	}
-	return sql, nil
+	kind := ""
+	if sqlIntOperand(tree.Node) {
+		kind = "int"
+	}
+	return sql, kind, nil
 }
 
 // exprBinaryOps maps expr-lang binary operators with a direct SQL spelling.
@@ -206,8 +222,9 @@ func sqlAsDecimal0(e string) string { return "CAST(" + e + " AS DECIMAL(38,0))" 
 // sqlIntOperand reports whether an expression is an int64 the translator
 // can see: an integer literal, a column the source sample or a
 // declaration types as int, or integer arithmetic over them. A column of
-// unknown kind keeps the engine's own operator (DataFusion's wraps; the
-// gap is in TODO.md).
+// unknown kind keeps the engine's own operator (DataFusion's wraps; a
+// column an earlier update computed has its kind recorded by
+// exprToSQLKind, the remaining gaps are in TODO.md).
 func sqlIntOperand(node ast.Node) bool {
 	switch n := node.(type) {
 	case *ast.IntegerNode:

@@ -2,7 +2,7 @@
 
 Reference: DFC157
 Created: 2026-10-27
-Last modified: 2026-10-30
+Last modified: 2026-10-31
 Revisits: [DFC132](./dfc132_rust_target_datafusion.md) §4
 
 [Back to Index](./README.md)
@@ -461,6 +461,20 @@ cast back, so an intermediate overflow stops as it does in ssql. A
 column of unknown kind keeps DataFusion's operator (TODO). Watched fail:
 with the check off, `overflow_add`, `_sub`, `_mul` and `_neg` fail on
 both rows. `TestDataFusionCheckedIntArith` pins the text.
+
+A column an earlier `update` computed had no kind at first, so
+`update -set-expr c 'b * 2' | update -set-expr d 'a + c'` wrapped on
+DataFusion (`d = -9223372036854775807` for `a` = 2^63−1, `b` = 1) while
+exec stopped. Since 2026-10-31 `update` records the result's kind:
+`exprToSQLKind` reports "int" for an expression `sqlIntOperand`
+accepts, `-set` an integer literal, `-set-field` the source column's
+kind, and a column is an int when every value it can take is one (its
+own included where a row keeps it). A column overwritten with a value
+the translator cannot type loses a stale int claim. The
+`overflow_derived_add` and `overflow_set_add` cases are the gate.
+Identifiers resolved through a join or fold scope, expression
+parameters and sources the translator cannot sample are still the
+TODO.
 
 `TestRustInterchange` (ssql's Parquet, with a NULL in the first row and
 `decimal:2` and `int128` columns, into the program; its Parquet and its

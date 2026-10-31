@@ -115,6 +115,10 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		"wide_fold": bin + " from range 184 | " + bin + " window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib",
 		// E (2026-10-27): the 38-digit decimal bound
 		"dec_mul": bin + " from range 3 | " + bin + " cast -type n decimal:2 | " + bin + " update -set-expr big 'n * decimal(\"999999999999999999999999999999999999.99\")'",
+		// columns an earlier update computed (2026-10-31): the SQL
+		// translator knew only source kinds, so DataFusion wrapped these
+		"derived_add": bin + " from range 3 | " + bin + " update -set-expr m 'n + 1' | " + bin + " update -set-expr big '9223372036854775807 + m'",
+		"set_add":     bin + " from range 3 | " + bin + " update -set one 1 | " + bin + " update -set-expr big '9223372036854775807 + one + n'",
 	}
 	// An integer sum is exact past 2^53 in every lane, wherever a sum is
 	// made: group-by -sum, -expr sum(), window -sum running and sliding —

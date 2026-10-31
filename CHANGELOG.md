@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Integer overflow on DataFusion still wrapped over a column an earlier `update` computed.** `update -set-expr c 'b * 2' | update -set-expr d 'a + c'` gave a wrapped `d` from `generate sql -dialect datafusion` and `generate rust` where exec stopped: the translator only checked operands whose kind it could see, and it knew source columns only. `update` now records an integer result's kind (`-set-expr` over ints, an integer `-set`, `-set-field` of an int), and a column overwritten with something else loses the int claim. Join and fold scopes, parameters and unsampled sources remain (TODO).
+
 ## [4.134.0] - 2026-10-30
 
 ### Added

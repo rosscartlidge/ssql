@@ -391,4 +391,17 @@ func TestDataFusionCheckedIntArith(t *testing.T) {
 	// A CSV column the sample types as int is checked; a float one is not.
 	csv := mustDialect(t, dialectDataFusion, "ssql from "+dialectFixture(t), "ssql update -set-expr x 'age + 1' -set-expr y 'score + 1'")
 	wantAll(t, csv, `CAST((CAST("age" AS DECIMAL(38,0)) + CAST(1 AS DECIMAL(38,0))) AS BIGINT) AS "x"`, `("score" + 1) AS "y"`)
+	// A column an earlier update computed keeps its kind (2026-10-31): an
+	// int expression, an integer -set and -set-field of an int are
+	// checked later; a float result and a column overwritten with a
+	// string are not.
+	derived := mustDialect(t, dialectDataFusion, "ssql from range 3",
+		"ssql update -set-expr m 'n * 2' -set one 1 -set-field k n -set-expr f 'n / 2' -set-expr s 'string(n)'",
+		"ssql update -set-expr a 'm + one + k' -set-expr b 'f + 1' -set-expr c 's + s'")
+	wantAll(t, derived,
+		`CAST((CAST(CAST((CAST("m" AS DECIMAL(38,0)) + CAST("one" AS DECIMAL(38,0))) AS BIGINT) AS DECIMAL(38,0)) + CAST("k" AS DECIMAL(38,0))) AS BIGINT) AS "a"`,
+		`("f" + 1) AS "b"`)
+	wantNone(t, derived, `CAST("s" AS DECIMAL(38,0))`)
+	stale := mustDialect(t, dialectDataFusion, "ssql from range 3", "ssql update -set-expr n 'n / 2'", "ssql update -set-expr a 'n + 1'")
+	wantAll(t, stale, `("n" + 1) AS "a"`)
 }
