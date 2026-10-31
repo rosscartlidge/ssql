@@ -1779,6 +1779,8 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 				}
 				i++
 			}
+		case "-follow", "-fewest-hops", "-lowest-sum", "-all-paths", "-sum", "-depth", "-path", "-max-depth", "-both":
+			return fmt.Errorf("join %s has no SQL translation yet — use generate go", args[i])
 		case "-as", "-suffix", "-exclude-left", "-exclude-right":
 			// Silently dropped until v4.108, which changed the columns.
 			return fmt.Errorf("join %s has no SQL translation yet — rename or drop the columns with `rename` / `exclude` after the join, or use generate go", args[i])

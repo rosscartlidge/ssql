@@ -398,7 +398,12 @@ func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 		}
 	}
 	for _, f := range initFrags {
-		b.WriteString("\t" + f.Code + "\n")
+		// A record-mode read (a join that fell back to record mode
+		// over a CSV side file) returns its open error main()-style;
+		// in a func returning iter.Seq it must panic, as the record
+		// renderer rewrites it — the program did not compile until
+		// 2026-10-31.
+		b.WriteString("\t" + replaceForFuncReturn(f.Code) + "\n")
 	}
 	for _, f := range stmtFrags {
 		b.WriteString("\t" + f.Code + "\n")

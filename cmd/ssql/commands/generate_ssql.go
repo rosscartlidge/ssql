@@ -1676,6 +1676,11 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 		rightMovable, leftMovable := true, true
 		for k, a := range cmds[i].JoinArgs {
 			switch a {
+			case "-follow":
+				// A traversal overwrites the node field and emits a row
+				// per route: a predicate after it is about routes, and
+				// before it about seeds (DFC161).
+				rightMovable, leftMovable = false, false
 			case "-asof", "-asof-on":
 				rightMovable = false
 			case "-type", "-t":
@@ -2469,6 +2474,9 @@ func extractCastFields(args []string) []string {
 }
 
 func extractJoinFields(args []string) ([]string, bool) {
+	if slices.Contains(args, "-follow") {
+		return nil, true // a traversal: the seed's columns pass through, the node field is rewritten
+	}
 	var fields []string
 	i := 0
 	for i < len(args) {

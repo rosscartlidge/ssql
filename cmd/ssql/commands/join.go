@@ -22,6 +22,8 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from users.csv | ssql join orders.jsonl -on user_id order_user_id", "Join on different field names").
 		Example("ssql from data.csv | ssql join <(ssql from kind.csv) -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name", "Multiple lookups from same file").
 		Example("ssql from trades.csv | ssql join quotes.csv -using sym -asof ts", "ASOF join: each trade takes the quote in force at its time (DFC137)").
+		Example("ssql from seeds.csv | ssql join flights.csv -on city src -follow dst -depth hops", "Graph traversal: every city reachable from each seed, by the fewest hops (DFC161)").
+		Example("ssql from seeds.csv | ssql join flights.csv -on city src -follow dst -lowest-sum mins total -path route", "Each city's cheapest route by total mins (Dijkstra)").
 		ClauseDescription("Each clause performs a separate lookup from the right-side file").
 		Flag("-generate", "-g").
 		Bool().
@@ -114,6 +116,65 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("ASOF: no match farther than this (a duration such as 5m for time fields, a number otherwise)").
 		Done().
+		Flag("-follow").
+		String().
+		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Global().
+		Help("Graph traversal: the edge's target field; the join repeats, -on NODE SRC, until no new route is found (DFC161)").
+		Done().
+		Flag("-fewest-hops").
+		Bool().
+		Global().
+		Help("-follow: each node once per seed, by the fewest hops (the default)").
+		Done().
+		Flag("-lowest-sum").
+		Arg("field").
+		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Done().
+		Arg("result").
+		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+		Done().
+		Global().
+		Help("-follow: each node once per seed, by the lowest total of edge FIELD, written to RESULT (Dijkstra; weights must be >= 0)").
+		Done().
+		Flag("-all-paths").
+		Bool().
+		Global().
+		Help("-follow: every simple path (no node twice), every prefix its own row; exponential on a dense graph").
+		Done().
+		Flag("-sum").
+		Arg("field").
+		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Done().
+		Arg("result").
+		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("-follow: the running total of edge FIELD along the route, written to RESULT").
+		Done().
+		Flag("-depth").
+		String().
+		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+		Global().
+		Help("-follow: the hop count, 0 on the seed row").
+		Done().
+		Flag("-path").
+		String().
+		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+		Global().
+		Help("-follow: the nodes visited, seed first, as a list").
+		Done().
+		Flag("-max-depth").
+		Int().
+		Global().
+		Help("-follow: stop at this many hops").
+		Done().
+		Flag("-both").
+		Bool().
+		Global().
+		Help("-follow: the graph is undirected; every edge is usable either way").
+		Done().
 		Flag("FILE").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
@@ -158,6 +219,11 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return err
 			}
 
+			follow, err := parseFollowSpec(ctx)
+			if err != nil {
+				return err
+			}
+
 			// Validate we have at least one join condition (an ASOF join
 			// without one treats the right side as a single series)
 			if len(clauses) == 0 && !asof.active() {
@@ -168,7 +234,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if generation mode is enabled
 			if shouldGenerate(generate) {
-				return generateJoinCode(rightFile, joinType, clauses, opts, asof)
+				return generateJoinCode(rightFile, joinType, clauses, opts, asof, follow)
 			}
 
 			// Read left-side input from stdin (with schema if present)
@@ -189,6 +255,9 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("right-side file %s has no schema header — pipe through ssql first: ssql join <(ssql from jsonl %s) ...", rightFile, rightFile)
 			}
 
+			if follow.active() {
+				return execFollowJoin(ctx, leftRecords, leftSchema, rightSeq, rightSchema, clauses, follow, joinType, opts, asof)
+			}
 			if asof.active() {
 				return execAsofJoin(ctx, leftRecords, leftSchema, rightSeq, rightSchema, clauses, asof, joinType, opts)
 			}
@@ -541,7 +610,7 @@ func parseJoinClauses(clauses []cf.Clause) []ssql.LookupClause {
 // Handles two scenarios:
 // 1. Direct JSONL file: generates a simple function to read the file
 // 2. Process substitution (/dev/fd/N): wraps subprocess fragments into a function
-func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, opts joinOptions, asof asofSpec) error {
+func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, opts joinOptions, asof asofSpec, follow followSpec) error {
 	// Read all previous code fragments from stdin (if any)
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
@@ -587,7 +656,8 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		leftKeys = append(leftKeys, asof.leftTime)
 		rightKeys = append(rightKeys, asof.rightTime)
 	}
-	pathKey := nestedPathIn(leftSchema, leftKeys...)
+	// A traversal has no typed form yet: it joins in record mode.
+	pathKey := nestedPathIn(leftSchema, leftKeys...) || follow.active()
 	// A right side whose last stage is record-shaped joins in record mode
 	// too (the func returns records; it exited as "no typed schema" before).
 	typedJoin := func(rightSchema *lib.TypedSchema) bool {
@@ -623,6 +693,14 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 			return lib.WriteErrorAndExit(getCommandString(), err)
 		}
 		return generateAsofStmt(inputVar, funcName, cfg)
+	}
+	// Record-mode traversal: the same, with ssql.Follow.
+	followRecord := func(rightFields []string, rightType func(string) string) error {
+		cfg, err := followCheck(leftFields, rightFields, rightType, clauses, follow, joinType, opts, asof)
+		if err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		return generateFollowStmt(inputVar, funcName, cfg)
 	}
 
 	// Check if rightFile is a non-regular file (e.g., /dev/fd/N, named pipe)
@@ -661,10 +739,13 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 			// gets the typed→record adapters appended.
 			rightFields := fragmentFields(rightFragments)
 			rightFragments = lib.EndInRecords(rightFragments)
-			if asof.active() {
+			if asof.active() || follow.active() {
 				funcFrag := lib.NewFuncFragment(funcName, rightFragments, subCommandStr)
 				if err := lib.WriteCodeFragment(funcFrag); err != nil {
 					return fmt.Errorf("writing func fragment: %w", err)
+				}
+				if follow.active() {
+					return followRecord(rightFields, noType)
 				}
 				return asofRecord(rightFields, noType)
 			}
@@ -746,7 +827,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 	}
 
 	var plan joinPlan
-	if !asof.active() {
+	if !asof.active() && !follow.active() {
 		plan, err = resolve(sideFileFields(rightFile))
 		if err != nil {
 			return err
@@ -793,11 +874,14 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		return fmt.Errorf("writing func fragment: %w", err)
 	}
 
-	if asof.active() {
+	if asof.active() || follow.active() {
 		rightType := noType
 		var rightFields []string
 		if _, schema, err := readAuxInput(rightFile); err == nil && schema != nil {
 			rightFields, rightType = schema.Fields, schema.TypeOf
+		}
+		if follow.active() {
+			return followRecord(rightFields, rightType)
 		}
 		return asofRecord(rightFields, rightType)
 	}
