@@ -102,8 +102,21 @@ printf 'city\nSYD\n' | ssql from csv - \
 | `-sum FIELD NAME` | the running total of an edge field along the path; same spelling as `window -sum field result` |
 | `-path NAME` | the nodes visited, seed first, as a list |
 | `-max-depth N` | stop expanding at N hops |
-| `-first` | each node once per seed, at the first round it is reached (BFS: fewest hops) |
+| `-fewest-hops` | each node once per seed, at the first round it is reached (BFS: fewest hops) |
 | `-shortest NAME` | each node once per seed, by the least `-sum` NAME (Dijkstra; a negative edge weight is an error, not a wrong answer) |
+
+`-shortest NAME` minimises the accumulator NAME, which must be a `-sum`.
+Dijkstra is correct only when extending a route never makes its value
+better, and a sum of non-negative weights has that property, which is
+why a negative weight is an error. `-fewest-hops` is the same search
+with every edge weighing 1. Other accumulators with that property would
+get their own modes later, each with a reason: `-widest NAME` over a
+`-min` (the route whose narrowest edge is widest, e.g. bandwidth), or the
+most reliable route over a `-product` of probabilities. An average does
+not have the property: a cheap leg can lower a route's average, so the
+best route to a city need not extend the best route to the city before
+it. Averages are never a search mode; compute one over the routes
+afterwards.
 
 Later (not v1), each needing a reason first: `-min`/`-max FIELD NAME`
 (bottleneck routes), `-product FIELD NAME` (bill-of-materials quantity
@@ -118,20 +131,20 @@ one, and a traversal does not combine its rows that way.
 
 1. **Default mode is all simple paths** (no node twice on one path). This
    matches the CTE and guarantees termination on a finite graph, but the
-   number of paths can be exponential. `-first` and `-shortest` are
+   number of paths can be exponential. `-fewest-hops` and `-shortest` are
    linear and almost always what someone wants for "how do I reach X".
-   *Open: should the default be `-first`, with `-paths` naming the
+   *Open: should the default be `-fewest-hops`, with `-paths` naming the
    exponential mode?* My lean is yes: the cheap mode should be the
    default. That breaks parity with the CTE example, and the docs would
    say so.
 2. **The seed row is emitted** (depth 0), like the CTE's anchor.
 3. **Ties are semantic, not order-dependent.** Every lane must choose the
-   same row, so `-first` breaks ties by fewest hops and then the path
+   same row, so `-fewest-hops` breaks ties by fewest hops and then the path
    compared element by element, and `-shortest` by least sum, then fewest
    hops, then path. Neither rule depends on file order, which the SQL
    lanes do not preserve.
 4. **Output order**: seed order, then the traversal order (depth-first in
-   edge-file order for paths; by round for `-first`; by settled distance
+   edge-file order for paths; by round for `-fewest-hops`; by settled distance
    for `-shortest`). The SQL lanes are unordered, so equivalence compares
    a multiset unless the pipeline sorts.
 5. **`-sum` is an integer sum, so it is int128** (DFC155 C: window and
@@ -149,7 +162,7 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
   Record]`), with the CLI a thin layer over it. The edges are
   materialised into an adjacency map in file order, `map[key][]edge`,
   like the hash side of a join. Paths mode is a DFS per seed with an
-  on-path set; `-first` is a BFS per seed with a visited set; `-shortest`
+  on-path set; `-fewest-hops` is a BFS per seed with a visited set; `-shortest`
   is Dijkstra with a heap. Memory is O(E), plus O(depth) for paths or
   O(V) for the visited set.
 - **Record codegen**: one call per stage (`ssql.Follow(...)`), per the
@@ -161,12 +174,12 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
   BFS frontier is a later measurement. **`-path` is a list column**, and
   the typed tier has no list columns (DFC145, deferred), so `-path`
   refuses typed and falls back to record codegen, loudly. `-depth`,
-  `-sum`, `-first` and `-shortest` are all scalar and typed from day one.
+  `-sum`, `-fewest-hops` and `-shortest` are all scalar and typed from day one.
 - **`generate sql`**: a recursive CTE whose anchor is the query so far
   (the seeds, with a seed id from `row_number()` so several seeds stay
   apart), whose step joins the edges, and whose guard is the path list.
   DFC156 already put `WITH RECURSIVE` into the assembler.
-  - DuckDB: `list_contains` guard. `-first`/`-shortest` use `USING KEY
+  - DuckDB: `list_contains` guard. `-fewest-hops` and `-shortest` use `USING KEY
     (seed, node)` with an in-round `QUALIFY row_number() … = 1` carrying
     the §3 tie rule. **The obvious `USING KEY` form is wrong**: without
     the in-round dedupe, two candidates for one node in the same round
@@ -174,7 +187,7 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
     reported DRW at 565 min instead of 385. The QUALIFY form below gets
     385. Exactly the kind of bug the equivalence gate exists for.
   - Postgres 16: `<> ALL(path)` array guard (or the `CYCLE` clause). There
-    is no `USING KEY`, so `-first`/`-shortest` refuse rather than
+    is no `USING KEY`, so `-fewest-hops` and `-shortest` refuse rather than
     enumerate every path and pick (exponential, where the exec lane is
     linear). `-path` output refuses because the dialect refuses nested
     values (DFC160); the guard array is internal and fine. Not run here
@@ -218,7 +231,7 @@ margin. That belongs in the scale gate.
 - Watch it fail: drop the in-round QUALIFY from the DuckDB `-shortest`
   form (the 565-minute bug), and drop the on-path guard (it must hit
   `-max-depth` or the timeout loudly, never hang the gate).
-- Scale gate (DFC113): `-first` and `-shortest` on a ~1 M-edge random
+- Scale gate (DFC113): `-fewest-hops` and `-shortest` on a ~1 M-edge random
   graph with a wall-time ceiling; paths mode on a layered DAG with a
   known path count.
 - Overflow: `-sum` past 2^63 is an int128, not an error, in every lane
@@ -226,10 +239,12 @@ margin. That belongs in the scale gate.
 
 ## 7. Open questions for Ross
 
-1. Default mode: all simple paths (CTE parity) or `-first` (cheap)?
-   Lean: `-first`.
+1. Default mode: all simple paths (CTE parity) or `-fewest-hops` (cheap)?
+   Lean: `-fewest-hops`.
 2. Spelling: `-follow` (lean), `-to` or `-next`?
-3. Are `-first`/`-shortest` refusals on Postgres and DataFusion
+   (Decided 2026-10-31, Ross: the BFS mode is `-fewest-hops`, not
+   `-first`, which read as "first in the file".)
+3. Are `-fewest-hops` and `-shortest` refusals on Postgres and DataFusion
    acceptable for v1, or do we want the exponential enumerate-and-pick
    form there with a warning?
 4. Is a single-seed `-start VALUE` convenience worth adding, so the
