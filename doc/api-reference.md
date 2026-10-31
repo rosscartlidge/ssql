@@ -1126,6 +1126,48 @@ quoted := ssql.AsofJoin(quotes, ssql.AsofConfig{
 
 The CLI form is `join quotes.csv -using sym -asof ts -tolerance 5m`.
 
+### Follow
+
+```go
+type FollowMode int // FollowFewestHops (default), FollowLowestSum, FollowAllPaths
+type FollowSum struct{ Field, Name string } // running total of edge Field, written to Name
+type FollowConfig struct {
+    NodeField, SrcField, DstField string // seed's node; the edge's endpoints
+    Mode                          FollowMode
+    Lowest                        FollowSum   // the sum FollowLowestSum minimises
+    Sums                          []FollowSum
+    DepthField, PathField         string      // hop count; nodes visited, seed first (a list)
+    MaxDepth                      int         // > 0: stop at that many hops (not with FollowLowestSum)
+    Both                          bool        // undirected: every edge usable either way
+}
+func Follow(edges iter.Seq[Record], cfg FollowConfig) Filter[Record, Record]
+```
+
+Graph traversal: a join run to a fixpoint ([DFC161](research/dfc161_graph_traversal_join_follow.md)).
+Each seed row's `NodeField` is a starting node; the edges are read once
+into an adjacency map, and every round joins the routes the last round
+found. One output row per route the mode keeps: the seed's columns with
+`NodeField` set to the node reached, then the accumulators (depth, the
+sums, the lowest sum, the path). The seed is the depth-0 row.
+
+`FollowFewestHops` reaches each node once by the fewest hops (BFS),
+`FollowLowestSum` once by the lowest total (Dijkstra; an absent or
+negative weight is an error), and `FollowAllPaths` emits every simple
+path. Ties are broken by value — the least (hops, path, sums), or
+(lowest, hops, path, sums) — never by input order. Integer totals are
+`Int128`; an absent weight makes a total absent from that hop on.
+
+```go
+routes := ssql.Follow(flights, ssql.FollowConfig{
+    NodeField: "city", SrcField: "src", DstField: "dst",
+    Mode:   ssql.FollowLowestSum,
+    Lowest: ssql.FollowSum{Field: "mins", Name: "total"},
+    DepthField: "hops",
+})(seeds)
+```
+
+The CLI form is `join flights.csv -on city src -follow dst -lowest-sum mins total -depth hops`.
+
 ### Except and Intersect
 
 ```go

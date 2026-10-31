@@ -158,7 +158,7 @@ one, and a traversal does not combine its rows that way.
    a multiset unless the pipeline sorts.
 5. **`-sum` is an integer sum, so it is int128** (DFC155 C: window and
    pivot sums already are, and a running total along a path is the same
-   thing); floats stay float64. SQL casts to HUGEINT / NUMERIC(38) /
+   thing); floats stay float64 (§12). SQL casts to HUGEINT / NUMERIC(38) /
    DECIMAL(38,0) in the anchor.
 6. **The seed's node value is overwritten.** To keep the origin, copy it
    first (`update -set-field origin city`) or read `-path`'s first element.
@@ -169,6 +169,32 @@ one, and a traversal does not combine its rows that way.
    doubled: doubling would emit every `-all-paths` route through it
    twice. The tie rules are unchanged. Without `-both`, duplicate edge
    rows stay as they are, as a join keeps duplicate right rows.
+
+### Pinned for the build (2026-10-31)
+
+8. **Node equality** is `FieldsKey`'s: numbers by value (an int 3 and a
+   float 3 are one node), anything else by its printed value, and a
+   number never equals text. An absent or empty node is no node: the
+   seed row is still emitted at depth 0, it just goes nowhere. An edge
+   with no target is dropped (SQL's step: `NOT list_contains(path,
+   NULL)` is NULL, so no row).
+9. **The full tie keys** carry the sums last: `-fewest-hops` keeps the
+   least (hops, path, sums) per node, `-lowest-sum` the least (lowest,
+   hops, path, sums). Without the sums, two duplicate edges with
+   different weights would give one path two answers. Extending a route
+   by a weight ≥ 0 never lowers either key, and appending one edge to
+   two routes keeps their order, so BFS and Dijkstra with these keys are
+   exact.
+10. **Columns** come in a fixed order after the seed's columns: depth,
+    the `-sum`s in flag order, the `-lowest-sum` total, then the path.
+11. **`-max-depth` is refused with `-lowest-sum`.** The cheapest route
+    within N hops is not what Dijkstra finds: it keeps only the cheapest
+    route to each intermediate node, and that route may be too long to
+    extend. The SQL keyed form has the same flaw.
+12. **Weights and kinds.** A total is an `Int128` while the edge field
+    holds integers, a decimal once one is a decimal, and a float64 (plain
+    addition, as the SQL step adds) once one is a float. The kind is the
+    column's, decided over all edges, as an SQL column has one type.
 
 ## 4. Backends
 
