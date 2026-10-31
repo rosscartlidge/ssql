@@ -2,7 +2,8 @@
 
 Reference: DFC136
 Created: 2026-09-23
-Last modified: 2026-10-26
+Last modified: 2026-10-31
+Deprecated-by: [DFC160](./dfc160_duckdb_feature_comparison_2026_10.md)
 
 [Back to Index](./README.md)
 

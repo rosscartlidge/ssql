@@ -3,7 +3,7 @@
 **Unix pipelines for tabular data.** Read a file, filter, join, group, sort, and
 write it back, one small command per step, with tab completion that knows
 your columns. Then, when it matters, compile the same pipeline to a
-parallel Go program that beats DuckDB on the workloads it covers.
+parallel Go program, or a Rust program on DataFusion, as fast as DuckDB or faster.
 
 ```bash
 ssql from orders.csv | ssql where -if status eq shipped | ssql join customers.csv -using customer_id \
@@ -54,11 +54,12 @@ against the current release, so what you read is what happens.
 - **The same pipeline is a compiled program.** `ssql generate go -run
   -pipeline 'ssql from … | ssql group-by … | ssql to csv'` builds and
   runs a standalone parallel Go binary with struct types and no
-  reflection. On a 14.6 M-row parquet cube: ssql 0.28 s, DuckDB 0.96 s,
-  a quarter of the memory ([measured](doc/performance.md)).
+  reflection; `generate rust` writes the same pipeline for DataFusion. On a
+  14.6 M-row parquet cube: Go 0.26 s, Rust 0.18 s, DuckDB 0.35 s
+  ([measured](doc/performance.md)).
 - **The same pipeline is SQL, too.** `ssql generate sql` emits DuckDB,
   Postgres or DataFusion SQL from the stages you typed, and the project's
-  tests run every pipeline five ways and assert they agree.
+  tests run every pipeline nine ways and assert they agree.
 - **Pipelines are data.** A pipeline is an argv, never text a shell parses,
   so a program can build one from untrusted input with no query builder
   and no injection ([JSON documents](doc/cli-codelab.md#9-pipelines-from-programs), `ssql run`).
@@ -70,7 +71,7 @@ against the current release, so what you read is what happens.
 
 Honest limits: no persistent database, no SQL as the interface, no
 correlated subqueries. The full comparison with DuckDB is
-[DFC136](doc/research/dfc136_duckdb_feature_comparison_2026_09.md).
+[DFC160](doc/research/dfc160_duckdb_feature_comparison_2026_10.md).
 
 ## Learning Path
 
