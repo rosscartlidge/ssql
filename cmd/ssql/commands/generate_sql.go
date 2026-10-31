@@ -2922,6 +2922,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		kind     string // the value's kind when the translator can see it ("int"), else ""
 	}
 	var assignments []assignment
+	var reads []string // every field the update reads: none may be one it creates (checked below)
 	var currentConds []string
 	currentNot := false
 	// clauseConds is the clause's condition group as the CASE arm sees
@@ -2968,6 +2969,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				cond = sqlNot(cond)
 			}
 			currentConds = append(currentConds, cond)
+			reads = append(reads, args[i+1], args[i+3])
 			i += 4
 		case "-set-field":
 			// The target takes the source column's value; an absent source
@@ -2981,6 +2983,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				valueSQL: quoteIdent(args[i+2]),
 				kind:     sqlColumnKinds[args[i+2]],
 			})
+			reads = append(reads, args[i+2])
 			i += 3
 		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
@@ -2991,6 +2994,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				cond = sqlNot(cond) // ssql negation: true for an absent value (DFC128 §6g; update missed it — DFC133)
 			}
 			currentConds = append(currentConds, cond)
+			reads = append(reads, args[i+1])
 			i += 4
 		case "-if-expr", "-x", "+if-expr", "+x":
 			if i+1 >= len(args) {
@@ -3004,6 +3008,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				cond = sqlNot(cond) // ssql negation: true for an absent value (DFC128 §6g; update missed it — DFC133)
 			}
 			currentConds = append(currentConds, cond)
+			reads = append(reads, exprFieldRefs(args[i+1])...)
 			i += 2
 		case "-set", "-s":
 			if i+2 >= len(args) {
@@ -3037,6 +3042,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				sqlTimeColumns[args[i+1]] = true
 				delete(sqlTextTimeColumns, args[i+1])
 			}
+			reads = append(reads, exprFieldRefs(args[i+2])...)
 			assignments = append(assignments, assignment{
 				clause:   clauseIdx,
 				field:    args[i+1],
@@ -3062,6 +3068,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				field:    se.field,
 				valueSQL: valueSQL,
 			})
+			reads = append(reads, args[i+2])
 			i += 4
 		case "+", "-":
 			// Clause separator (autocli's "+"; a bare "-" from older pipelines):
@@ -3077,6 +3084,26 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		}
 	}
 	closeClause()
+
+	// Every assignment sees the row as it entered (`ssql conventions
+	// -category evaluation`): a field this update creates is unknown to
+	// its own conditions and expressions, and exec, record and typed stop
+	// on it. One SELECT list is the wrong shape to say so: DuckDB resolves
+	// an earlier select-list alias (`SELECT *, 100 AS t, t + 1 AS u` gave
+	// u = 101 where exec reports t unknown; found 2026-10-31), Postgres
+	// and DataFusion fail in their own words.
+	if q.columns != nil {
+		for _, name := range reads {
+			if slices.Contains(q.columns, name) {
+				continue
+			}
+			for _, a := range assignments {
+				if a.field == name {
+					return fmt.Errorf("update references unknown field %q: this update creates it, and an update's assignments all see the row as it entered (ssql conventions -category evaluation) — pipe into a second update to read it (available: %s)", name, strings.Join(q.columns, ", "))
+				}
+			}
+		}
+	}
 
 	// Group assignments by target field to build a single CASE expression per field
 	fieldCases := make(map[string][]assignment)

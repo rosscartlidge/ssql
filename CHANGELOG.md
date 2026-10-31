@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`generate sql` let an update read a field it creates.** An update's assignments all see the row as it entered (`ssql conventions -category evaluation`), so `update -set t 100 -set-expr u 't + 1'` is an error in exec, record and typed; the SQL put both in one select list, where DuckDB resolves the earlier alias and returned `u = 101` (Postgres and DataFusion failed in their own words). Every dialect now refuses a condition, expression, `-set-field` or `has`/`getOr` that names a field the same update creates, and says to pipe into a second update.
+
 - **Integer overflow on DataFusion still wrapped over a column an earlier `update` computed.** `update -set-expr c 'b * 2' | update -set-expr d 'a + c'` gave a wrapped `d` from `generate sql -dialect datafusion` and `generate rust` where exec stopped: the translator only checked operands whose kind it could see, and it knew source columns only. `update` now records an integer result's kind (`-set-expr` over ints, an integer `-set`, `-set-field` of an int), and a column overwritten with something else loses the int claim. Join and fold scopes, parameters and unsampled sources remain (TODO).
 
 ## [4.134.0] - 2026-10-30

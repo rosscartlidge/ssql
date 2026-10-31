@@ -82,6 +82,56 @@ func exprToSQLKind(expression string, params map[string]ExprParam) (string, stri
 	return sql, kind, nil
 }
 
+// exprFieldRefs lists the fields an expression reads: an identifier that
+// occurs other than as a call's function name (exec's rule,
+// runtime.extractIdentifiers: `len(len)` reads the field, `len(s)` does
+// not), and the field has("f") or getOr("f", d) names. An expression
+// that does not parse yields nothing; its translation reports the error.
+func exprFieldRefs(expression string) []string {
+	tree, err := parser.Parse(expression)
+	if err != nil {
+		return nil
+	}
+	v := &fieldRefVisitor{uses: map[string]int{}, calls: map[string]int{}}
+	ast.Walk(&tree.Node, v)
+	var refs []string
+	for _, name := range v.order {
+		if v.uses[name] > v.calls[name] {
+			refs = append(refs, name)
+		}
+	}
+	return refs
+}
+
+type fieldRefVisitor struct {
+	order       []string
+	uses, calls map[string]int
+}
+
+func (v *fieldRefVisitor) Visit(node *ast.Node) {
+	switch n := (*node).(type) {
+	case *ast.IdentifierNode:
+		if v.uses[n.Value] == 0 {
+			v.order = append(v.order, n.Value)
+		}
+		v.uses[n.Value]++
+	case *ast.CallNode:
+		id, ok := n.Callee.(*ast.IdentifierNode)
+		if !ok {
+			return
+		}
+		v.calls[id.Value]++
+		if (id.Value == "has" || id.Value == "getOr") && len(n.Arguments) > 0 {
+			if f, ok := n.Arguments[0].(*ast.StringNode); ok {
+				if v.uses[f.Value] == 0 {
+					v.order = append(v.order, f.Value)
+				}
+				v.uses[f.Value]++
+			}
+		}
+	}
+}
+
 // exprBinaryOps maps expr-lang binary operators with a direct SQL spelling.
 // Note `!=`→`<>` (portable), `&&`/`||`→AND/OR (SQL `||` is concat), and
 // `^`/`**`→`**` (DuckDB power operator).

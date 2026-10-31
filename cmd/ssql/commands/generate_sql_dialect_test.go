@@ -405,3 +405,33 @@ func TestDataFusionCheckedIntArith(t *testing.T) {
 	stale := mustDialect(t, dialectDataFusion, "ssql from range 3", "ssql update -set-expr n 'n / 2'", "ssql update -set-expr a 'n + 1'")
 	wantAll(t, stale, `("n" + 1) AS "a"`)
 }
+
+// An update's assignments all see the row as it entered (ssql conventions
+// -category evaluation): a field the update creates is unknown to its own
+// conditions and expressions, and every dialect refuses it the way exec
+// does. DuckDB resolved the earlier select-list alias and gave u = 101 for
+// `update -set t 100 -set-expr u 't + 1'` (2026-10-31). Reading it after
+// a pipe, reassigning an input column from itself, and a field named like
+// a function the expression only calls are all still translated.
+func TestUpdateCannotReadItsOwnNewField(t *testing.T) {
+	src := "ssql from " + dialectFixture(t)
+	refused := []string{
+		"ssql update -set t 100 -set-expr u 't + 1'",
+		"ssql update -set-expr c 'age * 2' -set-expr d 'age + c'",
+		"ssql update -set t 100 + -if t eq 100 -set u 1 + -set u 2",
+		"ssql update -set t 1 -if-expr 't == 1' -set u 1 + -set u 2",
+		"ssql update -set t 1 -set-expr u 'has(\"t\") ? 1 : 0'",
+		"ssql update -set t 1 -set-field u t",
+		"ssql update -set t 1 -if-field age eq t -set u 1 + -set u 2",
+	}
+	for _, d := range []sqlDialect{dialectDuckDB, dialectPostgres, dialectDataFusion} {
+		for _, u := range refused {
+			if sql, err := assembleDialect(t, d, src, u); err == nil || !strings.Contains(err.Error(), "this update creates it") {
+				t.Errorf("%s: %s: want the own-new-field refusal, got err=%v\n%s", d, u, err, sql)
+			}
+		}
+		mustDialect(t, d, src, "ssql update -set t 100", "ssql update -set-expr u 't + 1'")
+		mustDialect(t, d, src, "ssql update -set age 12 -set-expr age 'age * 2'")
+		mustDialect(t, d, src, "ssql update -set-expr age 'age + len(\"s\")' -set-expr len 'age'")
+	}
+}
