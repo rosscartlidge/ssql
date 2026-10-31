@@ -136,6 +136,11 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		// rust rows; the forms above end in limit -last, which SQL refuses)
 		"window_ordered_sum_widens": {bin + " from range 2 -start 9223372036854775806 | " + bin + " window -order n -sum n t | " + bin + " where -if n eq 9223372036854775807", "18446744073709551613"},
 		"window_ordered_sliding":    {bin + " from range 3 -start 9007199254740993 | " + bin + " window -order n -sum n t -preceding 1 | " + bin + " where -if n eq 9007199254740995", "18014398509481989"},
+		// a route's total along join -follow (DFC161): two hops weighing
+		// 2^63 − 2 and 2^63 − 1 — an int128, not an overflow; the keyed
+		// default mode runs on DuckDB, -all-paths on DataFusion and rust
+		"follow_sum_widens":     {bin + " from range 1 -start 0 | " + bin + " join <(" + bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr src 'n - 9223372036854775806' -set-expr dst 'n - 9223372036854775805' -set-expr w n | " + bin + " exclude n) -on n src -follow dst -sum w t | " + bin + " where -if n eq 2", "18446744073709551613"},
+		"follow_all_sum_widens": {bin + " from range 1 -start 0 | " + bin + " join <(" + bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr src 'n - 9223372036854775806' -set-expr dst 'n - 9223372036854775805' -set-expr w n | " + bin + " exclude n) -on n src -follow dst -all-paths -sum w t | " + bin + " where -if n eq 2", "18446744073709551613"},
 		// E: decimal sums past 2^53 cents, exact at the scale
 		"dec_group_by_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " group-by -sum n t", "27021597764222982.00"},
 		"dec_expr_sum":     {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "27021597764222982.00"},
@@ -220,7 +225,7 @@ func TestIntOverflowEveryLane(t *testing.T) {
 				}
 				check(lane, out)
 			})
-			if duckdb != "" && strings.HasPrefix(name, "group_by_sum") { // the window forms need -order for SQL; the -expr form has no translation
+			if duckdb != "" && (strings.HasPrefix(name, "group_by_sum") || strings.HasPrefix(name, "follow_")) { // the window forms need -order for SQL; the -expr form has no translation
 				sql, err := shell("export SSQL_MODE=record && " + c.pipeline + " | " + bin + " to jsonl | " + bin + " generate sql")
 				if err != nil {
 					t.Fatalf("generate sql: %v\n%s", err, sql)

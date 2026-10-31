@@ -101,6 +101,33 @@ func scaleDir(t *testing.T) string {
 
 // budget runs cmdline in dir and fails the test if wall time exceeds
 // ceiling (or the command errors).
+// writeFollowGraphs writes the join -follow fixtures into dir once: a
+// pseudo-random graph (1 M edges, 200 k nodes, 5 out-edges each, weights
+// 1..97) and a layered DAG (13 layers of 3, complete between layers).
+func writeFollowGraphs(t *testing.T, dir string) {
+	t.Helper()
+	graph := filepath.Join(dir, "follow_graph.csv")
+	if _, err := os.Stat(graph); err == nil {
+		return
+	}
+	var b bytes.Buffer
+	b.WriteString("src,dst,w\n")
+	for n := 0; n < 1_000_000; n++ {
+		fmt.Fprintf(&b, "%d,%d,%d\n", n%200000, (n*7919+(n/200000)*104729+13)%200000, n%97+1)
+	}
+	var d bytes.Buffer
+	d.WriteString("src,dst\n")
+	for n := 0; n < 108; n++ {
+		fmt.Fprintf(&d, "%d,%d\n", (n/9)*3+(n/3)%3, (n/9+1)*3+n%3)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "follow_dag.csv"), d.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(graph, b.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func budget(t *testing.T, dir, cmdline string, ceiling time.Duration) time.Duration {
 	t.Helper()
 	c := exec.Command("bash", "-c", cmdline)
@@ -184,6 +211,24 @@ func TestScaleBudgets(t *testing.T) {
 		// benchmark of DFC157 §4 was still running at a 30-minute cap).
 		// One pass now; the budget covers the materialisation and sort.
 		budget(t, dir, bin+" from csv big.csv | "+bin+" window -partition dept -order id -sum score run -dense-rank dr | "+bin+" count", 60*time.Second)
+	})
+	t.Run("follow", func(t *testing.T) {
+		// join -follow (DFC161) over a 1 M-edge graph of 200 k nodes,
+		// every node reachable from 0: the BFS and Dijkstra visit each
+		// edge once (≈ 2 s and 3 s exec, 3 s typed with the build cached;
+		// a per-round rescan of the frontier or of the edges is
+		// quadratic and blows the ceiling). -all-paths over a DAG of 13
+		// layers of 3 (each node to every node of the next layer) must
+		// stream its (3^13 − 1)/2 routes depth first. The count is
+		// asserted too: a walk that stops early is fast.
+		writeFollowGraphs(t, dir)
+		repo, _ := filepath.Abs("../..")
+		seed := "printf 'node\\n0\\n' | " + bin + " from csv - | "
+		budget(t, dir, seed+bin+" join follow_graph.csv -on node src -follow dst -depth d | "+bin+" count | grep -qx 200000", 30*time.Second)
+		budget(t, dir, seed+bin+" join follow_graph.csv -on node src -follow dst -lowest-sum w t | "+bin+" count | grep -qx 200000", 30*time.Second)
+		budget(t, dir, seed+bin+" join follow_dag.csv -on node src -follow dst -all-paths -depth d | "+bin+" count | grep -qx 797161", 30*time.Second)
+		budget(t, dir, "printf 'node\\n0\\n' > follow_seed.csv && SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from csv follow_seed.csv | "+bin+" join follow_graph.csv -on node src -follow dst -lowest-sum w t | "+bin+" count' | grep -qx 200000", 90*time.Second)
 	})
 	t.Run("window-running-frame-typed", func(t *testing.T) {
 		// The typed window had the same scan (typed/window.go); same

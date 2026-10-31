@@ -151,6 +151,14 @@ func equivFoldDuckDBOnly() map[string]string {
 	return map[string]string{"datafusion": why, "postgres": why}
 }
 
+// equivFollowDuckDBOnly skips the SQL lanes a keyed traversal (or a
+// -path list) does not translate to: Postgres and DataFusion have no
+// keyed recursion (DFC161 §4); the rust lane follows datafusion.
+func equivFollowDuckDBOnly() map[string]string {
+	why := "join -follow's keyed modes and -path are DuckDB's (USING KEY, lists; DFC161 §4)"
+	return map[string]string{"datafusion": why, "postgres": why}
+}
+
 // equivCommon is a filtered to the names also in b, keeping a's order.
 func equivCommon(a, b []string) []string {
 	in := make(map[string]bool, len(b))
@@ -3195,6 +3203,176 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | ` +
 			`{{.bin}} group-by dept city status -count n -sum salary total -avg age mean_age -min level lo -max level hi -rollup`,
 		Ordered: false,
+	},
+	{
+		// Graph traversal (DFC161), the default mode: each city once per
+		// seed by the fewest hops; PER at 2 hops via BNE although 355 via
+		// MEL and ADL is cheaper. The seed's other columns (label) carry
+		// through.
+		Name:     "follow_fewest_hops",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -depth hops -sum mins mins`,
+		Golden: []map[string]any{
+			{"city": "SYD", "label": "home", "hops": 0, "mins": 0},
+			{"city": "BNE", "label": "home", "hops": 1, "mins": 95},
+			{"city": "MEL", "label": "home", "hops": 1, "mins": 90},
+			{"city": "CNS", "label": "home", "hops": 2, "mins": 235},
+			{"city": "PER", "label": "home", "hops": 2, "mins": 425},
+			{"city": "ADL", "label": "home", "hops": 2, "mins": 165},
+			{"city": "HBA", "label": "home", "hops": 2, "mins": 165},
+			{"city": "DRW", "label": "home", "hops": 3, "mins": 385},
+			{"city": "PER", "label": "west", "hops": 0, "mins": 0},
+			{"city": "DRW", "label": "west", "hops": 1, "mins": 210},
+		},
+		Skip: equivFollowDuckDBOnly(),
+	},
+	{
+		// Dijkstra: PER at 355 via MEL and ADL, DRW at 385 via CNS (DFC161
+		// §5, the form whose naive USING KEY version reported 565).
+		Name:     "follow_lowest_sum",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -lowest-sum mins total -depth hops`,
+		Golden: []map[string]any{
+			{"city": "SYD", "label": "home", "hops": 0, "total": 0},
+			{"city": "MEL", "label": "home", "hops": 1, "total": 90},
+			{"city": "BNE", "label": "home", "hops": 1, "total": 95},
+			{"city": "ADL", "label": "home", "hops": 2, "total": 165},
+			{"city": "HBA", "label": "home", "hops": 2, "total": 165},
+			{"city": "CNS", "label": "home", "hops": 2, "total": 235},
+			{"city": "PER", "label": "home", "hops": 3, "total": 355},
+			{"city": "DRW", "label": "home", "hops": 3, "total": 385},
+			{"city": "PER", "label": "west", "hops": 0, "total": 0},
+			{"city": "DRW", "label": "west", "hops": 1, "total": 210},
+		},
+		Skip: equivFollowDuckDBOnly(),
+	},
+	{
+		// Every simple route: the recursive CTE's 11 rows from SYD (DRW
+		// three times) plus PER's two. Runs on every SQL dialect.
+		Name:     "follow_all_paths",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -all-paths -depth hops -sum mins mins`,
+		Golden: []map[string]any{
+			{"city": "SYD", "label": "home", "hops": 0, "mins": 0},
+			{"city": "BNE", "label": "home", "hops": 1, "mins": 95},
+			{"city": "PER", "label": "home", "hops": 2, "mins": 425},
+			{"city": "DRW", "label": "home", "hops": 3, "mins": 635},
+			{"city": "CNS", "label": "home", "hops": 2, "mins": 235},
+			{"city": "DRW", "label": "home", "hops": 3, "mins": 385},
+			{"city": "MEL", "label": "home", "hops": 1, "mins": 90},
+			{"city": "HBA", "label": "home", "hops": 2, "mins": 165},
+			{"city": "ADL", "label": "home", "hops": 2, "mins": 165},
+			{"city": "PER", "label": "home", "hops": 3, "mins": 355},
+			{"city": "DRW", "label": "home", "hops": 4, "mins": 565},
+			{"city": "PER", "label": "west", "hops": 0, "mins": 0},
+			{"city": "DRW", "label": "west", "hops": 1, "mins": 210},
+		},
+	},
+	{
+		// Ties broken by value, never by file order: the file lists A→C
+		// before A→B, the least path takes D through B; the duplicate A→E
+		// keeps its lighter weight; F→(empty) has no target and is dropped;
+		// Z has no edges. -path has no typed column, so the typed lanes run
+		// it in record mode.
+		Name:     "follow_ties_path",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} join {{.data}}/graph_ties.csv -on city src -follow dst -sum w s -path p`,
+		Golden: []map[string]any{
+			{"city": "A", "s": 0, "p": []any{"A"}},
+			{"city": "B", "s": 1, "p": []any{"A", "B"}},
+			{"city": "C", "s": 1, "p": []any{"A", "C"}},
+			{"city": "E", "s": 2, "p": []any{"A", "E"}},
+			{"city": "D", "s": 2, "p": []any{"A", "B", "D"}},
+			{"city": "F", "s": 3, "p": []any{"A", "E", "F"}},
+			{"city": "C", "s": 0, "p": []any{"C"}},
+			{"city": "D", "s": 1, "p": []any{"C", "D"}},
+			{"city": "Z", "s": 0, "p": []any{"Z"}},
+		},
+		Skip: equivFollowDuckDBOnly(),
+	},
+	{
+		// Undirected (-both): C reaches A backwards along A→C, and B through
+		// A (the least of two 2-hop routes at cost 2).
+		Name:     "follow_ties_lowest_both",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} join {{.data}}/graph_ties.csv -on city src -follow dst -both -lowest-sum w t -depth d`,
+		Golden: []map[string]any{
+			{"city": "A", "d": 0, "t": 0},
+			{"city": "B", "d": 1, "t": 1},
+			{"city": "C", "d": 1, "t": 1},
+			{"city": "E", "d": 1, "t": 2},
+			{"city": "D", "d": 2, "t": 2},
+			{"city": "F", "d": 2, "t": 3},
+			{"city": "C", "d": 0, "t": 0},
+			{"city": "A", "d": 1, "t": 1},
+			{"city": "D", "d": 1, "t": 1},
+			{"city": "B", "d": 2, "t": 2},
+			{"city": "E", "d": 2, "t": 3},
+			{"city": "F", "d": 3, "t": 4},
+			{"city": "Z", "d": 0, "t": 0},
+		},
+		Skip: equivFollowDuckDBOnly(),
+	},
+	{
+		// Undirected, every route of at most two hops; the two parallel A–E
+		// edges are two routes, the self-loop D–D none.
+		Name:     "follow_all_paths_both_depth",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} join {{.data}}/graph_ties.csv -on city src -follow dst -both -all-paths -max-depth 2 -depth d`,
+		Golden: []map[string]any{
+			{"city": "A", "d": 0},
+			{"city": "E", "d": 1},
+			{"city": "F", "d": 2},
+			{"city": "C", "d": 1},
+			{"city": "D", "d": 2},
+			{"city": "B", "d": 1},
+			{"city": "D", "d": 2},
+			{"city": "E", "d": 1},
+			{"city": "F", "d": 2},
+			{"city": "C", "d": 0},
+			{"city": "D", "d": 1},
+			{"city": "B", "d": 2},
+			{"city": "A", "d": 1},
+			{"city": "E", "d": 2},
+			{"city": "B", "d": 2},
+			{"city": "E", "d": 2},
+			{"city": "Z", "d": 0},
+		},
+	},
+	{
+		// Integer node ids: 3 is cheaper through 2 (15) than direct (20).
+		Name:     "follow_int_keys",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_iseeds.csv | {{.bin}} join {{.data}}/graph_int.csv -on node src -follow dst -lowest-sum cost c -depth d`,
+		Golden: []map[string]any{
+			{"node": 1, "d": 0, "c": 0},
+			{"node": 2, "d": 1, "c": 10},
+			{"node": 3, "d": 2, "c": 15},
+		},
+		Skip: equivFollowDuckDBOnly(),
+	},
+	{
+		// Float weights total as float64 in every lane (1.5 + 0.25).
+		Name:     "follow_float_weights",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_xseed.csv | {{.bin}} join {{.data}}/graph_float.csv -on city src -follow dst -all-paths -sum km total`,
+		Golden: []map[string]any{
+			{"city": "X", "total": 0},
+			{"city": "Z", "total": 9.5},
+			{"city": "Y", "total": 1.5},
+			{"city": "Z", "total": 1.75},
+		},
+	},
+	{
+		// The edges from a pipeline: BNE→PER (330) is filtered out, so the
+		// routes through it are gone.
+		Name:     "follow_procsub_edges",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} join <({{.bin}} from csv {{.data}}/graph_flights.csv | {{.bin}} where -if mins lt 300) -on city src -follow dst -all-paths -depth h -sum mins m`,
+		Golden: []map[string]any{
+			{"city": "SYD", "label": "home", "h": 0, "m": 0},
+			{"city": "BNE", "label": "home", "h": 1, "m": 95},
+			{"city": "CNS", "label": "home", "h": 2, "m": 235},
+			{"city": "DRW", "label": "home", "h": 3, "m": 385},
+			{"city": "MEL", "label": "home", "h": 1, "m": 90},
+			{"city": "HBA", "label": "home", "h": 2, "m": 165},
+			{"city": "ADL", "label": "home", "h": 2, "m": 165},
+			{"city": "PER", "label": "home", "h": 3, "m": 355},
+			{"city": "DRW", "label": "home", "h": 4, "m": 565},
+			{"city": "PER", "label": "west", "h": 0, "m": 0},
+			{"city": "DRW", "label": "west", "h": 1, "m": 210},
+		},
 	},
 	{
 		// Direct-file join (`join FILE.csv`, extension-inferred like

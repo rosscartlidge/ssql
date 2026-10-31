@@ -123,9 +123,25 @@ func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 		edgeSrc = sqlSubquery("(" + renderSelect(side) + ")")
 		body := funcFrags[len(funcFrags)-1].FuncBody
 		edgeFields = fragmentFields(body)
-		if len(body) > 0 && body[len(body)-1].AdvisoryTypes != nil {
-			adv := body[len(body)-1].AdvisoryTypes
-			edgeType = func(fl string) string { return advisoryToSchemaType(adv[fl]) }
+		var adv map[string]string
+		if len(body) > 0 {
+			adv = body[len(body)-1].AdvisoryTypes
+		}
+		// The side's translation just recorded the integer columns it
+		// knows (a computed column included); the fragment's advisory
+		// types cover the rest.
+		sideInts := map[string]bool{}
+		for fl, k := range sqlColumnKinds {
+			sideInts[fl] = k == "int"
+		}
+		edgeType = func(fl string) string {
+			if t := advisoryToSchemaType(adv[fl]); t != "" {
+				return t
+			}
+			if sideInts[fl] {
+				return lib.TypeInt
+			}
+			return ""
 		}
 	} else {
 		s, err := dialectSource(filePath)

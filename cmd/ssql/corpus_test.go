@@ -192,6 +192,18 @@ func corpusData(t *testing.T) string {
 			"asof_readings.csv":      "qts,q\n30,r30\n10,r10\n50,r50\n",
 			"asof_events_time.csv":   "ev,at\ne1,2026-01-01T09:04:00Z\ne2,2026-01-01T09:12:00Z\ne3,2026-01-01T08:00:00Z\n",
 			"asof_readings_time.csv": "at,r\n2026-01-01T09:00:00Z,r0\n2026-01-01T09:10:00Z,r10\n",
+			// graph traversal (DFC161): the flights of the DFC, shuffled;
+			// a tie fixture whose file order and path order disagree (A→C
+			// before A→B), a duplicate edge, a self-loop, an edge with no
+			// target, an island; integer node ids; float weights.
+			"graph_flights.csv": "src,dst,mins\nMEL,HBA,75\nCNS,DRW,150\nSYD,BNE,95\nPER,DRW,210\nMEL,SYD,90\nADL,PER,190\nBNE,PER,330\nSYD,MEL,90\nBNE,CNS,140\nMEL,ADL,75\n",
+			"graph_seeds.csv":   "city,label\nSYD,home\nPER,west\n",
+			"graph_ties.csv":    "src,dst,w\nA,E,5\nC,D,1\nA,C,1\nD,D,1\nB,D,1\nE,F,1\nA,B,1\nA,E,2\nG,H,1\nF,,3\n",
+			"graph_tseeds.csv":  "city\nA\nC\nZ\n",
+			"graph_int.csv":     "src,dst,cost\n3,1,1\n1,2,10\n2,3,5\n1,3,20\n",
+			"graph_iseeds.csv":  "node\n1\n",
+			"graph_float.csv":   "src,dst,km\nX,Z,9.5\nY,Z,0.25\nX,Y,1.5\n",
+			"graph_xseed.csv":   "city\nX\n",
 			// SQL-injection strings as VALUES and as a column name that needs
 			// quoting: apostrophes, a comment marker, a statement terminator,
 			// LIKE metacharacters. Every lane must treat them as data.
@@ -544,6 +556,20 @@ func TestPipelineCorpus(t *testing.T) {
 			Name:     "join_direct_file_csv",
 			Pipeline: `{{.bin}} from {{.data}}/orders.csv | {{.bin}} join {{.data}}/customers.csv -using customer_id | {{.bin}} to table`,
 			Contains: []string{"Widget", "customer_3", "US"},
+		},
+		{
+			// Graph traversal (DFC161) through every mode's program: the
+			// typed lanes emit typed.FollowParallel; -path falls back to
+			// record mode inside a typed program (its side reader must
+			// compile there — it did not until 2026-10-31).
+			Name:     "join_follow_lowest_sum",
+			Pipeline: `{{.bin}} from {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -lowest-sum mins total -depth hops | {{.bin}} where -if city eq PER | {{.bin}} to table`,
+			Contains: []string{"355", "west"},
+		},
+		{
+			Name:     "join_follow_path_record_fallback",
+			Pipeline: `{{.bin}} from {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -path route | {{.bin}} to csv`,
+			Contains: []string{`""SYD"",""BNE"",""CNS"",""DRW""`},
 		},
 		{
 			Name:     "join_direct_file_tsv",
