@@ -1735,6 +1735,9 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 	}
 
 	filePath := args[0]
+	if slices.Contains(args[1:], "-follow") {
+		return translateFollowJoin(q, args, funcFrags)
+	}
 	if asofIndex := slices.IndexFunc(args, func(a string) bool { return a == "-asof" || a == "-asof-on" }); asofIndex > 0 {
 		return translateAsofJoin(q, args, funcFrags)
 	}
@@ -1779,8 +1782,6 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 				}
 				i++
 			}
-		case "-follow", "-fewest-hops", "-lowest-sum", "-all-paths", "-sum", "-depth", "-path", "-max-depth", "-both":
-			return fmt.Errorf("join %s has no SQL translation yet — use generate go", args[i])
 		case "-as", "-suffix", "-exclude-left", "-exclude-right":
 			// Silently dropped until v4.108, which changed the columns.
 			return fmt.Errorf("join %s has no SQL translation yet — rename or drop the columns with `rename` / `exclude` after the join, or use generate go", args[i])
