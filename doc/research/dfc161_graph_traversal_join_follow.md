@@ -81,17 +81,20 @@ accumulators, so the output schema is fixed and the loop's input and
 output are the same shape (a recursive CTE requires this too).
 
 ```bash
-# every simple route out of SYD (the CTE above)
+# the default: each city once, by fewest hops (BFS)
 printf 'city\nSYD\n' | ssql from csv - \
-  | ssql join flights.csv -on city src -follow dst \
+  | ssql join flights.csv -on city src -follow dst -depth hops -path path
+
+# each city once, by the lowest total of mins (Dijkstra)
+  … | ssql join flights.csv -on city src -follow dst -lowest-sum mins total
+
+# every simple route out of SYD (the CTE above, 11 rows)
+  … | ssql join flights.csv -on city src -follow dst -all-paths \
          -depth hops -sum mins mins -path path
 
-# best route to each city: fewest hops, then fastest — composed from what exists
+# any other "best" over all paths — composed from what exists
   … | ssql window -partition city -order hops -order mins -row-number rn \
     | ssql where -if rn eq 1 -if city ne SYD
-
-# or let the loop keep only the best: Dijkstra on mins, one row per city
-  … | ssql join flights.csv -on city src -follow dst -sum mins mins -shortest mins
 ```
 
 | flag | meaning |
@@ -102,17 +105,23 @@ printf 'city\nSYD\n' | ssql from csv - \
 | `-sum FIELD NAME` | the running total of an edge field along the path; same spelling as `window -sum field result` |
 | `-path NAME` | the nodes visited, seed first, as a list |
 | `-max-depth N` | stop expanding at N hops |
-| `-fewest-hops` | each node once per seed, at the first round it is reached (BFS: fewest hops) |
-| `-shortest NAME` | each node once per seed, by the least `-sum` NAME (Dijkstra; a negative edge weight is an error, not a wrong answer) |
+| `-fewest-hops` | **the default** (accepted explicitly): each node once per seed, at the first round it is reached (BFS) |
+| `-lowest-sum FIELD NAME` | each node once per seed, by the lowest total of edge FIELD, written to NAME (Dijkstra; a negative edge weight is an error, not a wrong answer) |
+| `-all-paths` | every simple path (no node twice on one path), every prefix its own row: the recursive CTE's result, and exponential on a dense graph |
 
-`-shortest NAME` minimises the accumulator NAME, which must be a `-sum`.
-Dijkstra is correct only when extending a route never makes its value
+The three mode flags are mutually exclusive and an error together.
+`-lowest-sum` declares its own sum rather than naming a `-sum`, so the
+search key and the column cannot disagree; that departs from Ross's
+`-lowest-sum NAME` and is proposed, not agreed.
+
+`-lowest-sum` minimises a sum, and only a sum, on purpose. Dijkstra is correct only when extending a route never makes its value
 better, and a sum of non-negative weights has that property, which is
 why a negative weight is an error. `-fewest-hops` is the same search
 with every edge weighing 1. Other accumulators with that property would
-get their own modes later, each with a reason: `-widest NAME` over a
-`-min` (the route whose narrowest edge is widest, e.g. bandwidth), or the
-most reliable route over a `-product` of probabilities. An average does
+get their own modes later, each with a reason, named the same way:
+`-highest-min FIELD NAME` (the route whose narrowest edge is widest, e.g.
+bandwidth) or `-highest-product FIELD NAME` (the most reliable route over
+probabilities). An average does
 not have the property: a cheap leg can lower a route's average, so the
 best route to a city need not extend the best route to the city before
 it. Averages are never a search mode; compute one over the routes
@@ -129,23 +138,22 @@ one, and a traversal does not combine its rows that way.
 
 ### Semantics that need to be pinned before any code
 
-1. **Default mode is all simple paths** (no node twice on one path). This
-   matches the CTE and guarantees termination on a finite graph, but the
-   number of paths can be exponential. `-fewest-hops` and `-shortest` are
+1. **The default mode is `-fewest-hops`** (decided 2026-10-31, Ross).
+   The cheap mode is the default: `-fewest-hops` and `-lowest-sum` are
    linear and almost always what someone wants for "how do I reach X".
-   *Open: should the default be `-fewest-hops`, with `-paths` naming the
-   exponential mode?* My lean is yes: the cheap mode should be the
-   default. That breaks parity with the CTE example, and the docs would
-   say so.
+   All simple paths, which matches the CTE and terminates on a finite
+   graph but can be exponential, has to be asked for with `-all-paths`.
+   The plain form therefore differs from a recursive CTE's result, and
+   the docs say so beside the SQL equivalent.
 2. **The seed row is emitted** (depth 0), like the CTE's anchor.
 3. **Ties are semantic, not order-dependent.** Every lane must choose the
    same row, so `-fewest-hops` breaks ties by fewest hops and then the path
-   compared element by element, and `-shortest` by least sum, then fewest
+   compared element by element, and `-lowest-sum` by least sum, then fewest
    hops, then path. Neither rule depends on file order, which the SQL
    lanes do not preserve.
 4. **Output order**: seed order, then the traversal order (depth-first in
-   edge-file order for paths; by round for `-fewest-hops`; by settled distance
-   for `-shortest`). The SQL lanes are unordered, so equivalence compares
+   edge-file order for `-all-paths`; by round for `-fewest-hops`; by settled distance
+   for `-lowest-sum`). The SQL lanes are unordered, so equivalence compares
    a multiset unless the pipeline sorts.
 5. **`-sum` is an integer sum, so it is int128** (DFC155 C: window and
    pivot sums already are, and a running total along a path is the same
@@ -161,9 +169,9 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
 - **Library first** (`ssql.Follow(edges, FollowSpec) Filter[Record,
   Record]`), with the CLI a thin layer over it. The edges are
   materialised into an adjacency map in file order, `map[key][]edge`,
-  like the hash side of a join. Paths mode is a DFS per seed with an
-  on-path set; `-fewest-hops` is a BFS per seed with a visited set; `-shortest`
-  is Dijkstra with a heap. Memory is O(E), plus O(depth) for paths or
+  like the hash side of a join. `-all-paths` is a DFS per seed with an
+  on-path set; `-fewest-hops` is a BFS per seed with a visited set; `-lowest-sum`
+  is Dijkstra with a heap. Memory is O(E), plus O(depth) for `-all-paths` or
   O(V) for the visited set.
 - **Record codegen**: one call per stage (`ssql.Follow(...)`), per the
   readability rule.
@@ -174,12 +182,12 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
   BFS frontier is a later measurement. **`-path` is a list column**, and
   the typed tier has no list columns (DFC145, deferred), so `-path`
   refuses typed and falls back to record codegen, loudly. `-depth`,
-  `-sum`, `-fewest-hops` and `-shortest` are all scalar and typed from day one.
+  `-sum`, `-fewest-hops` and `-lowest-sum` are all scalar and typed from day one.
 - **`generate sql`**: a recursive CTE whose anchor is the query so far
   (the seeds, with a seed id from `row_number()` so several seeds stay
   apart), whose step joins the edges, and whose guard is the path list.
   DFC156 already put `WITH RECURSIVE` into the assembler.
-  - DuckDB: `list_contains` guard. `-fewest-hops` and `-shortest` use `USING KEY
+  - DuckDB: `list_contains` guard. `-fewest-hops` and `-lowest-sum` use `USING KEY
     (seed, node)` with an in-round `QUALIFY row_number() … = 1` carrying
     the §3 tie rule. **The obvious `USING KEY` form is wrong**: without
     the in-round dedupe, two candidates for one node in the same round
@@ -187,7 +195,7 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
     reported DRW at 565 min instead of 385. The QUALIFY form below gets
     385. Exactly the kind of bug the equivalence gate exists for.
   - Postgres 16: `<> ALL(path)` array guard (or the `CYCLE` clause). There
-    is no `USING KEY`, so `-fewest-hops` and `-shortest` refuse rather than
+    is no `USING KEY`, so `-fewest-hops` and `-lowest-sum` refuse rather than
     enumerate every path and pick (exponential, where the exec lane is
     linear). `-path` output refuses because the dialect refuses nested
     values (DFC160); the guard array is internal and fine. Not run here
@@ -228,23 +236,24 @@ margin. That belongs in the scale gate.
   checked by hand once for the flights fixture.
 - Tie tests that break on file order: two equal-cost routes, with the
   edge file written so that "first found" and "path-least" disagree.
-- Watch it fail: drop the in-round QUALIFY from the DuckDB `-shortest`
+- Watch it fail: drop the in-round QUALIFY from the DuckDB `-lowest-sum`
   form (the 565-minute bug), and drop the on-path guard (it must hit
   `-max-depth` or the timeout loudly, never hang the gate).
-- Scale gate (DFC113): `-fewest-hops` and `-shortest` on a ~1 M-edge random
-  graph with a wall-time ceiling; paths mode on a layered DAG with a
+- Scale gate (DFC113): `-fewest-hops` and `-lowest-sum` on a ~1 M-edge random
+  graph with a wall-time ceiling; `-all-paths` on a layered DAG with a
   known path count.
 - Overflow: `-sum` past 2^63 is an int128, not an error, in every lane
   (`TestIntOverflowEveryLane` row).
 
 ## 7. Open questions for Ross
 
-1. Default mode: all simple paths (CTE parity) or `-fewest-hops` (cheap)?
-   Lean: `-fewest-hops`.
-2. Spelling: `-follow` (lean), `-to` or `-next`?
-   (Decided 2026-10-31, Ross: the BFS mode is `-fewest-hops`, not
-   `-first`, which read as "first in the file".)
-3. Are `-fewest-hops` and `-shortest` refusals on Postgres and DataFusion
+1. ~~Default mode~~ Decided 2026-10-31 (Ross): `-fewest-hops` is the
+   default, all paths is `-all-paths`, and Dijkstra is `-lowest-sum` (was
+   `-shortest`; `-fewest-hops` was `-first`, which read as "first in the
+   file"). Still open: `-lowest-sum FIELD NAME` (declares its own sum,
+   my proposal) or `-lowest-sum NAME` over a `-sum`.
+2. Spelling of the mode switch: `-follow` (lean), `-to` or `-next`?
+3. Are `-fewest-hops` and `-lowest-sum` refusals on Postgres and DataFusion
    acceptable for v1, or do we want the exponential enumerate-and-pick
    form there with a warning?
 4. Is a single-seed `-start VALUE` convenience worth adding, so the
