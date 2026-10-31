@@ -168,6 +168,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC158 | 2026-10-28 | 2026-10-29 | [Performance against the engines: what we found, what we fixed, what is left](./dfc158_performance_measured_fixed_next.md) |
 | DFC159 | 2026-10-30 | 2026-10-30 | [ssql for Rust Programmers: Pipelines as DataFusion Programs](./dfc159_ssql_for_rust_programmers.md) |
 | DFC160 | 2026-10-31 | 2026-10-31 | [ssql and DuckDB, Feature by Feature: Where Things Stand (October 2026)](./dfc160_duckdb_feature_comparison_2026_10.md) |
+| DFC161 | 2026-10-31 | 2026-10-31 | [Graph Traversal: `join -follow`, a Join Run to a Fixpoint](./dfc161_graph_traversal_join_follow.md) |
 
 <!-- DFC-INDEX-END -->
 

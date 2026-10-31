@@ -235,6 +235,10 @@ In rough order of how often a user would meet it:
    entirely.
 6. **Joins beyond equality and ASOF.** Non-equi and LATERAL. Rare in
    pipeline work; no plan.
+   **Recursive joins (graph traversal)** belonged here and were missed:
+   the matrix row says so, but the ranking did not. Ross ranks it the
+   biggest gap (2026-10-31); [DFC161](./dfc161_graph_traversal_join_follow.md)
+   explores `join -follow`, a join run to a fixpoint.
 7. **Calendar depth.** An INTERVAL column type, `make_date`,
    `make_timestamp`, `last_day`, `age`. Each is small; none has been
    asked for.
