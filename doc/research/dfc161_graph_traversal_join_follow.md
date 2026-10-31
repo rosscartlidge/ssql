@@ -6,7 +6,8 @@ Last modified: 2026-10-31
 
 [Back to Index](./README.md)
 
-Status: **exploratory, 2026-10-31. Nothing built.** Ross, after DFC160:
+Status: **exploratory, 2026-10-31; design questions answered the same
+day (§7). Nothing built.** Ross, after DFC160:
 "I actually think our biggest gap is not being able to do recursive joins
 so we can do graph traversal … we wouldn't need recursion — I think we
 could do it with a loop inside join. What is your feeling on the best way
@@ -108,11 +109,11 @@ printf 'city\nSYD\n' | ssql from csv - \
 | `-fewest-hops` | **the default** (accepted explicitly): each node once per seed, at the first round it is reached (BFS) |
 | `-lowest-sum FIELD NAME` | each node once per seed, by the lowest total of edge FIELD, written to NAME (Dijkstra; a negative edge weight is an error, not a wrong answer) |
 | `-all-paths` | every simple path (no node twice on one path), every prefix its own row: the recursive CTE's result, and exponential on a dense graph |
+| `-both` | the graph is undirected: every edge is usable SRC→FOLLOW and FOLLOW→SRC, with the same other columns (so the same `-sum` weight) either way |
 
 The three mode flags are mutually exclusive and an error together.
 `-lowest-sum` declares its own sum rather than naming a `-sum`, so the
-search key and the column cannot disagree; that departs from Ross's
-`-lowest-sum NAME` and is proposed, not agreed.
+search key and the column cannot disagree.
 
 `-lowest-sum` minimises a sum, and only a sum, on purpose. Dijkstra is correct only when extending a route never makes its value
 better, and a sum of non-negative weights has that property, which is
@@ -161,6 +162,13 @@ one, and a traversal does not combine its rows that way.
    DECIMAL(38,0) in the anchor.
 6. **The seed's node value is overwritten.** To keep the origin, copy it
    first (`update -set-field origin city`) or read `-path`'s first element.
+7. **`-both` adds each edge's reverse, then removes duplicate edges.**
+   The edge set is the edges plus their reverses, deduplicated by (src,
+   dst, other columns). So a self-loop counts once, and a pair the file
+   already lists in both directions (SYD→MEL, MEL→SYD at 90) is not
+   doubled: doubling would emit every `-all-paths` route through it
+   twice. The tie rules are unchanged. Without `-both`, duplicate edge
+   rows stay as they are, as a join keeps duplicate right rows.
 
 ## 4. Backends
 
@@ -172,13 +180,16 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
   like the hash side of a join. `-all-paths` is a DFS per seed with an
   on-path set; `-fewest-hops` is a BFS per seed with a visited set; `-lowest-sum`
   is Dijkstra with a heap. Memory is O(E), plus O(depth) for `-all-paths` or
-  O(V) for the visited set.
+  O(V) for the visited set. `-both` inserts each edge under both of its
+  keys (deduplicated per §3.7) while the adjacency map is built, and the
+  search does not change.
 - **Record codegen**: one call per stage (`ssql.Follow(...)`), per the
   readability rule.
 - **Typed**: `typed.Follow[S, E, O]` with key functions and a synthesized
   output struct (the group-by pattern). **Parallel over seeds**, since
   each seed's traversal is independent: shards are runs of seeds and the
-  output is ordered by seed. One seed is serial; parallelising a single
+  output is ordered by seed. The adjacency builder takes a `both bool`.
+  One seed is serial; parallelising a single
   BFS frontier is a later measurement. **`-path` is a list column**, and
   the typed tier has no list columns (DFC145, deferred), so `-path`
   refuses typed and falls back to record codegen, loudly. `-depth`,
@@ -186,7 +197,9 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
 - **`generate sql`**: a recursive CTE whose anchor is the query so far
   (the seeds, with a seed id from `row_number()` so several seeds stay
   apart), whose step joins the edges, and whose guard is the path list.
-  DFC156 already put `WITH RECURSIVE` into the assembler.
+  DFC156 already put `WITH RECURSIVE` into the assembler. With `-both`
+  the edges come from a CTE `SELECT src, dst, … UNION SELECT dst, src, …`.
+  `UNION`, not `UNION ALL`, is the §3.7 dedupe; the recursion is the same.
   - DuckDB: `list_contains` guard. `-fewest-hops` and `-lowest-sum` use `USING KEY
     (seed, node)` with an in-round `QUALIFY row_number() … = 1` carrying
     the §3 tie rule. **The obvious `USING KEY` form is wrong**: without
@@ -195,9 +208,14 @@ Six lanes, as always (CLAUDE.md "One Semantics, Many Backends").
     reported DRW at 565 min instead of 385. The QUALIFY form below gets
     385. Exactly the kind of bug the equivalence gate exists for.
   - Postgres 16: `<> ALL(path)` array guard (or the `CYCLE` clause). There
-    is no `USING KEY`, so `-fewest-hops` and `-lowest-sum` refuse rather than
-    enumerate every path and pick (exponential, where the exec lane is
-    linear). `-path` output refuses because the dialect refuses nested
+    is no `USING KEY`, so `-fewest-hops` and `-lowest-sum` refuse by name
+    (decided 2026-10-31) instead of enumerating every path and picking,
+    which is exponential where the exec lane is linear. The message:
+    `join -follow -fewest-hops: postgres has no keyed recursion (USING
+    KEY) to visit each node once; use -all-paths and pick with window
+    -partition NODE -order … -row-number rn | where -if rn eq 1, or
+    -dialect duckdb`. Note that `-fewest-hops` is the default, so a bare
+    `-follow` refuses on these dialects too. `-path` output refuses because the dialect refuses nested
     values (DFC160); the guard array is internal and fine. Not run here
     yet: the rig needs the lane's connection settings.
   - DataFusion 55: recursive CTEs work (run above). `array_has` guard;
@@ -242,25 +260,32 @@ margin. That belongs in the scale gate.
 - Scale gate (DFC113): `-fewest-hops` and `-lowest-sum` on a ~1 M-edge random
   graph with a wall-time ceiling; `-all-paths` on a layered DAG with a
   known path count.
+- `-both`: an undirected path, a self-loop, and a pair listed in both
+  directions that must not double any `-all-paths` route.
+- Refusals: `generate sql -dialect postgres|datafusion` on `-fewest-hops`
+  (bare `-follow` too) and `-lowest-sum` fails and names the flag.
 - Overflow: `-sum` past 2^63 is an int128, not an error, in every lane
   (`TestIntOverflowEveryLane` row).
 
-## 7. Open questions for Ross
+## 7. Decided 2026-10-31 (Ross, plan mode)
 
-1. ~~Default mode~~ Decided 2026-10-31 (Ross): `-fewest-hops` is the
-   default, all paths is `-all-paths`, and Dijkstra is `-lowest-sum` (was
-   `-shortest`; `-fewest-hops` was `-first`, which read as "first in the
-   file"). Still open: `-lowest-sum FIELD NAME` (declares its own sum,
-   my proposal) or `-lowest-sum NAME` over a `-sum`.
-2. Spelling of the mode switch: `-follow` (lean), `-to` or `-next`?
-3. Are `-fewest-hops` and `-lowest-sum` refusals on Postgres and DataFusion
-   acceptable for v1, or do we want the exponential enumerate-and-pick
-   form there with a warning?
-4. Is a single-seed `-start VALUE` convenience worth adding, so the
-   `printf | from csv -` line goes away? It would be the first join flag
-   that invents a row.
-5. Undirected graphs: a `-both` flag, or tell users to `union` the
-   reversed edge list (one line today)?
+1. **Modes**: `-fewest-hops` is the default, `-lowest-sum` is Dijkstra,
+   and `-all-paths` enumerates. The names were first `-first` (which read
+   as "first in the file") and `-shortest`, and all-paths was the
+   default, for parity with the CTE.
+2. **`-follow FIELD`** is the mode switch. Rejected: `-to` (vague as a
+   mode) and `-next`.
+3. **`-lowest-sum FIELD NAME`** declares its own sum. Rejected:
+   `-lowest-sum NAME` over a separate `-sum`, which takes two flags and
+   allows a mismatch. Later modes take the same shape (`-highest-min`,
+   `-highest-product`).
+4. **Postgres and DataFusion refuse `-fewest-hops` and `-lowest-sum` by
+   name** (§4). Rejected: enumerating every path and picking (exponential)
+   and a round-capped keyed loop (complex SQL across two dialects).
+5. **Seeds come from the stream only.** Rejected: `-start VALUE`, which
+   would be the first join flag that invents a row.
+6. **`-both`** makes the graph undirected (§3.7). Rejected: a documented
+   `union` of the reversed edges.
 
 ## 8. Fixture
 
