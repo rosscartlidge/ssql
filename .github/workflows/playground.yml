@@ -3,8 +3,10 @@
 # copy-to-/tmp / switch-branch dance from the release checklist
 # (claude/playground.md keeps the manual steps as the fallback).
 #
-# Only the three build artifacts are updated; everything else on gh-pages
-# (data/, fs-polyfill.js, the gpu demo, …) is preserved untouched.
+# The page, its scripts and its data/ are copied from main; everything
+# else on gh-pages (the gpu demo, …) is preserved untouched. data/ was
+# left out until 2026-11-01, and the page refuses to start when a file
+# in DATA_FILES is missing, so a new sample file would have broken it.
 name: Deploy Playground
 
 on:
@@ -54,12 +56,14 @@ jobs:
           cp cmd/ssql-playground/playground.html ghp/
           cp cmd/ssql-playground/fs-polyfill.js ghp/
           cp cmd/ssql-playground/ssql-ui.js ghp/
+          mkdir -p ghp/data
+          cp cmd/ssql-playground/data/*.csv ghp/data/
           # Cache-bust subresources per deploy: without this, a browser can
           # pair a fresh playground.html with a stale fs-polyfill.js/wasm
           # and runs die silently on missing helpers.
           sed -i "s/__DEPLOY_SHA__/${GITHUB_SHA::8}/g" ghp/playground.html
           cd ghp
-          git add ssql-playground.wasm wasm_exec.js playground.html fs-polyfill.js ssql-ui.js
+          git add ssql-playground.wasm wasm_exec.js playground.html fs-polyfill.js ssql-ui.js data
           if git diff --cached --quiet; then
             echo "playground unchanged — nothing to deploy"
             exit 0

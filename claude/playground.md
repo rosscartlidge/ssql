@@ -6,6 +6,12 @@ Static CSV files live in `cmd/ssql-playground/data/`:
 - `employees.csv` — 50 rows (name, age, dept, salary, city, level, hire_date, status)
 - `orders.csv` — 40 rows (order_id, customer_id, product, amount, order_date)
 - `customers.csv` — 20 rows (customer_id, name, country, tier)
+- `flights.csv` — 10 rows (src, dst, mins), the codelab's graph (DFC161)
+- `cities.csv` — 8 rows (city), seeds for the `join -follow` example
+
+A new file goes in `DATA_FILES` in `playground.html` too. The deploy
+workflow copies `data/*.csv` to gh-pages, and the page refuses to start
+when a listed file is missing.
 
 The playground fetches these at startup. The same files are used for local testing.
 

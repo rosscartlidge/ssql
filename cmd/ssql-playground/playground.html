@@ -129,13 +129,16 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" onclick="loadExample(25)">Golden ratio — consecutive Fibonacci ratios converge on φ (lag, sqrt)</button>
     <button class="example-btn" onclick="loadExample(26)">int128 — a sum past 2^63 and squares of 39 digits, exact (cast -type n int128)</button>
     <button class="example-btn" onclick="loadExample(27)">decimal — 7% tax per order to the cent (-type amount decimal:2), summed exactly beside the float's drift</button>
+    <button class="example-btn" onclick="loadExample(28)">Graph — quickest route from Sydney to every city (join -follow; try -all-paths, or another start city)</button>
 </div>
 
 <div class="datasets">
     Available datasets:
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('employees.csv')">employees.csv</button> (50 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('orders.csv')">orders.csv</button> (40 rows) ·
-    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('customers.csv')">customers.csv</button> (20 rows) · or upload your own
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('customers.csv')">customers.csv</button> (20 rows) ·
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('flights.csv')">flights.csv</button> (10 rows) ·
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('cities.csv')">cities.csv</button> (8 rows) · or upload your own
     <br><br>This playground runs a real ssql binary compiled to WebAssembly — <b>Tab</b> completes commands,
     flags, operators, files, and <i>pipeline-aware field names</i> (it runs your upstream stages in schema mode,
     so after a group-by it offers the grouped and aggregate fields); <b>Alt-h</b> (or "? Help") explains whatever
@@ -152,7 +155,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
-const DATA_FILES = ['employees.csv', 'orders.csv', 'customers.csv'];
+const DATA_FILES = ['employees.csv', 'orders.csv', 'customers.csv', 'flights.csv', 'cities.csv'];
 
 async function loadDatasets() {
     for (const name of DATA_FILES) {
@@ -280,6 +283,10 @@ const EXAMPLES = [
 | ssql update -set-expr tax_float 'float(amount) * 0.07'
 | ssql group-by customer_id -sum tax exact -sum tax_float as_float -count orders
 | ssql sort -desc exact
+| ssql to table`,
+    `ssql from cities.csv
+| ssql where -if city eq SYD
+| ssql join flights.csv -on city src -follow dst -lowest-sum mins total -depth hops -path route
 | ssql to table`,
 ];
 
