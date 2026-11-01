@@ -621,18 +621,20 @@ codelab takes this further — a list of item objects to a revenue table,
 the rules `flatten` enforces, and how the same pipelines come out as Go
 and as SQL.
 
-### Graphs: follow a join until it stops
+### Graphs: traverse, a join until it stops
 
 Some questions are a join repeated an unknown number of times: every
 city you can reach from Sydney, however many flights it takes; everyone
 under a manager, at any depth; every part inside an assembly.
-`flights.csv` is an edge list — `src`, `dst`, `mins`. `join -follow`
-starts from each row of the stream, joins it to the edges, and joins the
-cities it found again, round after round, until a round finds nothing
-new. The seed is a one-line CSV on stdin:
+`flights.csv` is an edge list — `src`, `dst`, `mins`. `traverse` starts
+from each row of the stream (a seed), joins it to the edges, and joins
+the cities it found again, round after round, until a round finds
+nothing new. `-from city src` names the seed's node field and the
+edge's source; `-to dst` the edge's target. The seed is a one-line CSV
+on stdin:
 
 ```bash
-printf 'city\nSYD\n' | ssql from csv - | ssql join flights.csv -on city src -follow dst -depth hops -path route | ssql to table
+printf 'city\nSYD\n' | ssql from csv - | ssql traverse flights.csv -from city src -to dst -depth hops -path route | ssql to table
 ```
 
 Each city appears once, reached by the fewest hops (the default mode,
@@ -642,7 +644,7 @@ through Melbourne and Adelaide is quicker. `-lowest-sum FIELD NAME`
 keeps each city's cheapest route instead:
 
 ```bash
-printf 'city\nSYD\n' | ssql from csv - | ssql join flights.csv -on city src -follow dst -lowest-sum mins total -path route | ssql to table
+printf 'city\nSYD\n' | ssql from csv - | ssql traverse flights.csv -from city src -to dst -lowest-sum mins total -path route | ssql to table
 ```
 
 `-all-paths` keeps every route that never visits a city twice — Darwin
@@ -652,7 +654,7 @@ field along the route, `-max-depth N` stops after N hops, and `-both`
 treats every edge as usable either way:
 
 ```bash
-printf 'city\nSYD\n' | ssql from csv - | ssql join flights.csv -on city src -follow dst -all-paths -sum mins total -depth hops | ssql where -if city eq DRW | ssql to table
+printf 'city\nSYD\n' | ssql from csv - | ssql traverse flights.csv -from city src -to dst -all-paths -sum mins total -depth hops | ssql where -if city eq DRW | ssql to table
 ```
 
 A tie is broken by value — fewer hops, then the route compared city by

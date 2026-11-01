@@ -1166,7 +1166,7 @@ routes := ssql.Follow(flights, ssql.FollowConfig{
 })(seeds)
 ```
 
-The CLI form is `join flights.csv -on city src -follow dst -lowest-sum mins total -depth hops`.
+The CLI form is `traverse flights.csv -from city src -to dst -lowest-sum mins total -depth hops`.
 
 ### Except and Intersect
 

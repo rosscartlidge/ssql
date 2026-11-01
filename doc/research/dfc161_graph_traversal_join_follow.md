@@ -1,13 +1,16 @@
-# Graph Traversal: `join -follow`, a Join Run to a Fixpoint
+# Graph Traversal: `traverse`, a Join Run to a Fixpoint
 
 Reference: DFC161
 Created: 2026-10-31
-Last modified: 2026-10-31
+Last modified: 2026-11-02
 
 [Back to Index](./README.md)
 
-Status: **built 2026-10-31 (§9); design questions answered the same day
-(§7).** Ross, after DFC160:
+Status: **built 2026-10-31 (§9) as `join -follow`; design questions
+answered the same day (§7); moved to its own command, `traverse … -from
+NODE SRC -to DST`, on 2026-11-02 (§10).** The grammar in §2–§3 and the
+examples below are the `join -follow` form; read §10 for the command as
+it is. Ross, after DFC160:
 "I actually think our biggest gap is not being able to do recursive joins
 so we can do graph traversal … we wouldn't need recursion — I think we
 could do it with a loop inside join. What is your feeling on the best way
@@ -59,6 +62,8 @@ What a loop *in ssql* gets that the SQL notation cannot easily express:
   enumeration is the part that grows.
 
 ## 2. Where it should live: a mode of `join`
+
+(Revised by §10: it is its own command, with join's model.)
 
 Three homes were considered.
 
@@ -367,6 +372,66 @@ What building it found:
    (649,539 routes instead of 797,161 — the count assertion caught it).
 
 Follow-ups are in TODO.md.
+
+## 10. Revision 2026-11-02: its own command, `traverse`
+
+Ross, two days after v4.135.0: "do you think the graph traversal
+functions should be moved to its own command, say "traverse", rather
+than in join, where it could be hard to find". Yes, for two reasons §2
+underweighted:
+
+- **Findability.** Someone looking for graphs, paths, routes or
+  recursion does not look in `join`.
+- **A flag list half refused.** In `join` the traversal needed nine
+  flags of its own, and in either mode about half of `join -help` was
+  refused: `-type`, `-as`, `-suffix`, `-exclude-*` and `-asof*` under
+  `-follow`, the traversal's flags in a plain join. `followCheck`
+  carried ten refusals that existed only because of the shared command.
+
+§2's case against a `traverse` command (option B) was against a
+different shape: edges on stdin and seeds from a flag, so a computed
+seed set needs a file, and a second command that hashes a side. The
+command as built keeps option A's model: the seeds are the stream, the
+edges the FILE (a CSV/TSV/JSON file, a `_schema` JSONL, or a procsub),
+and the walk is the same code (`ssql.Follow`, `typed.Follow[Parallel]`,
+`internal/follow`). Only the name and the grammar changed:
+
+```
+… | ssql traverse flights.csv -from city src -to dst [-fewest-hops | -lowest-sum FIELD NAME | -all-paths]
+                                                     [-depth NAME] [-sum FIELD NAME]... [-path NAME] [-max-depth N] [-both]
+```
+
+`-from NODE SRC` is the seed's node field and the edge's source field
+(`-on NODE SRC` before), `-to DST` the edge's target (`-follow DST`
+before). `join -follow` is removed, not kept as a second spelling: it
+had been released for two days, and an unknown flag is a loud error
+(`TestJoinFollowRemoved`). The library keeps its names (`ssql.Follow`,
+`FollowConfig`, `typed.Follow`): they are exported v4 API, and a rename
+would break library callers for nothing.
+
+What the move touched, and found:
+
+- **One side-source path for two commands.** `generateJoinCode`'s
+  side handling (a procsub's fragments or a file, the `rightSourceN`
+  func, typed sampling, the record fallback) is `generateSideCode` in
+  `commands/side_source.go`, called by `join` and `traverse` with their
+  typed and record emitters.
+- **Ctrl-O is command-neutral.** The side-field slot is read from the
+  `rightFieldCompleter` declaration alone and the side file from the
+  stage's `FILE` positional (`rightFieldSlot`, `sideFile`), so
+  `traverse`'s `-from` 2nd arg, `-to`, and the fields of `-lowest-sum`
+  and `-sum` complete from the edges with no traverse-specific code.
+- **`generate ssql` printed a dead procsub.** The optimiser rebuilt
+  `<(…)` from its func fragment only for `join` (`IsJoin`), so
+  `traverse <(…)` was rendered with the generation run's `/dev/fd/63`
+  and replayed empty; the `ssql-opt` lane of `traverse_procsub_edges`
+  caught it. Side-file handling is now `HasSideFile` (join and
+  traverse); `IsJoin` still marks the one command the join rules
+  (pushdown) apply to, and traverse stays a barrier because the
+  optimiser does not know it.
+- **SQL.** `translateTraverse` is the CTE translator reading `-from`
+  and `-to`; `traverse` keeps the columns its translation set (seed
+  columns plus results) where `join` reset them to unknown.
 
 ## 8. Fixture
 

@@ -479,7 +479,7 @@ hops (BFS), once by the lowest total (Dijkstra), or every simple path. Ties
 are broken by value (hops, path, totals), never by input order. The walk is
 the same code as `ssql.Follow`'s, so the typed and record lanes agree row for
 row. `FollowParallel` builds the adjacency once and walks each seed shard
-independently. Behind `join -follow` ([DFC161](research/dfc161_graph_traversal_join_follow.md)).
+independently. Behind `traverse` ([DFC161](research/dfc161_graph_traversal_join_follow.md)).
 
 ## JSONL and JSON array I/O
 
