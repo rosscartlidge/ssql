@@ -136,6 +136,36 @@ func TestCompleteSource(t *testing.T) {
 			"ssql from kind.csv",
 		},
 		{
+			"join -follow names a right field (direct file)",
+			"ssql from from.csv | ssql join flights.csv -on city src -follow ",
+			"ssql from flights.csv",
+		},
+		{
+			"join -lowest-sum 1st arg is a right field",
+			"ssql from from.csv | ssql join flights.csv -on city src -follow dst -lowest-sum ",
+			"ssql from flights.csv",
+		},
+		{
+			"join -lowest-sum 2nd arg (result name) is NOT a right field",
+			"ssql from from.csv | ssql join flights.csv -on city src -follow dst -lowest-sum mins ",
+			"ssql from from.csv",
+		},
+		{
+			"join -sum 1st arg is a right field (procsub)",
+			"ssql from from.csv | ssql join <(ssql from flights.csv) -on city src -follow dst -sum ",
+			"ssql from flights.csv",
+		},
+		{
+			"join -asof-on 2nd arg is a right field",
+			"ssql from trades.csv | ssql join quotes.csv -asof-on ts ",
+			"ssql from quotes.csv",
+		},
+		{
+			"join -asof-on 1st arg is a left field",
+			"ssql from trades.csv | ssql join quotes.csv -asof-on ",
+			"ssql from trades.csv",
+		},
+		{
 			"procsub with inner pipe, right-field slot",
 			"ssql from data.csv | ssql join <(ssql from kind.csv | ssql rename -as kind k) -on a_kind ",
 			"ssql from kind.csv | ssql rename -as kind k",

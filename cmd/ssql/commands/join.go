@@ -52,7 +52,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		// Ctrl-O (and the browser's Tab) resolve this from the join's
 		// right source since the direct-file/procsub CompleteSource fix
 		// — hint the actionable key, not a dead placeholder.
-		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Completer(rightFieldCompleter{}).
 		Done().
 		Accumulate().
 		Local().
@@ -60,7 +60,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-as").
 		Arg("right-field").
-		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Completer(rightFieldCompleter{}).
 		Done().
 		Arg("new-name").
 		Completer(&cf.NoCompleter{Hint: "<new-name>"}).
@@ -96,7 +96,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		FieldsFromFlag("").
 		Done().
 		Arg("right-field").
-		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Completer(rightFieldCompleter{}).
 		Done().
 		Global().
 		Help("ASOF join on ordered fields with different names: -asof-on <left> <right>").
@@ -118,7 +118,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-follow").
 		String().
-		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Completer(rightFieldCompleter{}).
 		Global().
 		Help("Graph traversal: the edge's target field; the join repeats, -on NODE SRC, until no new route is found (DFC161)").
 		Done().
@@ -129,7 +129,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-lowest-sum").
 		Arg("field").
-		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Completer(rightFieldCompleter{}).
 		Done().
 		Arg("result").
 		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
@@ -144,7 +144,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-sum").
 		Arg("field").
-		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Completer(rightFieldCompleter{}).
 		Done().
 		Arg("result").
 		Completer(&cf.NoCompleter{Hint: "<result-field>"}).

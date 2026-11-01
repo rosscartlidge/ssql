@@ -249,41 +249,39 @@ func tokenizeStageOpen(s string) ([]string, bool) {
 	return toks, quote != 0
 }
 
-// joinRightFieldSlot reports whether the cursor (end of stage) sits at a join
-// "right-side" field — the 2nd argument of -on (`-on <left> <RIGHT>`) or the
-// 1st argument of -as (`-as <RIGHT> <new-name>`). Those fields come from the
-// join's right source (the <(…)> FILE), not the upstream pipeline. Clause
-// separators (+ / -) reset the per-clause flag state.
-func joinRightFieldSlot(stage string) bool {
-	toks := tokenizeStage(stage)
-	ji := -1
-	for i, t := range toks {
-		if t == "join" {
-			ji = i
-			break
-		}
-	}
-	if ji < 0 || ji+1 > len(toks) {
+// rightFieldCompleter marks a join argument that names a field of the
+// RIGHT source (-on's 2nd, -as's 1st, -asof-on's 2nd, -follow, the field
+// of -lowest-sum and -sum). Tab can't see that source, so it hints
+// Ctrl-O; Ctrl-O finds the slot by this declaration (joinRightFieldSlot),
+// so a new right-side flag needs no second list to drift from.
+type rightFieldCompleter struct{}
+
+func (rightFieldCompleter) Complete(cf.CompletionContext) ([]string, error) {
+	return []string{FieldHintToken}, nil
+}
+
+// joinRightFieldSlot reports whether the cursor (end of stage) sits on a
+// join argument declared with rightFieldCompleter, by the completion
+// engine's own parse (DFC116 F4): those fields come from the join's
+// right source (the FILE or <(…)>), not the upstream pipeline. It
+// replaced a hand-walker that knew only -on and -as, so -asof-on,
+// -follow, -lowest-sum and -sum completed the LEFT side's fields
+// (found by Ross: `join flights.csv -on city src -follow ^O`).
+func joinRightFieldSlot(stage string, tree *cf.Command) bool {
+	args, pos, ok := stageCursorArgs(stage)
+	if !ok {
 		return false
 	}
-	// Completed tokens after "join", excluding the partial under the cursor.
-	consider := toks[ji+1:]
-	if !strings.HasSuffix(stage, " ") && !strings.HasSuffix(stage, "\t") && len(consider) > 0 {
-		consider = consider[:len(consider)-1]
+	ctx, path := tree.AnalyzeCursor(args, pos)
+	if len(path) != 1 || path[0] != "join" || ctx.FlagSpec == nil {
+		return false
 	}
-	flag := ""
-	seen := 0 // positional args seen for the current flag, before the cursor
-	for _, t := range consider {
-		switch {
-		case t == "+" || t == "-":
-			flag, seen = "", 0
-		case len(t) > 1 && t[0] == '-':
-			flag, seen = t, 0
-		default:
-			seen++
-		}
+	cs := ctx.FlagSpec.ArgCompleters
+	if ctx.ArgIndex < 0 || ctx.ArgIndex >= len(cs) {
+		return false
 	}
-	return (flag == "-on" && seen == 1) || (flag == "-as" && seen == 0)
+	_, right := cs[ctx.ArgIndex].(rightFieldCompleter)
+	return right
 }
 
 // upstreamOf returns everything before the last top-level pipe of s (the full
@@ -367,7 +365,7 @@ func CompleteSource(before string, tree *cf.Command) string {
 		}
 		return "ssql from " + f
 	}
-	if joinRightFieldSlot(stage) {
+	if joinRightFieldSlot(stage, tree) {
 		if ps := firstProcsub(stage); ps != "" {
 			return strings.TrimSpace(ps)
 		}
@@ -441,8 +439,8 @@ func fromOwnFileFieldSlot(stage string, tree *cf.Command) (string, string) {
 
 // stageCursorArgs converts a stage's text (ending at the cursor) into
 // the argv/pos shape AnalyzeCursor takes: argv minus the program
-// word; pos = the COMP_WORDS cursor index (a trailing space means the
-// cursor is on a new empty word).
+// word, ending with the word under the cursor ("" after a trailing
+// space, as COMP_WORDS has it); pos = the COMP_WORDS cursor index.
 func stageCursorArgs(stage string) ([]string, int, bool) {
 	toks := tokenizeStage(stage)
 	if len(toks) < 2 || toks[0] != "ssql" {
@@ -450,7 +448,11 @@ func stageCursorArgs(stage string) ([]string, int, bool) {
 	}
 	pos := len(toks) - 1
 	if strings.HasSuffix(stage, " ") || strings.HasSuffix(stage, "\t") {
-		pos = len(toks)
+		// The cursor is on a new empty word, which COMP_WORDS carries:
+		// without it the engine reads the slot before (the result name
+		// of `-lowest-sum mins ` looked like its field).
+		toks = append(toks, "")
+		pos = len(toks) - 1
 	}
 	return toks[1:], pos, true
 }
