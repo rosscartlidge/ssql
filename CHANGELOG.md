@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.135.0] - 2026-11-01
+
 ### Added
 
 - **Graph traversal: `join -follow`** ([DFC161](doc/research/dfc161_graph_traversal_join_follow.md)). The seeds are the stream and the edges the join's file; the join runs to a fixpoint, each round joining the routes the last round found to the edges again. `ssql from seeds.csv | ssql join flights.csv -on city src -follow dst -depth hops` lists every city reachable from each seed by the fewest hops (the default, a BFS); `-lowest-sum mins total` keeps each city's cheapest route (Dijkstra; an absent or negative weight is an error); `-all-paths` every route that never revisits a city. `-sum FIELD NAME` totals an edge field (an integer total is an int128), `-path NAME` lists the cities visited, `-max-depth N` bounds the hops, `-both` makes the graph undirected. Ties are broken by value, never by file order, so every lane keeps the same row. All six lanes: exec and record call `ssql.Follow`; typed and parallel `typed.Follow` / `typed.FollowParallel` (one walk, `internal/follow`, behind both; `-path` runs in record mode); `generate sql` writes a recursive CTE — every mode on DuckDB (`USING KEY` for the keyed modes), `-all-paths` on Postgres and DataFusion, which have no keyed recursion and refuse the rest by name; `generate rust` runs that SQL. A codelab section ("Graphs: follow a join until it stops") and `flights.csv` in the codelab data.
