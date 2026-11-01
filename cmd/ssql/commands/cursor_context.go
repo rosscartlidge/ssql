@@ -249,31 +249,32 @@ func tokenizeStageOpen(s string) ([]string, bool) {
 	return toks, quote != 0
 }
 
-// rightFieldCompleter marks a join argument that names a field of the
-// RIGHT source (-on's 2nd, -as's 1st, -asof-on's 2nd, -follow, the field
-// of -lowest-sum and -sum). Tab can't see that source, so it hints
-// Ctrl-O; Ctrl-O finds the slot by this declaration (joinRightFieldSlot),
-// so a new right-side flag needs no second list to drift from.
+// rightFieldCompleter marks an argument that names a field of a
+// command's SIDE source, its FILE or <(…)> — join's -on 2nd, -as 1st and
+// -asof-on 2nd; traverse's -from 2nd, -to, and the field of -lowest-sum
+// and -sum. Tab can't see that source, so it hints Ctrl-O; Ctrl-O finds
+// the slot by this declaration (rightFieldSlot), so a new side-field
+// flag, or a new two-input command, needs no second list to drift from.
 type rightFieldCompleter struct{}
 
 func (rightFieldCompleter) Complete(cf.CompletionContext) ([]string, error) {
 	return []string{FieldHintToken}, nil
 }
 
-// joinRightFieldSlot reports whether the cursor (end of stage) sits on a
-// join argument declared with rightFieldCompleter, by the completion
-// engine's own parse (DFC116 F4): those fields come from the join's
-// right source (the FILE or <(…)>), not the upstream pipeline. It
-// replaced a hand-walker that knew only -on and -as, so -asof-on,
-// -follow, -lowest-sum and -sum completed the LEFT side's fields
+// rightFieldSlot reports whether the cursor (end of stage) sits on an
+// argument declared with rightFieldCompleter, by the completion
+// engine's own parse (DFC116 F4): those fields come from the stage's
+// side source (the FILE or <(…)>), not the upstream pipeline. It
+// replaced a hand-walker of join's flags that knew only -on and -as, so
+// -asof-on and the traversal's flags completed the LEFT side's fields
 // (found by Ross: `join flights.csv -on city src -follow ^O`).
-func joinRightFieldSlot(stage string, tree *cf.Command) bool {
+func rightFieldSlot(stage string, tree *cf.Command) bool {
 	args, pos, ok := stageCursorArgs(stage)
 	if !ok {
 		return false
 	}
 	ctx, path := tree.AnalyzeCursor(args, pos)
-	if len(path) != 1 || path[0] != "join" || ctx.FlagSpec == nil {
+	if len(path) != 1 || ctx.FlagSpec == nil {
 		return false
 	}
 	cs := ctx.FlagSpec.ArgCompleters
@@ -346,7 +347,7 @@ func ValueSourceFile(before string, tree *cf.Command) string {
 // CompleteSource returns the shell command whose `SSQL_MODE=schema` output
 // should drive field-NAME completion at the cursor, or "" if none applies:
 //   - cursor inside a process substitution → that procsub's internal upstream;
-//   - cursor at a join right-side field slot → the join's procsub (right source);
+//   - cursor at a side-field slot (join, traverse) → the side source (procsub or file);
 //   - otherwise → the upstream pipeline feeding the current stage.
 func CompleteSource(before string, tree *cf.Command) string {
 	if p, ok := enclosingProcsub(before); ok {
@@ -365,7 +366,7 @@ func CompleteSource(before string, tree *cf.Command) string {
 		}
 		return "ssql from " + f
 	}
-	if joinRightFieldSlot(stage, tree) {
+	if rightFieldSlot(stage, tree) {
 		if ps := firstProcsub(stage); ps != "" {
 			return strings.TrimSpace(ps)
 		}
@@ -374,24 +375,24 @@ func CompleteSource(before string, tree *cf.Command) string {
 		// it. Without this the slot fell through to the UPSTREAM and
 		// completed the left side's fields (found by Ross: `join
 		// kind.csv -on a_kind ^O` offered shuffled.csv's fields).
-		if f := joinRightFile(stage, tree); f != "" {
+		if f := sideFile(stage, tree); f != "" {
 			return "ssql from " + f
 		}
 	}
 	return upstreamOf(before)
 }
 
-// joinRightFile returns the join's direct-file right-side argument —
-// the FILE positional the join builder declares, bound by the
-// completion engine's parse (DFC116 F4) — or "" when the right side
-// is a procsub or absent.
-func joinRightFile(stage string, tree *cf.Command) string {
+// sideFile returns a two-input stage's direct-file side argument — the
+// FILE positional its builder declares (join, traverse), bound by the
+// completion engine's parse (DFC116 F4) — or "" when the side is a
+// procsub or absent.
+func sideFile(stage string, tree *cf.Command) string {
 	args, pos, ok := stageCursorArgs(stage)
 	if !ok {
 		return ""
 	}
 	ctx, path := tree.AnalyzeCursor(args, pos)
-	if len(path) != 1 || path[0] != "join" {
+	if len(path) != 1 {
 		return ""
 	}
 	f, _ := ctx.GlobalFlags["FILE"].(string)

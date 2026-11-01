@@ -129,7 +129,10 @@ type pipelineCmd struct {
 	MultiFileFlags    []string // other flags (-merge-schemas, -source, -unordered, -type, etc.)
 	MultiFilePushDown []string // args after --
 
-	// Parsed fields for "join"
+	// Parsed fields for a side-file command (join, traverse): the FILE
+	// positional and, for a procsub, its inner pipeline. IsJoin marks
+	// join itself, the one the join rules (pushdown) apply to.
+	HasSideFile      bool
 	IsJoin           bool
 	JoinFile         string           // right-side file path
 	JoinArgs         []string         // args after FILE (-using, -on, -type, etc.)
@@ -300,7 +303,7 @@ func optimizePipelineCmdsWith(input io.Reader, opts optimiseOptions) ([]*pipelin
 			continue
 		}
 		// Attach pending func bodies to their consumer.
-		if cmd.IsJoin && cmd.JoinIsProcessSub && len(pendingFuncBodies) > 0 {
+		if cmd.HasSideFile && cmd.JoinIsProcessSub && len(pendingFuncBodies) > 0 {
 			cmd.JoinProcSubCmds = pendingFuncBodies[0]
 			pendingFuncBodies = pendingFuncBodies[1:]
 		}
@@ -409,6 +412,8 @@ func parseCmdFields(cmd *pipelineCmd) {
 		parseMergeCmd(cmd)
 	case "join":
 		parseJoinCmd(cmd)
+	case "traverse":
+		parseSideFileCmd(cmd)
 	case "sort":
 		parseSortCmd(cmd)
 	case "limit":
@@ -605,6 +610,15 @@ func parseFromCatalogCmd(cmd *pipelineCmd) {
 
 func parseJoinCmd(cmd *pipelineCmd) {
 	cmd.IsJoin = true
+	parseSideFileCmd(cmd)
+}
+
+// parseSideFileCmd reads a side-file command's FILE positional: a
+// procsub there is rebuilt from its func fragment on render (a stage
+// that did not was printed with the dead /dev/fd/N of the generation
+// run — traverse until 2026-11-02).
+func parseSideFileCmd(cmd *pipelineCmd) {
+	cmd.HasSideFile = true
 	if len(cmd.RawArgs) == 0 {
 		return
 	}
@@ -1676,11 +1690,6 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 		rightMovable, leftMovable := true, true
 		for k, a := range cmds[i].JoinArgs {
 			switch a {
-			case "-follow":
-				// A traversal overwrites the node field and emits a row
-				// per route: a predicate after it is about routes, and
-				// before it about seeds (DFC161).
-				rightMovable, leftMovable = false, false
 			case "-asof", "-asof-on":
 				rightMovable = false
 			case "-type", "-t":
@@ -2474,9 +2483,6 @@ func extractCastFields(args []string) []string {
 }
 
 func extractJoinFields(args []string) ([]string, bool) {
-	if slices.Contains(args, "-follow") {
-		return nil, true // a traversal: the seed's columns pass through, the node field is rewritten
-	}
 	var fields []string
 	i := 0
 	for i < len(args) {
@@ -2704,7 +2710,7 @@ func cmdWords(cmd *pipelineCmd) []stageWord {
 		return text(parts)
 	}
 
-	if cmd.IsJoin {
+	if cmd.HasSideFile {
 		if len(cmd.JoinRightWhere) > 0 {
 			// The right side filtered: an inner pipeline over the plain
 			// file (the shell's <(ssql from FILE | ssql where …)).

@@ -16,6 +16,7 @@ var testCursorTree = sync.OnceValue(func() *cf.Command {
 	cmd = RegisterUpdate(cmd)
 	cmd = RegisterGroupBy(cmd)
 	cmd = RegisterJoin(cmd)
+	cmd = RegisterTraverse(cmd)
 	cmd = RegisterRename(cmd)
 	cmd = RegisterSort(cmd)
 	cmd = RegisterInclude(cmd)
@@ -136,23 +137,33 @@ func TestCompleteSource(t *testing.T) {
 			"ssql from kind.csv",
 		},
 		{
-			"join -follow names a right field (direct file)",
-			"ssql from from.csv | ssql join flights.csv -on city src -follow ",
-			"ssql from flights.csv",
-		},
-		{
-			"join -lowest-sum 1st arg is a right field",
-			"ssql from from.csv | ssql join flights.csv -on city src -follow dst -lowest-sum ",
-			"ssql from flights.csv",
-		},
-		{
-			"join -lowest-sum 2nd arg (result name) is NOT a right field",
-			"ssql from from.csv | ssql join flights.csv -on city src -follow dst -lowest-sum mins ",
+			"traverse -from 1st arg (the seed's node) completes upstream",
+			"ssql from from.csv | ssql traverse flights.csv -from ",
 			"ssql from from.csv",
 		},
 		{
-			"join -sum 1st arg is a right field (procsub)",
-			"ssql from from.csv | ssql join <(ssql from flights.csv) -on city src -follow dst -sum ",
+			"traverse -from 2nd arg (the edge's source) is a side field",
+			"ssql from from.csv | ssql traverse flights.csv -from city ",
+			"ssql from flights.csv",
+		},
+		{
+			"traverse -to names a side field (direct file)",
+			"ssql from from.csv | ssql traverse flights.csv -from city src -to ",
+			"ssql from flights.csv",
+		},
+		{
+			"traverse -lowest-sum 1st arg is a side field",
+			"ssql from from.csv | ssql traverse flights.csv -from city src -to dst -lowest-sum ",
+			"ssql from flights.csv",
+		},
+		{
+			"traverse -lowest-sum 2nd arg (result name) is NOT a side field",
+			"ssql from from.csv | ssql traverse flights.csv -from city src -to dst -lowest-sum mins ",
+			"ssql from from.csv",
+		},
+		{
+			"traverse -sum 1st arg is a side field (procsub)",
+			"ssql from from.csv | ssql traverse <(ssql from flights.csv) -from city src -to dst -sum ",
 			"ssql from flights.csv",
 		},
 		{

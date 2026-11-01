@@ -20,6 +20,7 @@ import (
 var consoleExcluded = map[string]string{
 	"From":        "replaced by from-loaded — the console serves one in-memory dataset",
 	"Join":        "reads server-side file paths (v1 exclusion; see serve_cli.go comment)",
+	"Traverse":    "reads its edges from a server-side file path (as Join)",
 	"Merge":       "reads server-side file paths (v1 exclusion)",
 	"Union":       "reads server-side file paths (v1 exclusion)",
 	"Except":      "reads server-side file paths (v1 exclusion, as Union)",

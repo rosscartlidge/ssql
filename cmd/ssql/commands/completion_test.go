@@ -21,6 +21,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterUpdate(cmd)
 	RegisterCast(cmd)
 	RegisterJoin(cmd)
+	RegisterTraverse(cmd)
 	RegisterUnion(cmd)
 	RegisterExcept(cmd)
 	RegisterIntersect(cmd)
@@ -65,6 +66,9 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 		"join": {
 			"-using": {0}, // same field name both sides
 			"-on":    {0}, // left-field is arg 0 (right-field is arg 1, not completed from fields)
+		},
+		"traverse": {
+			"-from": {0}, // the seed's node field is arg 0 (the edge's src, arg 1, is Ctrl-O's)
 		},
 		"except": {
 			"-using": {0},

@@ -562,13 +562,13 @@ func TestPipelineCorpus(t *testing.T) {
 			// typed lanes emit typed.FollowParallel; -path falls back to
 			// record mode inside a typed program (its side reader must
 			// compile there — it did not until 2026-10-31).
-			Name:     "join_follow_lowest_sum",
-			Pipeline: `{{.bin}} from {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -lowest-sum mins total -depth hops | {{.bin}} where -if city eq PER | {{.bin}} to table`,
+			Name:     "traverse_lowest_sum",
+			Pipeline: `{{.bin}} from {{.data}}/graph_seeds.csv | {{.bin}} traverse {{.data}}/graph_flights.csv -from city src -to dst -lowest-sum mins total -depth hops | {{.bin}} where -if city eq PER | {{.bin}} to table`,
 			Contains: []string{"355", "west"},
 		},
 		{
-			Name:     "join_follow_path_record_fallback",
-			Pipeline: `{{.bin}} from {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -path route | {{.bin}} to csv`,
+			Name:     "traverse_path_record_fallback",
+			Pipeline: `{{.bin}} from {{.data}}/graph_seeds.csv | {{.bin}} traverse {{.data}}/graph_flights.csv -from city src -to dst -path route | {{.bin}} to csv`,
 			Contains: []string{`""SYD"",""BNE"",""CNS"",""DRW""`},
 		},
 		{

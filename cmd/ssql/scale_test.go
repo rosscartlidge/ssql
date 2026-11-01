@@ -101,7 +101,7 @@ func scaleDir(t *testing.T) string {
 
 // budget runs cmdline in dir and fails the test if wall time exceeds
 // ceiling (or the command errors).
-// writeFollowGraphs writes the join -follow fixtures into dir once: a
+// writeFollowGraphs writes the traverse fixtures into dir once: a
 // pseudo-random graph (1 M edges, 200 k nodes, 5 out-edges each, weights
 // 1..97) and a layered DAG (13 layers of 3, complete between layers).
 func writeFollowGraphs(t *testing.T, dir string) {
@@ -213,7 +213,7 @@ func TestScaleBudgets(t *testing.T) {
 		budget(t, dir, bin+" from csv big.csv | "+bin+" window -partition dept -order id -sum score run -dense-rank dr | "+bin+" count", 60*time.Second)
 	})
 	t.Run("follow", func(t *testing.T) {
-		// join -follow (DFC161) over a 1 M-edge graph of 200 k nodes,
+		// traverse (DFC161) over a 1 M-edge graph of 200 k nodes,
 		// every node reachable from 0: the BFS and Dijkstra visit each
 		// edge once (≈ 2 s and 3 s exec, 3 s typed with the build cached;
 		// a per-round rescan of the frontier or of the edges is
@@ -224,11 +224,11 @@ func TestScaleBudgets(t *testing.T) {
 		writeFollowGraphs(t, dir)
 		repo, _ := filepath.Abs("../..")
 		seed := "printf 'node\\n0\\n' | " + bin + " from csv - | "
-		budget(t, dir, seed+bin+" join follow_graph.csv -on node src -follow dst -depth d | "+bin+" count | grep -qx 200000", 30*time.Second)
-		budget(t, dir, seed+bin+" join follow_graph.csv -on node src -follow dst -lowest-sum w t | "+bin+" count | grep -qx 200000", 30*time.Second)
-		budget(t, dir, seed+bin+" join follow_dag.csv -on node src -follow dst -all-paths -depth d | "+bin+" count | grep -qx 797161", 30*time.Second)
+		budget(t, dir, seed+bin+" traverse follow_graph.csv -from node src -to dst -depth d | "+bin+" count | grep -qx 200000", 30*time.Second)
+		budget(t, dir, seed+bin+" traverse follow_graph.csv -from node src -to dst -lowest-sum w t | "+bin+" count | grep -qx 200000", 30*time.Second)
+		budget(t, dir, seed+bin+" traverse follow_dag.csv -from node src -to dst -all-paths -depth d | "+bin+" count | grep -qx 797161", 30*time.Second)
 		budget(t, dir, "printf 'node\\n0\\n' > follow_seed.csv && SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
-			bin+" from csv follow_seed.csv | "+bin+" join follow_graph.csv -on node src -follow dst -lowest-sum w t | "+bin+" count' | grep -qx 200000", 90*time.Second)
+			bin+" from csv follow_seed.csv | "+bin+" traverse follow_graph.csv -from node src -to dst -lowest-sum w t | "+bin+" count' | grep -qx 200000", 90*time.Second)
 	})
 	t.Run("window-running-frame-typed", func(t *testing.T) {
 		// The typed window had the same scan (typed/window.go); same

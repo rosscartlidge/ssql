@@ -11,30 +11,162 @@ import (
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
-// Graph traversal (DFC161), a mode on `join`: the seeds are the stream,
-// the edges the right-side file, and the join runs to a fixpoint — each
-// round joins the routes the last round found against the edges again.
+// Graph traversal (DFC161): the seeds are the stream, the edges the
+// file, and the traversal is a join run to a fixpoint — each round joins
+// the routes the last round found against the edges again. It was a
+// mode of join (`join -follow`) in v4.135; it is its own command so it
+// can be found and so its flags are only the ones that apply (§10).
 //
-//	printf 'city\nSYD\n' | ssql from csv - | ssql join flights.csv -on city src -follow dst -depth hops
-//	… | ssql join flights.csv -on city src -follow dst -lowest-sum mins total
-//	… | ssql join flights.csv -on city src -follow dst -all-paths -path route
+//	… | ssql traverse flights.csv -from city src -to dst -depth hops
+//	… | ssql traverse flights.csv -from city src -to dst -lowest-sum mins total
+//	… | ssql traverse flights.csv -from city src -to dst -all-paths -path route
 //
 // Exec and record codegen call ssql.Follow; typed emits
 // typed.Follow[Parallel]; generate sql emits a recursive CTE (the keyed
 // modes on DuckDB only).
 
-// followSpec is the -follow family of flags, parsed once by the handler.
-type followSpec struct {
-	dst         string
-	mode        ssql.FollowMode
-	lowest      ssql.FollowSum
-	sums        []ssql.FollowSum
-	depth, path string
-	maxDepth    int
-	both        bool
+// RegisterTraverse registers the traverse subcommand.
+func RegisterTraverse(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	cmd.Subcommand("traverse").
+		Description("Graph traversal: from each input row (a seed), follow the edges in FILE until no new route is found — a join repeated to a fixpoint (DFC161)").
+		Example("ssql from cities.csv | ssql where -if city eq SYD | ssql traverse flights.csv -from city src -to dst -depth hops", "Every city reachable from SYD, by the fewest hops (the default)").
+		Example("ssql from cities.csv | ssql traverse flights.csv -from city src -to dst -lowest-sum mins total -path route", "Each city's quickest route from every seed by total mins (Dijkstra)").
+		Example("ssql from cities.csv | ssql where -if city eq SYD | ssql traverse flights.csv -from city src -to dst -all-paths -sum mins total", "Every route that never revisits a city, with its total").
+
+		Flag("-from").
+			Arg("node").
+				FieldsFromFlag("").
+				Done().
+			Arg("src").
+				Completer(rightFieldCompleter{}).
+				Done().
+			Global().
+			Required().
+			Help("The seed's node field and the edge's source field: -from <node> <src>").
+			Done().
+
+		Flag("-to").
+			String().
+			Completer(rightFieldCompleter{}).
+			Global().
+			Required().
+			Help("The edge's target field").
+			Done().
+
+		Flag("-fewest-hops").
+			Bool().
+			Global().
+			Help("Each node once per seed, by the fewest hops (the default)").
+			Done().
+
+		Flag("-lowest-sum").
+			Arg("field").
+				Completer(rightFieldCompleter{}).
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Global().
+			Help("Each node once per seed, by the lowest total of edge FIELD, written to RESULT (Dijkstra; weights must be >= 0)").
+			Done().
+
+		Flag("-all-paths").
+			Bool().
+			Global().
+			Help("Every simple path (no node twice), every prefix its own row; exponential on a dense graph").
+			Done().
+
+		Flag("-sum").
+			Arg("field").
+				Completer(rightFieldCompleter{}).
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("The running total of edge FIELD along the route, written to RESULT").
+			Done().
+
+		Flag("-depth").
+			String().
+			Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+			Global().
+			Help("The hop count, 0 on the seed row").
+			Done().
+
+		Flag("-path").
+			String().
+			Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+			Global().
+			Help("The nodes visited, seed first, as a list").
+			Done().
+
+		Flag("-max-depth").
+			Int().
+			Global().
+			Help("Stop at this many hops").
+			Done().
+
+		Flag("-both").
+			Bool().
+			Global().
+			Help("The graph is undirected; every edge is usable either way").
+			Done().
+
+		Flag("-generate", "-g").
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
+		Flag("FILE").
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
+			Global().
+			Required().
+			Help("The edges: CSV/TSV/JSON inferred from the extension, a _schema JSONL, or <(ssql …)").
+			Done().
+
+		Handler(func(ctx *cf.Context) error {
+			f, err := parseFollowSpec(ctx)
+			if err != nil {
+				return err
+			}
+			file, _ := ctx.GlobalFlags["FILE"].(string)
+			if file == "" {
+				return fmt.Errorf("traverse: the edges file is required")
+			}
+			generate, _ := ctx.GlobalFlags["-generate"].(bool)
+			if shouldGenerate(generate) {
+				return generateTraverseCode(file, f)
+			}
+			seeds := lib.ReadJSONLWithSchema(ctx.Stdin())
+			edges, edgeSchema, err := readAuxInput(file)
+			if err != nil {
+				return err
+			}
+			// Bare .jsonl without a schema header must fail LOUDLY —
+			// a headerless file silently loses field information.
+			if edgeSchema == nil {
+				return fmt.Errorf("traverse: edges file %s has no schema header — pipe through ssql first: ssql traverse <(ssql from jsonl %s) ...", file, file)
+			}
+			return execTraverse(ctx, seeds.Records, seeds.Schema, edges, edgeSchema, f)
+		}).
+		Done()
+	return cmd
 }
 
-func (f followSpec) active() bool { return f.dst != "" }
+// followSpec is traverse's flags, parsed once by the handler.
+type followSpec struct {
+	node, src, dst string
+	mode           ssql.FollowMode
+	lowest         ssql.FollowSum
+	sums           []ssql.FollowSum
+	depth, path    string
+	maxDepth       int
+	both           bool
+}
 
 // followPairs reads an accumulated two-argument flag (-sum FIELD NAME).
 func followPairs(raw any) []ssql.FollowSum {
@@ -56,11 +188,15 @@ func followPairs(raw any) []ssql.FollowSum {
 	return out
 }
 
-// parseFollowSpec reads the -follow flags from the parsed context.
+// parseFollowSpec reads traverse's flags from the parsed context.
 func parseFollowSpec(ctx *cf.Context) (followSpec, error) {
 	var f followSpec
 	g := ctx.GlobalFlags
-	f.dst, _ = g["-follow"].(string)
+	if m, ok := g["-from"].(map[string]any); ok {
+		f.node, _ = m["node"].(string)
+		f.src, _ = m["src"].(string)
+	}
+	f.dst, _ = g["-to"].(string)
 	f.depth, _ = g["-depth"].(string)
 	f.path, _ = g["-path"].(string)
 	f.maxDepth, _ = g["-max-depth"].(int)
@@ -75,14 +211,11 @@ func parseFollowSpec(ctx *cf.Context) (followSpec, error) {
 			modes++
 		}
 	}
-	if !f.active() {
-		if modes > 0 || f.depth != "" || f.path != "" || f.maxDepth != 0 || f.both || len(f.sums) > 0 {
-			return f, fmt.Errorf("join: -fewest-hops, -lowest-sum, -all-paths, -depth, -path, -sum, -max-depth and -both need -follow FIELD")
-		}
-		return f, nil
+	if f.node == "" || f.src == "" || f.dst == "" {
+		return f, fmt.Errorf("traverse needs -from NODE SRC and -to DST: the seed's node field, the edge's source and target fields")
 	}
 	if modes > 1 {
-		return f, fmt.Errorf("join -follow: -fewest-hops, -lowest-sum and -all-paths are alternatives — give one (-fewest-hops is the default)")
+		return f, fmt.Errorf("traverse: -fewest-hops, -lowest-sum and -all-paths are alternatives — give one (-fewest-hops is the default)")
 	}
 	switch {
 	case all:
@@ -92,14 +225,14 @@ func parseFollowSpec(ctx *cf.Context) (followSpec, error) {
 	}
 	for _, s := range append(append([]ssql.FollowSum{}, f.sums...), lowest...) {
 		if s.Field == "" || s.Name == "" {
-			return f, fmt.Errorf("join -follow: -sum and -lowest-sum need FIELD NAME")
+			return f, fmt.Errorf("traverse: -sum and -lowest-sum need FIELD NAME")
 		}
 	}
 	if f.maxDepth < 0 {
-		return f, fmt.Errorf("join -follow: -max-depth %d must be positive", f.maxDepth)
+		return f, fmt.Errorf("traverse: -max-depth %d must be positive", f.maxDepth)
 	}
 	if f.maxDepth > 0 && f.mode == ssql.FollowLowestSum {
-		return f, fmt.Errorf("join -follow: -max-depth is not defined with -lowest-sum (the cheapest route within N hops is not what the search finds; DFC161 §11)")
+		return f, fmt.Errorf("traverse: -max-depth is not defined with -lowest-sum (the cheapest route within N hops is not what the search finds; DFC161 §11)")
 	}
 	return f, nil
 }
@@ -132,53 +265,40 @@ func (f followSpec) weights() []ssql.FollowSum {
 }
 
 // followCheck validates the traversal against what the field lists
-// allow: one node/source pair, no merge options, the fields present, the
-// weights numeric, and no result column colliding with a seed column or
-// another result. nil field lists are unknown and skipped.
-func followCheck(leftFields, rightFields []string, rightType func(string) string, clauses []ssql.LookupClause, f followSpec, joinType string, opts joinOptions, asof asofSpec) (ssql.FollowConfig, error) {
+// allow: the fields present, the weights numeric, the target not the
+// source, and no result column colliding with a seed column or another
+// result. nil field lists are unknown and skipped.
+func followCheck(leftFields, rightFields []string, rightType func(string) string, f followSpec) (ssql.FollowConfig, error) {
 	var cfg ssql.FollowConfig
-	if len(clauses) != 1 || len(clauses[0].FieldRenames) > 0 {
-		return cfg, fmt.Errorf("join -follow needs exactly one -on NODE SRC (or -using FIELD) and no -as: the seed's node field and the edge's source field")
+	if f.src == f.dst {
+		return cfg, fmt.Errorf("traverse -to %s: the edge's target must be a different field from its source (-from %s %s)", f.dst, f.node, f.src)
 	}
-	if joinType != "" && joinType != "inner" {
-		return cfg, fmt.Errorf("join -follow: -type %s has no traversal meaning (every seed is its own depth-0 row)", joinType)
-	}
-	if opts.any() {
-		return cfg, fmt.Errorf("join -follow: -suffix, -exclude-left and -exclude-right are not supported with -follow (the output is the seed's columns plus the results)")
-	}
-	if asof.active() {
-		return cfg, fmt.Errorf("join: -follow and -asof are different joins — give one")
-	}
-	c := clauses[0]
-	if c.RightField == f.dst {
-		return cfg, fmt.Errorf("join -follow %s: the edge's target must be a different field from its source (-on %s %s)", f.dst, c.LeftField, c.RightField)
-	}
-	if leftFields != nil && !fieldListHasOrPath(leftFields, c.LeftField) {
-		return cfg, fmt.Errorf("join -follow: seed field %q not found (available: %s)", c.LeftField, strings.Join(leftFields, ", "))
+	if leftFields != nil && !fieldListHasOrPath(leftFields, f.node) {
+		return cfg, fmt.Errorf("traverse: seed field %q not found (available: %s)", f.node, strings.Join(leftFields, ", "))
 	}
 	if rightFields != nil {
-		for _, rf := range append([]string{c.RightField, f.dst}, followFields(f.weights())...) {
+		for _, rf := range append([]string{f.src, f.dst}, followFields(f.weights())...) {
 			if !fieldListHasOrPath(rightFields, rf) {
-				return cfg, fmt.Errorf("join -follow: edge field %q not found (available: %s)", rf, strings.Join(rightFields, ", "))
+				return cfg, fmt.Errorf("traverse: edge field %q not found (available: %s)", rf, strings.Join(rightFields, ", "))
 			}
 		}
 		for _, w := range f.weights() {
 			switch base, _ := lib.ParseWireType(rightType(w.Field)); base {
 			case "", lib.TypeInt, lib.TypeInt128, lib.TypeFloat, lib.TypeDecimal:
 			default:
-				return cfg, fmt.Errorf("join -follow: edge field %q is %s; a sum needs a number", w.Field, base)
+				return cfg, fmt.Errorf("traverse: edge field %q is %s; a sum needs a number", w.Field, base)
 			}
 		}
 	}
 	seen := map[string]bool{}
 	for _, n := range f.accNames() {
-		if seen[n] || (leftFields != nil && fieldListHasOrPath(leftFields, n)) || n == c.LeftField {
-			return cfg, fmt.Errorf("join -follow: result column %q is already a column (seed: %s)", n, strings.Join(leftFields, ", "))
+		if seen[n] || (leftFields != nil && fieldListHasOrPath(leftFields, n)) || n == f.node {
+			return cfg, fmt.Errorf("traverse: result column %q is already a column (seed: %s)", n, strings.Join(leftFields, ", "))
 		}
 		seen[n] = true
 	}
 	return ssql.FollowConfig{
-		NodeField: c.LeftField, SrcField: c.RightField, DstField: f.dst,
+		NodeField: f.node, SrcField: f.src, DstField: f.dst,
 		Mode: f.mode, Lowest: f.lowest, Sums: f.sums,
 		DepthField: f.depth, PathField: f.path, MaxDepth: f.maxDepth, Both: f.both,
 	}, nil
@@ -204,13 +324,13 @@ func followSumType(edgeType string) string {
 	return lib.TypeFloat
 }
 
-// execFollowJoin runs the traversal in the interpreter.
-func execFollowJoin(ctx *cf.Context, leftRecords iter.Seq[ssql.Record], leftSchema *lib.Schema, rightSeq iter.Seq[ssql.Record], rightSchema *lib.Schema, clauses []ssql.LookupClause, f followSpec, joinType string, opts joinOptions, asof asofSpec) error {
+// execTraverse runs the traversal in the interpreter.
+func execTraverse(ctx *cf.Context, leftRecords iter.Seq[ssql.Record], leftSchema *lib.Schema, rightSeq iter.Seq[ssql.Record], rightSchema *lib.Schema, f followSpec) error {
 	var leftFields []string
 	if leftSchema != nil {
 		leftFields = leftSchema.Fields
 	}
-	cfg, err := followCheck(leftFields, rightSchema.Fields, rightSchema.TypeOf, clauses, f, joinType, opts, asof)
+	cfg, err := followCheck(leftFields, rightSchema.Fields, rightSchema.TypeOf, f)
 	if err != nil {
 		return err
 	}
@@ -272,6 +392,30 @@ func followConfigGo(cfg ssql.FollowConfig) string {
 	return "ssql.FollowConfig{" + strings.Join(parts, ", ") + "}"
 }
 
+// generateTraverseCode generates Go code for traverse: the side source
+// (generateSideCode) with the traversal's emitters. A typed pipeline
+// whose traversal has no typed form runs it in record mode, with a plan
+// note saying why (surfaced by -explain).
+func generateTraverseCode(file string, f followSpec) error {
+	var notes []string
+	s := sideSource{name: "traverse", file: file, leftKeys: []string{f.node}, rightKeys: []string{f.src, f.dst}}
+	s.typed = func(c sideCtx, rightSchema *lib.TypedSchema, rightFragments []*lib.CodeFragment, subCommandStr string) (bool, error) {
+		handled, reason, err := emitTypedFollow(c.inputVar, c.funcName, c.leftSchema, rightSchema, rightFragments, subCommandStr, f)
+		if !handled && err == nil {
+			notes = []string{fmt.Sprintf("record fallback (%s)", reason)}
+		}
+		return handled, err
+	}
+	s.record = func(c sideCtx, rightFields []string, rightType func(string) string) error {
+		cfg, err := followCheck(c.leftFields, rightFields, rightType, f)
+		if err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		return generateFollowStmt(c.inputVar, c.funcName, cfg, notes)
+	}
+	return generateSideCode(s)
+}
+
 // generateFollowStmt writes the record-mode stmt fragment.
 func generateFollowStmt(inputVar, funcName string, cfg ssql.FollowConfig, notes []string) error {
 	code := fmt.Sprintf("joined := ssql.Follow(%s(), %s)(%s)", funcName, followConfigGo(cfg), inputVar)
@@ -309,9 +453,9 @@ func typedWireType(s *lib.TypedSchema) func(string) string {
 // is independent), typed.Follow over a Seq. handled is false, with the
 // reason, when the traversal has no typed form — a -path list (the typed
 // tier has no list columns, DFC145) or node fields of different types —
-// and nothing has been written: the caller joins in record mode.
-func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.TypedSchema, rightFragments []*lib.CodeFragment, subCommandStr string, clauses []ssql.LookupClause, f followSpec, joinType string, opts joinOptions, asof asofSpec) (handled bool, reason string, err error) {
-	cfg, err := followCheck(typedFieldNames(leftSchema), typedFieldNames(rightSchema), typedWireType(rightSchema), clauses, f, joinType, opts, asof)
+// and nothing has been written: the caller traverses in record mode.
+func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.TypedSchema, rightFragments []*lib.CodeFragment, subCommandStr string, f followSpec) (handled bool, reason string, err error) {
+	cfg, err := followCheck(typedFieldNames(leftSchema), typedFieldNames(rightSchema), typedWireType(rightSchema), f)
 	if err != nil {
 		return false, "", lib.WriteErrorAndExit(getCommandString(), err)
 	}
@@ -452,7 +596,7 @@ func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.Typ
 	frag.InputTypedSchema = leftSchema
 	frag.OutputTypedSchema = route
 	frag.StructDefs = []string{
-		lib.RenderStructDefWithComment(route, routeT+" is a route produced by join -follow: the seed's columns, the node reached, the totals."),
+		lib.RenderStructDefWithComment(route, routeT+" is a route produced by traverse: the seed's columns, the node reached, the totals."),
 		lib.RenderStructDefWithComment(acc, accT+" is a route's running totals."),
 	}
 	frag.IsStream = true

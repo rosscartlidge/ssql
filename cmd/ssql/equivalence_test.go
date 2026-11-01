@@ -155,7 +155,7 @@ func equivFoldDuckDBOnly() map[string]string {
 // -path list) does not translate to: Postgres and DataFusion have no
 // keyed recursion (DFC161 §4); the rust lane follows datafusion.
 func equivFollowDuckDBOnly() map[string]string {
-	why := "join -follow's keyed modes and -path are DuckDB's (USING KEY, lists; DFC161 §4)"
+	why := "traverse's keyed modes and -path are DuckDB's (USING KEY, lists; DFC161 §4)"
 	return map[string]string{"datafusion": why, "postgres": why}
 }
 
@@ -3209,8 +3209,8 @@ var equivCases = []EquivCase{
 		// seed by the fewest hops; PER at 2 hops via BNE although 355 via
 		// MEL and ADL is cheaper. The seed's other columns (label) carry
 		// through.
-		Name:     "follow_fewest_hops",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -depth hops -sum mins mins`,
+		Name:     "traverse_fewest_hops",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} traverse {{.data}}/graph_flights.csv -from city src -to dst -depth hops -sum mins mins`,
 		Golden: []map[string]any{
 			{"city": "SYD", "label": "home", "hops": 0, "mins": 0},
 			{"city": "BNE", "label": "home", "hops": 1, "mins": 95},
@@ -3228,8 +3228,8 @@ var equivCases = []EquivCase{
 	{
 		// Dijkstra: PER at 355 via MEL and ADL, DRW at 385 via CNS (DFC161
 		// §5, the form whose naive USING KEY version reported 565).
-		Name:     "follow_lowest_sum",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -lowest-sum mins total -depth hops`,
+		Name:     "traverse_lowest_sum",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} traverse {{.data}}/graph_flights.csv -from city src -to dst -lowest-sum mins total -depth hops`,
 		Golden: []map[string]any{
 			{"city": "SYD", "label": "home", "hops": 0, "total": 0},
 			{"city": "MEL", "label": "home", "hops": 1, "total": 90},
@@ -3247,8 +3247,8 @@ var equivCases = []EquivCase{
 	{
 		// Every simple route: the recursive CTE's 11 rows from SYD (DRW
 		// three times) plus PER's two. Runs on every SQL dialect.
-		Name:     "follow_all_paths",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} join {{.data}}/graph_flights.csv -on city src -follow dst -all-paths -depth hops -sum mins mins`,
+		Name:     "traverse_all_paths",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} traverse {{.data}}/graph_flights.csv -from city src -to dst -all-paths -depth hops -sum mins mins`,
 		Golden: []map[string]any{
 			{"city": "SYD", "label": "home", "hops": 0, "mins": 0},
 			{"city": "BNE", "label": "home", "hops": 1, "mins": 95},
@@ -3271,8 +3271,8 @@ var equivCases = []EquivCase{
 		// keeps its lighter weight; F→(empty) has no target and is dropped;
 		// Z has no edges. -path has no typed column, so the typed lanes run
 		// it in record mode.
-		Name:     "follow_ties_path",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} join {{.data}}/graph_ties.csv -on city src -follow dst -sum w s -path p`,
+		Name:     "traverse_ties_path",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} traverse {{.data}}/graph_ties.csv -from city src -to dst -sum w s -path p`,
 		Golden: []map[string]any{
 			{"city": "A", "s": 0, "p": []any{"A"}},
 			{"city": "B", "s": 1, "p": []any{"A", "B"}},
@@ -3289,8 +3289,8 @@ var equivCases = []EquivCase{
 	{
 		// Undirected (-both): C reaches A backwards along A→C, and B through
 		// A (the least of two 2-hop routes at cost 2).
-		Name:     "follow_ties_lowest_both",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} join {{.data}}/graph_ties.csv -on city src -follow dst -both -lowest-sum w t -depth d`,
+		Name:     "traverse_ties_lowest_both",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} traverse {{.data}}/graph_ties.csv -from city src -to dst -both -lowest-sum w t -depth d`,
 		Golden: []map[string]any{
 			{"city": "A", "d": 0, "t": 0},
 			{"city": "B", "d": 1, "t": 1},
@@ -3311,8 +3311,8 @@ var equivCases = []EquivCase{
 	{
 		// Undirected, every route of at most two hops; the two parallel A–E
 		// edges are two routes, the self-loop D–D none.
-		Name:     "follow_all_paths_both_depth",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} join {{.data}}/graph_ties.csv -on city src -follow dst -both -all-paths -max-depth 2 -depth d`,
+		Name:     "traverse_all_paths_both_depth",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_tseeds.csv | {{.bin}} traverse {{.data}}/graph_ties.csv -from city src -to dst -both -all-paths -max-depth 2 -depth d`,
 		Golden: []map[string]any{
 			{"city": "A", "d": 0},
 			{"city": "E", "d": 1},
@@ -3335,8 +3335,8 @@ var equivCases = []EquivCase{
 	},
 	{
 		// Integer node ids: 3 is cheaper through 2 (15) than direct (20).
-		Name:     "follow_int_keys",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_iseeds.csv | {{.bin}} join {{.data}}/graph_int.csv -on node src -follow dst -lowest-sum cost c -depth d`,
+		Name:     "traverse_int_keys",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_iseeds.csv | {{.bin}} traverse {{.data}}/graph_int.csv -from node src -to dst -lowest-sum cost c -depth d`,
 		Golden: []map[string]any{
 			{"node": 1, "d": 0, "c": 0},
 			{"node": 2, "d": 1, "c": 10},
@@ -3346,8 +3346,8 @@ var equivCases = []EquivCase{
 	},
 	{
 		// Float weights total as float64 in every lane (1.5 + 0.25).
-		Name:     "follow_float_weights",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_xseed.csv | {{.bin}} join {{.data}}/graph_float.csv -on city src -follow dst -all-paths -sum km total`,
+		Name:     "traverse_float_weights",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_xseed.csv | {{.bin}} traverse {{.data}}/graph_float.csv -from city src -to dst -all-paths -sum km total`,
 		Golden: []map[string]any{
 			{"city": "X", "total": 0},
 			{"city": "Z", "total": 9.5},
@@ -3358,8 +3358,8 @@ var equivCases = []EquivCase{
 	{
 		// The edges from a pipeline: BNE→PER (330) is filtered out, so the
 		// routes through it are gone.
-		Name:     "follow_procsub_edges",
-		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} join <({{.bin}} from csv {{.data}}/graph_flights.csv | {{.bin}} where -if mins lt 300) -on city src -follow dst -all-paths -depth h -sum mins m`,
+		Name:     "traverse_procsub_edges",
+		Pipeline: `{{.bin}} from csv {{.data}}/graph_seeds.csv | {{.bin}} traverse <({{.bin}} from csv {{.data}}/graph_flights.csv | {{.bin}} where -if mins lt 300) -from city src -to dst -all-paths -depth h -sum mins m`,
 		Golden: []map[string]any{
 			{"city": "SYD", "label": "home", "h": 0, "m": 0},
 			{"city": "BNE", "label": "home", "h": 1, "m": 95},

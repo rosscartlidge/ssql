@@ -93,6 +93,7 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterPivot(cmd)
 	cmd = commands.RegisterWindow(cmd)
 	cmd = commands.RegisterJoin(cmd)
+	cmd = commands.RegisterTraverse(cmd)
 	cmd = commands.RegisterUnion(cmd)
 	cmd = commands.RegisterExcept(cmd)
 	cmd = commands.RegisterIntersect(cmd)

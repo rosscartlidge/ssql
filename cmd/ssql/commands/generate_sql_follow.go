@@ -9,7 +9,7 @@ import (
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
-// translateFollowJoin renders `join … -follow` (DFC161) as a recursive
+// translateTraverse renders `traverse` (DFC161) as a recursive
 // CTE in a derived table: the seeds numbered (__sid keeps several seeds
 // apart), the edges (with their reverses under -both, deduplicated by
 // UNION), and __walk — the anchor is every seed at depth 0, each step
@@ -20,7 +20,7 @@ import (
 // tie key — without it two candidates for one node in one round leave
 // an arbitrary one (the 565-minute Darwin of DFC161 §4). Postgres and
 // DataFusion have no keyed recursion and refuse them, by name.
-func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) error {
+func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) error {
 	filePath := args[0]
 	var node, src string
 	var f followSpec
@@ -28,29 +28,23 @@ func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 	for i := 1; i < len(args); i++ {
 		need := func(n int) error {
 			if i+n >= len(args) {
-				return fmt.Errorf("join %s needs %d argument(s)", args[i], n)
+				return fmt.Errorf("traverse %s needs %d argument(s)", args[i], n)
 			}
 			return nil
 		}
 		switch args[i] {
-		case "-on", "-o":
+		case "-from":
 			if err := need(2); err != nil {
 				return err
 			}
 			node, src = args[i+1], args[i+2]
 			i += 2
-		case "-using", "-u":
-			if err := need(1); err != nil {
-				return err
-			}
-			node, src = args[i+1], args[i+1]
-			i++
-		case "-follow", "-depth", "-path", "-max-depth":
+		case "-to", "-depth", "-path", "-max-depth":
 			if err := need(1); err != nil {
 				return err
 			}
 			switch args[i] {
-			case "-follow":
+			case "-to":
 				f.dst = args[i+1]
 			case "-depth":
 				f.depth = args[i+1]
@@ -59,7 +53,7 @@ func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 			case "-max-depth":
 				n, err := strconv.Atoi(args[i+1])
 				if err != nil || n < 0 {
-					return fmt.Errorf("join -max-depth %s: not a positive number", args[i+1])
+					return fmt.Errorf("traverse -max-depth %s: not a positive number", args[i+1])
 				}
 				f.maxDepth = n
 			}
@@ -80,14 +74,9 @@ func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 		case "-fewest-hops":
 		case "-both":
 			f.both = true
-		case "-type", "-t":
-			if i+1 < len(args) && args[i+1] != "inner" {
-				return fmt.Errorf("join -follow: -type %s has no traversal meaning", args[i+1])
-			}
-			i++
 		default:
 			if strings.HasPrefix(args[i], "-") {
-				return fmt.Errorf("join -follow: %s has no SQL translation", args[i])
+				return fmt.Errorf("traverse: %s has no SQL translation", args[i])
 			}
 		}
 	}
@@ -95,19 +84,20 @@ func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 		f.mode = ssql.FollowLowestSum
 	}
 	if node == "" || f.dst == "" {
-		return fmt.Errorf("join -follow needs -on NODE SRC and -follow FIELD")
+		return fmt.Errorf("traverse needs -from NODE SRC and -to DST")
 	}
+	f.node, f.src = node, src
 
 	// What the dialect cannot do, refused by name.
 	if sqlDialectCur != dialectDuckDB {
 		switch f.mode {
 		case ssql.FollowFewestHops:
-			return dialectRefuse("join -follow -fewest-hops (the default mode)", "no keyed recursion (USING KEY) to visit each node once; use -all-paths and pick with window -partition NODE -order … -row-number rn | where -if rn eq 1")
+			return dialectRefuse("traverse -fewest-hops (the default mode)", "no keyed recursion (USING KEY) to visit each node once; use -all-paths and pick with window -partition NODE -order … -row-number rn | where -if rn eq 1")
 		case ssql.FollowLowestSum:
-			return dialectRefuse("join -follow -lowest-sum", "no keyed recursion (USING KEY) to keep each node's cheapest route; use -all-paths -sum and pick with window -partition NODE -order TOTAL -row-number rn | where -if rn eq 1")
+			return dialectRefuse("traverse -lowest-sum", "no keyed recursion (USING KEY) to keep each node's cheapest route; use -all-paths -sum and pick with window -partition NODE -order TOTAL -row-number rn | where -if rn eq 1")
 		}
 		if f.path != "" {
-			return dialectRefuse("join -follow -path", "the path is a list, a nested value this dialect does not output")
+			return dialectRefuse("traverse -path", "the path is a list, a nested value this dialect does not output")
 		}
 	}
 
@@ -118,7 +108,7 @@ func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
 		side := buildJoinQuery(funcFrags[len(funcFrags)-1])
 		if side == nil {
-			return fmt.Errorf("join -follow: the edge pipeline has no SQL translation")
+			return fmt.Errorf("traverse: the edge pipeline has no SQL translation")
 		}
 		edgeSrc = sqlSubquery("(" + renderSelect(side) + ")")
 		body := funcFrags[len(funcFrags)-1].FuncBody
@@ -153,8 +143,7 @@ func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 			edgeFields, edgeType = schema.Fields, schema.TypeOf
 		}
 	}
-	clauses := []ssql.LookupClause{{LeftField: node, RightField: src}}
-	if _, err := followCheck(q.columns, edgeFields, edgeType, clauses, f, "", joinOptions{}, asofSpec{}); err != nil {
+	if _, err := followCheck(q.columns, edgeFields, edgeType, f); err != nil {
 		return err
 	}
 	totals := f.weights()
@@ -168,28 +157,28 @@ func translateFollowJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 		case lib.TypeDecimal:
 			totalTypes[i] = sqlDecimalType(scale)
 		default:
-			return fmt.Errorf("join -follow: the type of edge field %q is unknown, so its total has no SQL type — read the edges from a CSV file, or use generate go", w.Field)
+			return fmt.Errorf("traverse: the type of edge field %q is unknown, so its total has no SQL type — read the edges from a CSV file, or use generate go", w.Field)
 		}
 	}
 	if f.both && edgeFields == nil {
-		return fmt.Errorf("join -follow -both: the edges' columns are unknown, so their reverses cannot be written — read the edges from a CSV file, or use generate go")
+		return fmt.Errorf("traverse -both: the edges' columns are unknown, so their reverses cannot be written — read the edges from a CSV file, or use generate go")
 	}
 
 	if q.hasClauses() {
 		wrapAsSubquery(q)
 	}
 	if q.fromClause == "" {
-		return fmt.Errorf("join -follow: no seed source to translate")
+		return fmt.Errorf("traverse: no seed source to translate")
 	}
 	seedCols := q.columns
 	if seedCols == nil && sqlDialectCur != dialectDuckDB {
-		return dialectRefuse("join -follow", "it rewrites the seed's node column and the translator does not know the seed's columns — name them with `include`, or use a CSV/TSV source")
+		return dialectRefuse("traverse", "it rewrites the seed's node column and the translator does not know the seed's columns — name them with `include`, or use a CSV/TSV source")
 	}
 	var outCols []string
 	if seedCols != nil {
 		outCols = append(append(outCols, seedCols...), f.accNames()...)
 	}
-	wrapAsSQLOnly(q, "join -follow", func(seeds string) string {
+	wrapAsSQLOnly(q, "traverse", func(seeds string) string {
 		return sqlSubquery(followCTE(seeds, edgeSrc, edgeFields, node, src, f, totals, totalTypes, seedCols))
 	})
 	sqlOnlyReset(q, outCols)
@@ -246,7 +235,7 @@ func followCTE(seeds, edgeSrc string, edgeFields []string, node, src string, f f
 		anchor = append(anchor, fmt.Sprintf("CAST(0 AS %s) AS %s", totalTypes[i], col))
 		weight := "e." + qi(w.Field)
 		if f.mode == ssql.FollowLowestSum && i == len(totals)-1 {
-			weight = fmt.Sprintf("CASE WHEN %s IS NULL OR %s < 0 THEN error('join -follow -lowest-sum: an edge has an absent or negative %s; the search needs weights >= 0') ELSE %s END", weight, weight, w.Field, weight)
+			weight = fmt.Sprintf("CASE WHEN %s IS NULL OR %s < 0 THEN error('traverse -lowest-sum: an edge has an absent or negative %s; the search needs weights >= 0') ELSE %s END", weight, weight, w.Field, weight)
 		}
 		nt := fmt.Sprintf("CAST(w.%s + %s AS %s)", col, weight, totalTypes[i])
 		newTotals = append(newTotals, nt)

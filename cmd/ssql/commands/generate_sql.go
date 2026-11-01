@@ -420,7 +420,7 @@ func needsWrap(q *sqlQuery, cmd string) bool {
 			len(q.groupBy) > 0 || len(q.orderBy) > 0 || limited || q.distinct || len(q.joins) > 0
 	case "offset":
 		return limited // `limit 10 | offset 5` ≠ LIMIT 10 OFFSET 5 (which skips first)
-	case "join":
+	case "join", "traverse":
 		// JOIN runs first; joining the grouped/projected/limited result
 		// needs that result as a subquery.
 		return projected || len(q.groupBy) > 0 || len(q.orderBy) > 0 || limited
@@ -690,6 +690,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		err = translateExtract(q, frag.Op, args[2:])
 	case "join":
 		err = translateJoin(q, args[2:], funcFrags)
+	case "traverse":
+		err = translateTraverse(q, args[2:], funcFrags)
 	case "union":
 		err = translateUnion(q, args[2:], funcFrags)
 	case "except", "intersect":
@@ -733,9 +735,10 @@ func advanceColumns(q *sqlQuery, name string, args []string) {
 	case "join":
 		// Adds/merges columns from another source the ops can't see.
 		q.columns = nil
-	case "union", "except", "intersect":
+	case "union", "except", "intersect", "traverse":
 		// The translation set columns: the left side's (sources are
-		// projected to them by name).
+		// projected to them by name); traverse's, the seed's plus the
+		// results.
 	default:
 		if q.columns == nil {
 			return
@@ -1735,9 +1738,6 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 	}
 
 	filePath := args[0]
-	if slices.Contains(args[1:], "-follow") {
-		return translateFollowJoin(q, args, funcFrags)
-	}
 	if asofIndex := slices.IndexFunc(args, func(a string) bool { return a == "-asof" || a == "-asof-on" }); asofIndex > 0 {
 		return translateAsofJoin(q, args, funcFrags)
 	}
