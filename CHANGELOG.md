@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A graph example in the playground**: the quickest route from Sydney with `join -follow -lowest-sum`, over new sample files `flights.csv` and `cities.csv`. The playground deploy now copies `data/` to gh-pages too; it never had, and the page refuses to start when a listed data file is missing, so a new sample file would have broken it.
+
+### Fixed
+
+- **Ctrl-O on a join's right-side fields**: after `-follow`, the field of `-lowest-sum` and `-sum`, and the 2nd field of `-asof-on`, Ctrl-O completed the LEFT side's fields. The slot was a hand-written list that knew only `-on` and `-as`; the right-side arguments now declare it and Ctrl-O reads the declaration through the completion engine. The engine also gets the empty word under the cursor, without which it read the slot before (the result name of `-lowest-sum mins ` looked like its field).
+
 ## [4.135.0] - 2026-11-01
 
 ### Added
