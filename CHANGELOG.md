@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.135.1] - 2026-11-01
+
 ### Added
 
 - **A graph example in the playground**: the quickest route from Sydney with `join -follow -lowest-sum`, over new sample files `flights.csv` and `cities.csv`. The playground deploy now copies `data/` to gh-pages too; it never had, and the page refuses to start when a listed data file is missing, so a new sample file would have broken it.
