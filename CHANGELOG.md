@@ -10,8 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Graph traversal is its own command: `traverse`** ([DFC161](doc/research/dfc161_graph_traversal_join_follow.md) §10). `join FILE -on NODE SRC -follow DST …` (v4.135) is now `traverse FILE -from NODE SRC -to DST …`; the modes and results are unchanged (`-fewest-hops`, `-lowest-sum FIELD NAME`, `-all-paths`, `-depth`, `-sum`, `-path`, `-max-depth`, `-both`), and so is every lane's output. `join -follow` is removed and is now an unknown-flag error. Two reasons: nobody looking for graphs or routes looks in `join`, and about half of `join -help` was refused in either mode. The library keeps `ssql.Follow` and `typed.Follow`.
+- **A lookup join honours `-type`.** A join with `-as`, or with several `-on` clauses separated by `-`, ran `ssql.LookupJoin` whatever `-type` said, so even an explicit `-type inner` kept every unmatched row with that clause's fields missing. The default `-type inner` now drops a row unless every clause matches (the new `ssql.InnerLookupJoin`). `-type left` keeps the old behaviour, and `-type right` / `full`, which a lookup has no form for, are refused. **Results change** for a lookup whose keys don't all match: add `-type left` to keep the old output.
+
+### Added
+
+- **Typed and SQL forms for lookup joins.** `join kind.csv -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name` was refused by typed mode ("only single-clause joins without -as renames") and by `generate sql`. Typed and parallel now emit `typed.LookupJoin` / `typed.LookupJoinParallel`: one key pair per clause, the right side indexed once per clause. A pipeline of this shape over a 1.2 GB file took 2.8 s typed against 88 s exec. A clause that copies every right field, or keys of different types across clauses, runs that stage in record mode. `generate sql` joins the side once per clause (`JOIN … AS __r0 ON …`), so DuckDB is an independent oracle for the lookup, and `generate rust` runs that SQL.
 
 ### Fixed
+
+- **`generate sql` translated only the last clause of a multi-clause join.** `join FILE -on a k - -on b k` became one join on `b`; it now goes through the lookup translation above (or is refused when a clause has no `-as`).
+- **A join `-as` onto an existing name overwrote it silently.** A rename onto a left field, or two renames onto one name, is now refused in every lane. In the other direction, a lookup whose clauses all name their fields no longer refuses a right column it never copies as a "collision".
+- **A typed join's merged struct lost a decimal column's scale** from its tag. It now uses the shared struct renderer.
 
 - **`generate ssql` printed a dead procsub for a side file it did not know.** The optimiser rebuilt `<(…)` from its func fragment only for `join`, so another command reading a side pipeline was replayed with the generation run's `/dev/fd/N`. Found by `traverse`'s first equivalence run.
 

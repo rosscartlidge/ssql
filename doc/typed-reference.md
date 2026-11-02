@@ -426,6 +426,17 @@ func HashJoinParallel[L, R, O any, K comparable](left Stream[L], right iter.Seq[
 func HashJoinMultiParallel[L, R, O any, K comparable](left Stream[L], right iter.Seq[R], leftKey func(L) K, rightKey func(R) K, merge func(L, R) O) Stream[O]
 ```
 
+A lookup join (several key pairs into one right side, the CLI's `join -on …
+-as … - -on … -as …`) indexes the right side once per clause. A left row
+survives only when every clause matches, and matches multiply, the first
+clause outermost. `merge` receives one right row per clause, in a slice
+that is reused between calls:
+
+```go
+func LookupJoin[L, R, O any, K comparable](left iter.Seq[L], right iter.Seq[R], leftKeys []func(L) K, rightKeys []func(R) K, merge func(L, []R) O) iter.Seq[O]
+func LookupJoinParallel[L, R, O any, K comparable](left Stream[L], right iter.Seq[R], leftKeys []func(L) K, rightKeys []func(R) K, merge func(L, []R) O) Stream[O]
+```
+
 The CLI's `join` emits the **Multi** forms: a right side with a repeated key
 (orders per customer) is the ordinary case, and the single-match form would
 keep only the last match per key.

@@ -1074,7 +1074,8 @@ left streams. Outer joins leave the unmatched side's fields absent.
 ### Lookup join
 
 ```go
-func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record]
+func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record]      // keeps unmatched records (left)
+func InnerLookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record] // a record needs a match in every clause
 type LookupClause struct {
     LeftField    string            // field of the left record to match on
     RightField   string            // field of the right record to match on
@@ -1093,7 +1094,12 @@ clauses := []ssql.LookupClause{
 enriched := ssql.LookupJoin(categories, clauses)(products)
 ```
 
-The CLI form is `join FILE -on origin_cat cat_id -as cat_name origin_name - -on dest_cat cat_id -as cat_name dest_name`.
+Clauses apply in order; several matches in a clause multiply the record.
+With no match, `LookupJoin` keeps the record without that clause's fields,
+and `InnerLookupJoin` drops it. The CLI form is `join FILE -on origin_cat cat_id -as cat_name origin_name - -on dest_cat cat_id -as cat_name dest_name`,
+which runs `InnerLookupJoin`, or `LookupJoin` under `-type left`. Before
+2026-11-02 it ran `LookupJoin` whatever `-type` said. The typed form is
+`typed.LookupJoin` (see `doc/typed-reference.md`).
 
 ### AsofJoin
 
