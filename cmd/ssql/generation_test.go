@@ -1653,8 +1653,16 @@ func TestJoinGeneration(t *testing.T) {
 			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -on id user_id -as amount order_amount`,
 			wantStrs: []string{
 				`"type":"stmt"`,
-				`ssql.LookupJoin`,
-				`ssql.Lookup`,
+				`ssql.InnerLookupJoin(`, // the default -type inner (LookupJoin, a left join, until 2026-11-02)
+				`ssql.Lookup(`,
+				`order_amount`,
+			},
+		},
+		{
+			name:    "join with -as rename and -type left",
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -type left -on id user_id -as amount order_amount`,
+			wantStrs: []string{
+				`ssql.LookupJoin(`,
 				`order_amount`,
 			},
 		},

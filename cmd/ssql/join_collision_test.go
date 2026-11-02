@@ -73,8 +73,6 @@ func TestJoinCollisionIsLoudEverywhere(t *testing.T) {
 		"join {R} -on id cust -suffix _r":                       "id,name,city,order_id_r,city_r\n1,alice,Oslo,10,Oslo\n4,dan,Oslo,11,Rome\n",
 		"join {R} -on id cust -exclude-left":                    "id,order_id,cust\n1,10,1\n4,11,4\n",
 		"join <({bin} from csv {R}) -on id cust -exclude-right": "id,name,city\n1,alice,Oslo\n4,dan,Oslo\n",
-		// -as makes the join a lookup: the key and the renamed fields only
-		"join {R} -on id cust -as city rcity": "id,name,city,rcity\n1,alice,Oslo,Oslo\n4,dan,Oslo,Rome\n",
 	}
 	for stage, want := range resolved {
 		for _, lane := range []string{"exec", "record"} {
@@ -85,8 +83,38 @@ func TestJoinCollisionIsLoudEverywhere(t *testing.T) {
 		}
 		for _, lane := range []string{"typed", "sql"} {
 			_, stderr, err := run(t, lane, stage)
-			if err == nil || !(strings.Contains(stderr, "not supported in typed mode") || strings.Contains(stderr, "no SQL translation") || strings.Contains(stderr, "only single-clause joins without -as renames")) {
+			if err == nil || !(strings.Contains(stderr, "not supported in typed mode") || strings.Contains(stderr, "no SQL translation")) {
 				t.Errorf("%s [%s]: want a loud refusal, got err=%v\nstderr: %.300s", stage, lane, err, stderr)
+			}
+		}
+	}
+
+	// -as makes the join a lookup: the left row and the renamed fields
+	// only, in every lane (typed and SQL refused it until 2026-11-02).
+	lookup := "join {R} -on id cust -as city rcity"
+	for _, lane := range []string{"exec", "record", "typed"} {
+		want := "id,name,city,rcity\n1,alice,Oslo,Oslo\n4,dan,Oslo,Rome\n"
+		if out, stderr, err := run(t, lane, lookup); err != nil || out != want {
+			t.Errorf("%s [%s]: want\n%sgot err=%v\n%s\nstderr: %.300s", lookup, lane, want, err, out, stderr)
+		}
+	}
+	if _, stderr, err := run(t, "sql", lookup); err != nil {
+		t.Errorf("%s [sql]: %v\n%s", lookup, err, stderr)
+	}
+
+	// The lookup's own refusals, the same in every lane: a -type a lookup
+	// has no form for (it ran as left whatever -type said), and a rename
+	// onto a left field or onto another rename (the merge overwrote one).
+	for stage, msg := range map[string]string{
+		"join {R} -type right -on id cust -as city rcity":                             "join -type right has no lookup form",
+		"join {R} -type full -on id cust -as city rcity - -on id cust -as order_id o": "join -type full has no lookup form",
+		"join {R} -on id cust -as order_id name":                                      `field "name" already exists on the left side`,
+		"join {R} -on id cust -as city x - -on id cust -as order_id x":                `two renames produce field "x"`,
+	} {
+		for _, lane := range lanes {
+			out, stderr, err := run(t, lane, stage)
+			if err == nil || !strings.Contains(stderr, msg) {
+				t.Errorf("%s [%s]: want %q, got err=%v\nstdout: %.200s\nstderr: %.300s", stage, lane, msg, err, out, stderr)
 			}
 		}
 	}

@@ -63,7 +63,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Accumulate().
 		Local().
-		Help("Rename field from right side: -as <old> <new>").
+		Help("Bring in a right field under a new name: -as <old> <new>. A join with -as is a lookup: only the named fields come in, and -type is inner (every clause must match) or left").
 		Done().
 		Flag("-suffix").
 		String().
@@ -249,7 +249,15 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			} else {
 				// Multi-clause, selective field lookup, or -exclude-right
-				joined = ssql.LookupJoin(rightSeq, clauses)(leftRecords)
+				lookup, err := lookupJoinFunc(joinType)
+				if err != nil {
+					return err
+				}
+				if lookup == "ssql.LookupJoin" {
+					joined = ssql.LookupJoin(rightSeq, clauses)(leftRecords)
+				} else {
+					joined = ssql.InnerLookupJoin(rightSeq, clauses)(leftRecords)
+				}
 
 				// Build output schema: left schema + renamed fields
 				if leftSchema != nil || rightSchema != nil {
@@ -375,7 +383,11 @@ func resolveJoin(leftFields, rightFields []string, clauses []ssql.LookupClause, 
 			clauses[0].FieldRenames[rf] = suffixed
 		}
 	}
-	if !opts.any() && leftFields != nil && rightFields != nil {
+	// Only a clause without renames copies every right field; a lookup
+	// whose clauses all name their fields copies nothing else, so an
+	// unnamed right field cannot collide (it was refused until 2026-11-02).
+	copiesAll := slices.ContainsFunc(clauses, func(c ssql.LookupClause) bool { return c.FieldRenames == nil })
+	if !opts.any() && copiesAll && leftFields != nil && rightFields != nil {
 		var collisions []string
 		for _, rf := range rightFields {
 			if sharedKeys[rf] {
@@ -395,6 +407,20 @@ func resolveJoin(leftFields, rightFields []string, clauses []ssql.LookupClause, 
 		if len(collisions) > 0 {
 			return plan, fmt.Errorf("join field collision: %s exist in both sides — use -as to rename, -suffix to auto-rename, or -exclude-left/-exclude-right",
 				strings.Join(collisions, ", "))
+		}
+	}
+	// A rename lands on a name of its own: onto a left field, or onto
+	// another clause's rename, the record merge overwrote one silently.
+	renamedTo := make(map[string]bool)
+	for _, c := range clauses {
+		for _, newName := range c.FieldRenames {
+			if renamedTo[newName] {
+				return plan, fmt.Errorf("join: two renames produce field %q — give each its own -as name", newName)
+			}
+			renamedTo[newName] = true
+			if opts.suffix == "" && slices.Contains(leftFields, newName) {
+				return plan, fmt.Errorf("join -as: field %q already exists on the left side — choose another name, or drop the left field with `exclude` first", newName)
+			}
 		}
 	}
 	if opts.excludeRight {
@@ -551,6 +577,9 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		if asof.active() {
 			return true, emitTypedAsofJoin(c.inputVar, c.funcName, c.leftSchema, rightSchema, rightFragments, subCommandStr, clauses, asof, joinType, opts)
 		}
+		if !opts.any() && isLookupJoin(clauses) {
+			return emitTypedLookupJoin(c, rightSchema, rightFragments, subCommandStr, clauses, joinType)
+		}
 		return true, emitTypedJoin(c.inputVar, c.funcName, c.leftSchema, rightSchema, rightFragments, subCommandStr, clauses, joinType, opts)
 	}
 	s.record = func(c sideCtx, rightFields []string, rightType func(string) string) error {
@@ -670,57 +699,9 @@ func emitTypedJoin(
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'join -on/-using' references unknown right field %q", clause.RightField))
 	}
-	// The key is compared as ONE Go type. An int key on one side and a
-	// float on the other is ordinary data — a single 2.5 in one file's
-	// column makes the reader type that whole column float — so numbers
-	// widen to float64, as the other lanes compare them (DFC133: the
-	// interpreted join matched nothing here, and this lane refused).
-	keyType := leftKeyField.GoType
-	leftKeyExpr, rightKeyExpr := "l."+leftKeyField.GoName, "r."+rightKeyField.GoName
-	if leftKeyField.GoType != rightKeyField.GoType {
-		numeric := func(t string) bool {
-			return t == "int64" || t == "float64" || t == "ssql.Int128" || t == "ssql.Decimal"
-		}
-		if !numeric(leftKeyField.GoType) || !numeric(rightKeyField.GoType) {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: join key types differ (left %s: %s, right %s: %s)", leftKeyField.Name, leftKeyField.GoType, rightKeyField.Name, rightKeyField.GoType))
-		}
-		if leftKeyField.GoType == "float64" || rightKeyField.GoType == "float64" {
-			keyType = "float64"
-			toFloat := func(t, src string) string {
-				switch t {
-				case "float64":
-					return src
-				case "ssql.Int128", "ssql.Decimal":
-					return src + ".Float64()"
-				}
-				return "float64(" + src + ")"
-			}
-			leftKeyExpr, rightKeyExpr = toFloat(leftKeyField.GoType, leftKeyExpr), toFloat(rightKeyField.GoType, rightKeyExpr)
-		} else if leftKeyField.GoType == "ssql.Decimal" || rightKeyField.GoType == "ssql.Decimal" {
-			// A decimal beside an exact key: both as normalized decimals,
-			// so 5, 5.00 and 5.000 are one key (DFC155 E).
-			keyType = "ssql.Decimal"
-			toDec := func(t, src string) string {
-				switch t {
-				case "ssql.Decimal":
-					return src + ".Normalized()"
-				case "ssql.Int128":
-					return "ssql.MustDecimalFromInt128(" + src + ", 0)"
-				}
-				return "ssql.DecimalFromInt64(" + src + ", 0)"
-			}
-			leftKeyExpr, rightKeyExpr = toDec(leftKeyField.GoType, leftKeyExpr), toDec(rightKeyField.GoType, rightKeyExpr)
-		} else {
-			// int64 beside int128: the key is an Int128, exactly (DFC155 C).
-			keyType = "ssql.Int128"
-			if leftKeyField.GoType == "int64" {
-				leftKeyExpr = "ssql.Int128From(" + leftKeyExpr + ")"
-			}
-			if rightKeyField.GoType == "int64" {
-				rightKeyExpr = "ssql.Int128From(" + rightKeyExpr + ")"
-			}
-		}
+	keyType, leftKeyExpr, rightKeyExpr, err := typedJoinKey(leftKeyField, rightKeyField)
+	if err != nil {
+		return lib.WriteErrorAndExit(getCommandString(), err)
 	}
 
 	// Build merge function body.
@@ -764,10 +745,7 @@ func emitTypedJoin(
 	// HashJoin/HashJoinParallel keep the last right row per key.
 	parallelCode := makeJoinCode("typed.HashJoinMultiParallel")
 	serialCode := makeJoinCode("typed.HashJoinMulti")
-	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
-	if keyType == "ssql.Int128" {
-		imports = append(imports, "github.com/rosscartlidge/ssql/v4")
-	}
+	imports := typedJoinImports(keyType)
 
 	stmtFrag := lib.NewStmtFragment("joined", inputVar, parallelCode, imports, getCommandString())
 	stmtFrag.InputTypedSchema = leftSchema
@@ -779,6 +757,94 @@ func emitTypedJoin(
 	stmtFrag.AltImportsIfSeq = imports
 	stmtFrag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	return lib.WriteCodeFragment(stmtFrag)
+}
+
+// typedJoinKey is the one Go type a typed join compares a key pair as,
+// and the expressions that read it from the left row l and right row r.
+func typedJoinKey(leftKeyField, rightKeyField lib.TypedSchemaField) (keyType, leftKeyExpr, rightKeyExpr string, err error) {
+	// The key is compared as ONE Go type. An int key on one side and a
+	// float on the other is ordinary data — a single 2.5 in one file's
+	// column makes the reader type that whole column float — so numbers
+	// widen to float64, as the other lanes compare them (DFC133: the
+	// interpreted join matched nothing here, and this lane refused).
+	keyType = leftKeyField.GoType
+	leftKeyExpr, rightKeyExpr = "l."+leftKeyField.GoName, "r."+rightKeyField.GoName
+	if leftKeyField.GoType != rightKeyField.GoType {
+		numeric := func(t string) bool {
+			return t == "int64" || t == "float64" || t == "ssql.Int128" || t == "ssql.Decimal"
+		}
+		if !numeric(leftKeyField.GoType) || !numeric(rightKeyField.GoType) {
+			return "", "", "", fmt.Errorf("ssql generate go -typed: join key types differ (left %s: %s, right %s: %s)", leftKeyField.Name, leftKeyField.GoType, rightKeyField.Name, rightKeyField.GoType)
+		}
+		if leftKeyField.GoType == "float64" || rightKeyField.GoType == "float64" {
+			keyType = "float64"
+			toFloat := func(t, src string) string {
+				switch t {
+				case "float64":
+					return src
+				case "ssql.Int128", "ssql.Decimal":
+					return src + ".Float64()"
+				}
+				return "float64(" + src + ")"
+			}
+			leftKeyExpr, rightKeyExpr = toFloat(leftKeyField.GoType, leftKeyExpr), toFloat(rightKeyField.GoType, rightKeyExpr)
+		} else if leftKeyField.GoType == "ssql.Decimal" || rightKeyField.GoType == "ssql.Decimal" {
+			// A decimal beside an exact key: both as normalized decimals,
+			// so 5, 5.00 and 5.000 are one key (DFC155 E).
+			keyType = "ssql.Decimal"
+			toDec := func(t, src string) string {
+				switch t {
+				case "ssql.Decimal":
+					return src + ".Normalized()"
+				case "ssql.Int128":
+					return "ssql.MustDecimalFromInt128(" + src + ", 0)"
+				}
+				return "ssql.DecimalFromInt64(" + src + ", 0)"
+			}
+			leftKeyExpr, rightKeyExpr = toDec(leftKeyField.GoType, leftKeyExpr), toDec(rightKeyField.GoType, rightKeyExpr)
+		} else {
+			// int64 beside int128: the key is an Int128, exactly (DFC155 C).
+			keyType = "ssql.Int128"
+			if leftKeyField.GoType == "int64" {
+				leftKeyExpr = "ssql.Int128From(" + leftKeyExpr + ")"
+			}
+			if rightKeyField.GoType == "int64" {
+				rightKeyExpr = "ssql.Int128From(" + rightKeyExpr + ")"
+			}
+		}
+	}
+	return keyType, leftKeyExpr, rightKeyExpr, nil
+}
+
+// typedJoinImports are a typed join statement's imports: typed, and ssql
+// for an ssql.Int128 or ssql.Decimal key (a decimal key compiled only
+// when another stage happened to import ssql).
+func typedJoinImports(keyType string) []string {
+	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	if strings.HasPrefix(keyType, "ssql.") {
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4")
+	}
+	return imports
+}
+
+// isLookupJoin reports whether a resolved join is a lookup (several
+// clauses, or one that copies only named fields: -as, -suffix,
+// -exclude-right) rather than the merge of every right field.
+func isLookupJoin(clauses []ssql.LookupClause) bool {
+	return len(clauses) != 1 || clauses[0].FieldRenames != nil
+}
+
+// lookupJoinFunc is the ssql function a lookup join of this -type runs.
+// A lookup keeps the left rows (left) or only the matched ones (inner);
+// until 2026-11-02 it kept them whatever -type said.
+func lookupJoinFunc(joinType string) (string, error) {
+	switch joinType {
+	case "", "inner":
+		return "ssql.InnerLookupJoin", nil
+	case "left":
+		return "ssql.LookupJoin", nil
+	}
+	return "", fmt.Errorf("join -type %s has no lookup form (-as, -suffix, -exclude-right or several -on clauses): a lookup keeps the matched left rows (inner) or every left row (left)", joinType)
 }
 
 func joinTypeIsUnsupported(clauses []ssql.LookupClause) bool {
@@ -818,27 +884,112 @@ func mergeJoinSchemas(left, right *lib.TypedSchema) (*lib.TypedSchema, string) {
 		}
 		merged.Fields = append(merged.Fields, f)
 	}
-	// Tagged like every generated row type: `ssql` for the typed
-	// runtime, `json` so a library caller's encoding/json sees the
-	// pipeline's column names (DFC142 library mode).
-	var b strings.Builder
-	fmt.Fprintf(&b, "// %s is the merged row type produced by the join.\n", merged.TypeName)
-	fmt.Fprintf(&b, "type %s struct {\n", merged.TypeName)
-	maxName := 0
-	maxType := 0
-	for _, f := range merged.Fields {
-		if len(f.GoName) > maxName {
-			maxName = len(f.GoName)
+	return merged, lib.RenderStructDefWithComment(merged, merged.TypeName+" is the merged row type produced by the join.")
+}
+
+// emitTypedLookupJoin writes the typed form of a lookup join (several
+// -on clauses into one side, each copying the fields its -as names):
+// typed.LookupJoin with one key pair per clause, the output struct the
+// left fields then each clause's renamed fields in the right schema's
+// order, as ssql.InnerLookupJoin builds the record. A shape the typed
+// form does not cover — a clause copying every field, keys of different
+// types, a key read from an earlier clause's rename — returns handled
+// false, and the stage runs in record mode.
+func emitTypedLookupJoin(c sideCtx, rightSchema *lib.TypedSchema, rightFragments []*lib.CodeFragment, subCommandStr string, clauses []ssql.LookupClause, joinType string) (bool, error) {
+	if _, err := resolveJoin(typedFieldNames(c.leftSchema), typedFieldNames(rightSchema), clauses, joinOptions{}); err != nil {
+		return true, lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: %w", err))
+	}
+	if _, err := lookupJoinFunc(joinType); err != nil {
+		return true, lib.WriteErrorAndExit(getCommandString(), err)
+	}
+	if joinType == "left" {
+		// as for the merge join: an unmatched row's renamed fields are
+		// absent, which a struct cannot hold (DFC124 §3)
+		return true, lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: join -type left has no typed form (an unmatched row's right fields are absent, which a struct cannot hold — DFC124 §3); use SSQL_MODE=record"))
+	}
+	left, right := c.leftSchema, rightSchema
+	out := &lib.TypedSchema{TypeName: left.TypeName + "_" + right.TypeName, Fields: slices.Clone(left.Fields)}
+	goNames := make(map[string]bool)
+	assign := make([]string, 0, len(left.Fields))
+	for _, f := range left.Fields {
+		goNames[strings.ToLower(f.GoName)] = true
+		assign = append(assign, fmt.Sprintf("%s: l.%s", f.GoName, f.GoName))
+	}
+	var keyType string
+	var leftKeys, rightKeys []string
+	for i, cl := range clauses {
+		if cl.FieldRenames == nil {
+			return false, nil // copies every right field: record mode
 		}
-		if len(f.GoType) > maxType {
-			maxType = len(f.GoType)
+		lf, okL := lookupSchemaField(left, cl.LeftField)
+		rf, okR := lookupSchemaField(right, cl.RightField)
+		if !okL || !okR {
+			return false, nil // a key from an earlier clause's rename
+		}
+		kt, lk, rk, err := typedJoinKey(lf, rf)
+		if err != nil {
+			return true, lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		if i > 0 && kt != keyType {
+			return false, nil // one key type per typed.LookupJoin
+		}
+		keyType = kt
+		leftKeys, rightKeys = append(leftKeys, lk), append(rightKeys, rk)
+		for _, f := range right.Fields {
+			newName, ok := cl.FieldRenames[f.Name]
+			if !ok {
+				continue
+			}
+			nf := f
+			nf.Name, nf.GoName = newName, lib.GoNameFromColumn(newName)
+			if goNames[strings.ToLower(nf.GoName)] {
+				return false, nil // two columns, one Go field name
+			}
+			goNames[strings.ToLower(nf.GoName)] = true
+			out.Fields = append(out.Fields, nf)
+			assign = append(assign, fmt.Sprintf("%s: rs[%d].%s", nf.GoName, i, f.GoName))
 		}
 	}
-	for _, f := range merged.Fields {
-		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
+
+	funcFrag := lib.NewFuncFragment(c.funcName, rightFragments, subCommandStr)
+	if err := lib.WriteCodeFragment(funcFrag); err != nil {
+		return true, fmt.Errorf("writing func fragment: %w", err)
 	}
-	b.WriteString("}\n")
-	return merged, b.String()
+	keyFuncs := func(row, typ string, exprs []string) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, "[]func(%s %s) %s{\n", row, typ, keyType)
+		for _, e := range exprs {
+			fmt.Fprintf(&b, "\t\t\tfunc(%s %s) %s { return %s },\n", row, typ, keyType, e)
+		}
+		b.WriteString("\t\t}")
+		return b.String()
+	}
+	code := func(fn string) string {
+		return fmt.Sprintf(`joined := %s(%s, %s(),
+		%s,
+		%s,
+		func(l %s, rs []%s) %s {
+			return %s{
+				%s,
+			}
+		})`, fn, c.inputVar, c.funcName,
+			keyFuncs("l", left.TypeName, leftKeys),
+			keyFuncs("r", right.TypeName, rightKeys),
+			left.TypeName, right.TypeName, out.TypeName, out.TypeName,
+			strings.Join(assign, ",\n\t\t\t\t"))
+	}
+	imports := typedJoinImports(keyType)
+	stmtFrag := lib.NewStmtFragment("joined", c.inputVar, code("typed.LookupJoinParallel"), imports, getCommandString())
+	stmtFrag.InputTypedSchema = left
+	stmtFrag.OutputTypedSchema = out
+	stmtFrag.StructDefs = []string{lib.RenderStructDefWithComment(out, out.TypeName+" is the row type produced by the lookup join: the left fields, then each clause's renamed fields.")}
+	stmtFrag.IsStream = true
+	stmtFrag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+	stmtFrag.AltCodeIfSeq = code("typed.LookupJoin")
+	stmtFrag.AltImportsIfSeq = imports
+	stmtFrag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
+	return true, lib.WriteCodeFragment(stmtFrag)
 }
 
 // typedFieldNames are a typed schema's CSV column names.
@@ -871,9 +1022,13 @@ func generateJoinStmtWithFunc(inputVar, funcName, joinType string, plan joinPlan
 		joinFunc := getJoinFunc(joinType)
 		stmtCode = fmt.Sprintf("%s := %s(%s(), %s)(%s)", outputVar, joinFunc, funcName, predicateCode, inputVar)
 	} else {
-		// Multi-clause or selective field lookup - use LookupJoin
+		// Multi-clause or selective field lookup
+		lookup, err := lookupJoinFunc(joinType)
+		if err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
 		clausesCode := generateClausesCode(clauses)
-		stmtCode = fmt.Sprintf("%s := ssql.LookupJoin(%s(), %s)(%s)", outputVar, funcName, clausesCode, inputVar)
+		stmtCode = fmt.Sprintf("%s := %s(%s(), %s)(%s)", outputVar, lookup, funcName, clausesCode, inputVar)
 	}
 	// Write stmt fragment
 	stmtFrag := lib.NewStmtFragment(outputVar, inputVar, stmtCode, stmtImports, getCommandString())

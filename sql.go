@@ -733,6 +733,8 @@ func Lookup(leftField, rightField string, renames ...string) LookupClause {
 //   - Finds matching right record(s) by comparing leftField to rightField
 //   - Copies fields from right record, applying renames from FieldRenames
 //   - If multiple right records match, produces multiple output records (multiply behavior)
+//   - If none matches, keeps the record without that clause's fields (a left
+//     join); [InnerLookupJoin] drops it instead
 //
 // If no FieldRenames are specified for a clause, ALL fields from the right record
 // are merged (existing behavior).
@@ -746,6 +748,19 @@ func Lookup(leftField, rightField string, renames ...string) LookupClause {
 //	}
 //	enriched := ssql.LookupJoin(kindRecords, clauses)(leftRecords)
 func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record] {
+	return lookupJoin(rightSeq, clauses, true)
+}
+
+// InnerLookupJoin is [LookupJoin] with inner-join semantics: a record
+// survives only when every clause finds a match, so each clause's fields
+// are always present. It is what `join -on … -as …` runs (the default
+// -type inner); until 2026-11-02 that ran LookupJoin whatever -type said.
+func InnerLookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record] {
+	return lookupJoin(rightSeq, clauses, false)
+}
+
+// lookupJoin is LookupJoin (keepUnmatched) and InnerLookupJoin.
+func lookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause, keepUnmatched bool) Filter[Record, Record] {
 	return func(leftSeq iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
 			// Materialize right side once
@@ -779,8 +794,10 @@ func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record
 						// Get the lookup key from the left field
 						leftVal, exists := Get[any](current, clause.LeftField)
 						if !exists {
-							// No match possible, keep current record unchanged
-							nextRecords = append(nextRecords, current)
+							// No match possible: keep the record unchanged (left)
+							if keepUnmatched {
+								nextRecords = append(nextRecords, current)
+							}
 							continue
 						}
 
@@ -788,8 +805,10 @@ func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record
 						matches, found := indices[i][key]
 
 						if !found || len(matches) == 0 {
-							// No match, keep current record unchanged
-							nextRecords = append(nextRecords, current)
+							// No match: keep the record unchanged (left)
+							if keepUnmatched {
+								nextRecords = append(nextRecords, current)
+							}
 							continue
 						}
 

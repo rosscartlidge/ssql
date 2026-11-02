@@ -1741,6 +1741,9 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 	if asofIndex := slices.IndexFunc(args, func(a string) bool { return a == "-asof" || a == "-asof-on" }); asofIndex > 0 {
 		return translateAsofJoin(q, args, funcFrags)
 	}
+	if isSQLLookupJoin(args) {
+		return translateLookupJoin(q, args, funcFrags)
+	}
 	var joinCond string
 	var leftKey, rightKey []string
 	joinKind := "JOIN"
@@ -1782,7 +1785,7 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 				}
 				i++
 			}
-		case "-as", "-suffix", "-exclude-left", "-exclude-right":
+		case "-suffix", "-exclude-left", "-exclude-right":
 			// Silently dropped until v4.108, which changed the columns.
 			return fmt.Errorf("join %s has no SQL translation yet — rename or drop the columns with `rename` / `exclude` after the join, or use generate go", args[i])
 		}

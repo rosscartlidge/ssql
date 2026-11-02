@@ -3515,6 +3515,64 @@ var equivCases = []EquivCase{
 		Skip: map[string]string{"go-typed": "an unmatched row's right fields are absent, which a typed struct cannot hold (DFC124 §3); typed refuses -type left", "go-parallel": "same as go-typed"},
 	},
 	{
+		// A lookup join (two clauses into one side, each renaming what it
+		// brings): a link survives only when both clauses match (l4 and
+		// l5 do not), and K2's two rows multiply. It ran as a LEFT join
+		// whatever -type said until 2026-11-02; typed refused it and SQL
+		// refused -as.
+		Name: "lookup_join_two_clauses",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | ` +
+			`{{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name -as rank z_rank | ` +
+			`{{.bin}} include link a_name z_name z_rank`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"link": "l3", "a_name": "two", "z_name": "one", "z_rank": 10},
+			{"link": "l3", "a_name": "deux", "z_name": "one", "z_rank": 10},
+			{"link": "l1", "a_name": "one", "z_name": "two", "z_rank": 20},
+			{"link": "l1", "a_name": "one", "z_name": "deux", "z_rank": 21},
+			{"link": "l2", "a_name": "one", "z_name": "one", "z_rank": 10},
+			{"link": "l6", "a_name": "three", "z_name": "two", "z_rank": 20},
+			{"link": "l6", "a_name": "three", "z_name": "deux", "z_rank": 21},
+		},
+	},
+	{
+		// The same lookup under -type left: the unmatched links stay,
+		// without the unmatched clause's fields.
+		Name: "lookup_join_left",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | ` +
+			`{{.bin}} join {{.data}}/lookup_kinds.csv -type left -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | ` +
+			`{{.bin}} include link a_name z_name`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"link": "l3", "a_name": "two", "z_name": "one"},
+			{"link": "l3", "a_name": "deux", "z_name": "one"},
+			{"link": "l1", "a_name": "one", "z_name": "two"},
+			{"link": "l1", "a_name": "one", "z_name": "deux"},
+			{"link": "l5", "z_name": "one"},
+			{"link": "l2", "a_name": "one", "z_name": "one"},
+			{"link": "l4", "a_name": "one"},
+			{"link": "l6", "a_name": "three", "z_name": "two"},
+			{"link": "l6", "a_name": "three", "z_name": "deux"},
+		},
+		Skip: map[string]string{"go-typed": "an unmatched row's right fields are absent, which a typed struct cannot hold (DFC124 §3); typed refuses -type left", "go-parallel": "same as go-typed"},
+	},
+	{
+		// One clause with -as over a <(pipeline)> side: the side drops K3,
+		// so l6 goes too; the side is read once for the clause.
+		Name: "lookup_join_procsub_one_clause",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | ` +
+			`{{.bin}} join <({{.bin}} from csv {{.data}}/lookup_kinds.csv | {{.bin}} where -if rank lt 30) -on a_kind kind -as kind_name a_name | ` +
+			`{{.bin}} include link a_name`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"link": "l3", "a_name": "two"},
+			{"link": "l3", "a_name": "deux"},
+			{"link": "l1", "a_name": "one"},
+			{"link": "l2", "a_name": "one"},
+			{"link": "l4", "a_name": "one"},
+		},
+	},
+	{
 		// One-to-many inner join: customer 4 has two orders and must
 		// appear twice. Typed emitted HashJoin (last match per key) until
 		// v4.108, so dan lost an order in that lane only.

@@ -179,6 +179,12 @@ func corpusData(t *testing.T) string {
 			"setops_left.csv":   "id,name,city\n3,carol,Rome\n1,alice,Oslo\n3,carol,Rome\n2,bob,Lima\n1,alice,Oslo\n3,carol,Rome\n4,dan,Oslo\n",
 			"setops_right.csv":  "name,id,city\nalice,1,Oslo\nzed,9,Rome\n",
 			"setops_orders.csv": "order_id,cust,city,amount\n10,1,Oslo,5\n11,4,Rome,9\n12,4,Oslo,2\n13,9,Lima,1\n",
+			// Lookup joins (several -on clauses into one side, -as): links
+			// shuffled, one whose a_kind matches nothing (l5) and one whose
+			// z_kind matches nothing (l4); K2 twice on the right, so its
+			// matches multiply; rank is a right column no clause copies.
+			"lookup_links.csv": "link,a_kind,z_kind\nl3,K2,K1\nl1,K1,K2\nl5,K9,K1\nl2,K1,K1\nl4,K1,K8\nl6,K3,K2\n",
+			"lookup_kinds.csv": "kind,kind_name,rank\nK2,two,20\nK1,one,10\nK3,three,30\nK2,deux,21\n",
 			// A left row whose key cell is empty: absent in ssql, NULL in
 			// SQL; both match nothing. Typed structs cannot hold absence.
 			"setops_absent.csv": "id,name\n1,alice\n,nobody\n4,dan\n",

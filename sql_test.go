@@ -299,6 +299,31 @@ func TestLookupJoinNoMatch(t *testing.T) {
 	}
 }
 
+// TestInnerLookupJoin: a row survives only when every clause matches,
+// and the matches multiply in clause order (the first clause outermost).
+func TestInnerLookupJoin(t *testing.T) {
+	left := slices.Values([]Record{
+		NewRecord(map[string]any{"id": int64(1), "a": "K1", "z": "K2"}),
+		NewRecord(map[string]any{"id": int64(2), "a": "K1", "z": "K9"}), // z unmatched
+		NewRecord(map[string]any{"id": int64(3), "a": "K8", "z": "K2"}), // a unmatched
+		NewRecord(map[string]any{"id": int64(4), "z": "K1"}),            // a absent
+	})
+	right := slices.Values([]Record{
+		NewRecord(map[string]any{"kind": "K1", "name": "one"}),
+		NewRecord(map[string]any{"kind": "K2", "name": "two"}),
+		NewRecord(map[string]any{"kind": "K2", "name": "deux"}),
+	})
+	clauses := []LookupClause{Lookup("a", "kind", "name", "a_name"), Lookup("z", "kind", "name", "z_name")}
+	var got []string
+	for r := range InnerLookupJoin(right, clauses)(left) {
+		got = append(got, fmt.Sprintf("%d %s %s", GetOr(r, "id", int64(0)), GetOr(r, "a_name", ""), GetOr(r, "z_name", "")))
+	}
+	want := []string{"1 one two", "1 one deux"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("InnerLookupJoin = %q, want %q", got, want)
+	}
+}
+
 func TestLookupJoinMultipleMatches(t *testing.T) {
 	left := slices.Values([]Record{
 		NewRecord(map[string]any{"name": "Alice", "dept": "Eng"}),

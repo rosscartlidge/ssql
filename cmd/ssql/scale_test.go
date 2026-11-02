@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -229,6 +230,28 @@ func TestScaleBudgets(t *testing.T) {
 		budget(t, dir, seed+bin+" traverse follow_dag.csv -from node src -to dst -all-paths -depth d | "+bin+" count | grep -qx 797161", 30*time.Second)
 		budget(t, dir, "printf 'node\\n0\\n' > follow_seed.csv && SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
 			bin+" from csv follow_seed.csv | "+bin+" traverse follow_graph.csv -from node src -to dst -lowest-sum w t | "+bin+" count' | grep -qx 200000", 90*time.Second)
+	})
+	t.Run("lookup-join", func(t *testing.T) {
+		// A lookup join (two -on clauses into one side, -as) over 3 M rows,
+		// every row matching both: the side is indexed once per clause and
+		// each row probes it (both forms ≈ 12 s together, 2026-11-02). A
+		// side re-read or a scan per row blows the ceiling; the count is
+		// asserted so an inner join that drops rows is not fast by accident.
+		names := "k,name\n"
+		for _, d := range []string{"eng", "sales", "ops", "legal", "hr", "labs"} {
+			names += d + "," + strings.ToUpper(d) + "\n"
+		}
+		for r := 0; r < 97; r++ {
+			names += fmt.Sprintf("r%d,region %d\n", r, r)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "lookup_names.csv"), []byte(names), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		repo, _ := filepath.Abs("../..")
+		join := " join lookup_names.csv -on dept k -as name dname - -on region k -as name rname | "
+		budget(t, dir, bin+" from csv big.csv |"+bin+join+bin+" count | grep -qx "+strconv.Itoa(scaleRows), 60*time.Second)
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from csv big.csv |"+bin+join+bin+" count' | grep -qx "+strconv.Itoa(scaleRows), 90*time.Second)
 	})
 	t.Run("window-running-frame-typed", func(t *testing.T) {
 		// The typed window had the same scan (typed/window.go); same
