@@ -40,6 +40,9 @@ field-name cache.
    a browser must not run pipelines on the server through the cursor
    protocol.
 3. Spaced values are single-quoted on insertion (`'Peter Allworth'`).
+4. A value slot with no values (no source, a failed upstream, nothing
+   matching the partial) offers nothing. It never falls through to field
+   names, which at a value slot are a wrong answer (2026-11-02).
 
 The token pair is mirrored in autocli via `cf.FieldNameHint` /
 `cf.FieldValueHint`, wired in `commands/field_keybinding.go`'s `init()` and

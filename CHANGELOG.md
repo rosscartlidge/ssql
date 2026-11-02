@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Ctrl-O on a value now completes the values of a column an upstream stage makes.** `… | ssql join kind.csv -on a_kind kind -as kind_name a_kind_name … | ssql where -if a_kind_name eq ^O` listed field names. Value completion sampled the last file the upstream named (here `relationship.csv`, which has no `a_kind_name`), so a column from `join -as`, `update` or `rename` had no values, and a `where` upstream didn't narrow them. Ctrl-O now runs the upstream (the new `-value-sample` protocol verb) and samples its first 10,000 records. That takes 0.04 s on the 1.2 GB example with `limit 10`, and 0.14 s without it. It only does this when every command is an ssql command that writes nothing (no `tee`, `to`, redirection or command substitution) and the run finishes within 2 s; otherwise it samples the source file as before. The scan of the source file also no longer mistakes a command word for a file (a file named `ssql` in the current directory was "the source"). `serve`'s cursor endpoint keeps the read-only `-value-source`.
+- **Ctrl-O at a value with no values to offer now offers nothing**, instead of falling back to field names. A line run from a directory without its input files listed the field names, which looked like the bug above.
 
 ## [4.136.0] - 2026-11-02
 

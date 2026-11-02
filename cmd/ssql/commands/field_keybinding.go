@@ -171,6 +171,11 @@ _ssql_complete_field() {
                     return
                 fi
             fi
+            # A value slot with no values (no source, the upstream failed,
+            # nothing matches the partial) offers nothing: a field name is
+            # never a value, and listing them looked like a bug (Ross,
+            # 2026-11-02, a line run from the wrong directory).
+            return
         fi
     fi
 

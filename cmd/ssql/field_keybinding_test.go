@@ -120,6 +120,13 @@ printf '%%s' "$READLINE_LINE"
 		// the upstream narrows the values: one name left, not three
 		struct{ in, want string }{fbase + " | ssql where -if school eq SSBHS | ssql where -if name eq ",
 			fbase + " | ssql where -if school eq SSBHS | ssql where -if name eq 'Ross Cartlidge' "},
+		// No values (here the source is missing) means no suggestions,
+		// never the field names: at a value slot a name is a wrong answer
+		// that looks like the bug above (Ross, 2026-11-02, run from the
+		// wrong directory). `include` names its field without reading,
+		// so a field fallback would complete `d` to `dept`.
+		struct{ in, want string }{"ssql from csv " + filepath.Join(dir, "missing.csv") + " | ssql include dept | ssql where -if dept eq d",
+			"ssql from csv " + filepath.Join(dir, "missing.csv") + " | ssql include dept | ssql where -if dept eq d"},
 	)
 	for _, c := range cases {
 		if got := run(c.in); got != c.want {
