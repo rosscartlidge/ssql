@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.136.0] - 2026-11-02
+
 ### Changed
 
 - **Graph traversal is its own command: `traverse`** ([DFC161](doc/research/dfc161_graph_traversal_join_follow.md) §10). `join FILE -on NODE SRC -follow DST …` (v4.135) is now `traverse FILE -from NODE SRC -to DST …`; the modes and results are unchanged (`-fewest-hops`, `-lowest-sum FIELD NAME`, `-all-paths`, `-depth`, `-sum`, `-path`, `-max-depth`, `-both`), and so is every lane's output. `join -follow` is removed and is now an unknown-flag error. Two reasons: nobody looking for graphs or routes looks in `join`, and about half of `join -help` was refused in either mode. The library keeps `ssql.Follow` and `typed.Follow`.
