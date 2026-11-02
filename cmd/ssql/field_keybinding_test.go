@@ -103,10 +103,38 @@ printf '%%s' "$READLINE_LINE"
 		struct{ in, want string }{nbase + " | ssql where -if tags eq ", nbase + ` | ssql where -if tags eq '["go","rust"]' `},
 		struct{ in, want string }{nbase + " | ssql where -if note eq ", nbase + ` | ssql where -if note eq 'it'\''s' `},
 	)
+	// Values of a column an upstream stage makes or narrows come from
+	// the upstream's own output, not from the last file it names (Ross,
+	// 2026-11-02: `… | ssql join kind.csv -on a_kind kind -as kind_name
+	// a_kind_name … | ssql where -if a_kind_name eq ^O` listed field names,
+	// because relationship.csv, the last file, has no such column).
+	kinds := filepath.Join(dir, "kinds.csv")
+	if err := os.WriteFile(kinds, []byte("k,kname\nx,Xray\ny,Yankee\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases = append(cases,
+		struct{ in, want string }{base + " | ssql join " + kinds + " -on dept k -as kname kn | ssql where -if kn eq ",
+			base + " | ssql join " + kinds + " -on dept k -as kname kn | ssql where -if kn eq Xray "},
+		struct{ in, want string }{base + " | ssql update -set tag hi | ssql where -if tag eq ",
+			base + " | ssql update -set tag hi | ssql where -if tag eq hi "},
+		// the upstream narrows the values: one name left, not three
+		struct{ in, want string }{fbase + " | ssql where -if school eq SSBHS | ssql where -if name eq ",
+			fbase + " | ssql where -if school eq SSBHS | ssql where -if name eq 'Ross Cartlidge' "},
+	)
 	for _, c := range cases {
 		if got := run(c.in); got != c.want {
 			t.Errorf("in=%q\n got=%q\nwant=%q", c.in, got, c.want)
 		}
+	}
+	// An upstream that writes is never run by a keypress: `tee` falls back
+	// to sampling the source file, and its file is not created.
+	teeOut := filepath.Join(dir, "tee_must_not_exist.jsonl")
+	teeLine := base + " | ssql tee " + teeOut + " | ssql where -if dept eq "
+	if got, want := run(teeLine), teeLine+"x "; got != want {
+		t.Errorf("tee upstream:\n got=%q\nwant=%q", got, want)
+	}
+	if _, err := os.Stat(teeOut); err == nil {
+		t.Errorf("Ctrl-O ran an upstream tee: %s was written", teeOut)
 	}
 
 	// Regression (user-found): tab-completing a filename exports

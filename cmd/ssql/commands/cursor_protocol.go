@@ -13,6 +13,9 @@ import (
 // help-at-cursor) and the browser playground's Help button:
 //
 //	-complete-source BEFORE   → upstream pipeline for schema-driven completion
+//	-value-source    BEFORE   → the upstream's source file, for value sampling
+//	-value-sample    BEFORE   → a sample of the upstream's output (run when
+//	                            safe), else that file — the terminal's Ctrl-O
 //	-cursor-stage    BEFORE   → current pipeline stage at the cursor
 //	-help-at POS ARGS...      → autocli help for the word at POS
 //	-help-at-cursor BEFORE    → the same for the word under the cursor, BEFORE
@@ -33,6 +36,8 @@ func HandleCursorProtocol(args []string, root func() *cf.Command) (stdout, stder
 		return CursorTopLevelStage(args[1]), "", 0, true
 	case "-value-source":
 		return ValueSourceFile(args[1], root()), "", 0, true
+	case "-value-sample":
+		return ValueSample(args[1], root()), "", 0, true
 	case "-split-pipeline":
 		// Three lines: the shell prefix (ending in `|`, or empty), the
 		// contiguous ssql pipeline, the shell suffix (starting with `|` or

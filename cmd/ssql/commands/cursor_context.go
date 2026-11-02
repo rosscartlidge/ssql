@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -325,23 +324,41 @@ func ExprArgAtCursor(tree *cf.Command, args []string, pos int) bool {
 }
 
 // ValueSourceFile returns the data file feeding the cursor position, for
-// field-VALUE sampling: the last token of the CompleteSource upstream
-// that exists as a regular file, or "". This replaces the
-// AUTOCLI_CACHE_FILE tab-completion dance for consumers that can see the
-// whole pipeline (the Ctrl-O binding, the browser playground) — bash Tab
-// can't, which is why the cache exists at all.
+// field-VALUE sampling, or "": the upstream's source file (upstreamFile).
+// It only reads, so the browser consumers (the playground, serve's
+// /api/cursor) use it. This replaces the AUTOCLI_CACHE_FILE
+// tab-completion dance for consumers that can see the whole pipeline —
+// bash Tab can't, which is why the cache exists at all.
 func ValueSourceFile(before string, tree *cf.Command) string {
 	src := CompleteSource(before, tree)
 	if src == "" {
 		return ""
 	}
-	toks := tokenizeStage(src)
-	for i := len(toks) - 1; i >= 0; i-- {
-		if st, err := os.Stat(toks[i]); err == nil && st.Mode().IsRegular() {
-			return toks[i]
+	return upstreamFile(src)
+}
+
+// ValueSample is ValueSourceFile for the terminal's Ctrl-O (-value-sample).
+// The upstream is the authority on the values that reach the cursor: a
+// column a join, update or rename makes exists in no file, and a where
+// narrows what does. So an upstream of more than one stage is run and its
+// first records are the sample (sampleUpstream), when it is safe to run
+// on a keypress; otherwise the source file. Until 2026-11-02 Ctrl-O always
+// sampled the last file the upstream named: Ross's `… | ssql join
+// relationship.csv -using relationship | … | ssql where -if a_kind_name
+// eq ^O` sampled relationship.csv, found no a_kind_name, and listed field
+// names. Never on serve's allow-list: a browser does not get to run
+// pipelines on the server through the cursor protocol.
+func ValueSample(before string, tree *cf.Command) string {
+	src := CompleteSource(before, tree)
+	if src == "" {
+		return ""
+	}
+	if len(splitTopLevelPipes(src)) > 1 {
+		if f, ok := sampleUpstream(src); ok {
+			return f
 		}
 	}
-	return ""
+	return upstreamFile(src)
 }
 
 // CompleteSource returns the shell command whose `SSQL_MODE=schema` output

@@ -56,9 +56,11 @@ def run(vi):
     # PASS = the partial 'na' completed to 'name' and no literal ^O leaked in.
     return ("name " in line) and ("^O" not in line) and ("\x0f" not in line)
 
-def run_value(vi):
+def run_value(vi, mid="", field="dept", want="x"):
     # VALUE slot: Ctrl-O completes the actual data value ("x") from the
-    # pipeline's source file — the value phase of the same binding.
+    # pipeline's source file — the value phase of the same binding. With
+    # mid, an upstream stage that MAKES the field: its values exist in no
+    # file and come from running the upstream (2026-11-02).
     pid, fd = pty.fork()
     if pid == 0:
         os.environ.pop("TMUX", None)
@@ -77,16 +79,16 @@ def run_value(vi):
     send('eval "$(ssql -field-keybinding)"\n'); drain()
     if vi:
         send("set -o vi\n"); drain()
-    send("ssql from csv %s | ssql where -if dept eq " % csv)
+    send("ssql from csv %s %s| ssql where -if %s eq " % (csv, mid, field))
     time.sleep(0.5)
     os.write(fd, b"\x0f")                                 # Ctrl-O
     time.sleep(0.9)
     after = drain().decode(errors="replace")
     os.write(fd, b"\x03\n"); time.sleep(0.2); os.close(fd)
     segs = [re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[A-Za-z]', '', s) for s in after.split("\r")]
-    cand = [s for s in segs if "-if dept eq" in s]
+    cand = [s for s in segs if "-if %s eq" % field in s]
     line = cand[-1] if cand else ""
-    return ("eq x " in line) and ("^O" not in line) and ("\x0f" not in line)
+    return ("eq %s " % want in line) and ("^O" not in line) and ("\x0f" not in line)
 
 def run_macro():
     # A macro argument (DFC152): the third value of -set-macro is past the
@@ -124,6 +126,7 @@ try:
     ok_v = run(True)
     ok_ev = run_value(False)
     ok_vv = run_value(True)
+    ok_dv = run_value(False, "| ssql update -set tag hi ", "tag", "hi")
     ok_m = run_macro()
 except Exception as e:
     print("SKIP:", e); sys.exit(0)
@@ -131,8 +134,9 @@ print("emacs:", "PASS" if ok_e else "FAIL")
 print("vi:", "PASS" if ok_v else "FAIL")
 print("emacs-value:", "PASS" if ok_ev else "FAIL")
 print("vi-value:", "PASS" if ok_vv else "FAIL")
+print("derived-value:", "PASS" if ok_dv else "FAIL")
 print("macro:", "PASS" if ok_m else "FAIL")
-sys.exit(0 if (ok_e and ok_v and ok_ev and ok_vv and ok_m) else 1)
+sys.exit(0 if (ok_e and ok_v and ok_ev and ok_vv and ok_dv and ok_m) else 1)
 `
 
 // TestFieldKeybindingPTY exercises the field-completion keybinding through

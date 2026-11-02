@@ -201,6 +201,16 @@ func TestServeHTTPEndpoints(t *testing.T) {
 			t.Errorf("status %d", resp.StatusCode)
 		}
 	})
+
+	// -value-sample runs the upstream pipeline (the terminal's Ctrl-O);
+	// the cursor endpoint stays read-only, so it is not a verb here.
+	t.Run("cursor-rejects-value-sample", func(t *testing.T) {
+		resp, _ := postJSON(t, base+"/api/cursor",
+			map[string]any{"argv": []string{"-value-sample", "ssql from csv employees.csv | ssql where -if dept eq "}}, nil)
+		if resp.StatusCode != 400 {
+			t.Errorf("status %d", resp.StatusCode)
+		}
+	})
 }
 
 func TestServeHTTPTokenAuth(t *testing.T) {

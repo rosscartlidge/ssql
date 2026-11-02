@@ -24,11 +24,21 @@ field-name cache.
 1. Cross-pipe value slot + `<TAB>` → `FieldValueCompleter` has no source →
    returns the actionable `Values-Use-Ctrl-O` token (bash inserts it as the
    unique completion, exactly like the field-name `Use-Ctrl-O`).
-2. `<Ctrl-O>` → the binding deletes the placeholder, resolves the pipeline's
-   own source file via `ssql -value-source` (paren-aware; join right-sides
-   resolve to the join's `<(…)` file), and completes real values —
+2. `<Ctrl-O>` → the binding deletes the placeholder and gets a value source
+   via `ssql -value-sample`. When the upstream has more than one stage and is
+   safe to run on a keypress (only ssql commands, no `tee`/`to`/`generate`/
+   `serve`, no unquoted `>`, `;`, `&`, `$(`, backtick), it runs the upstream
+   into `ssql limit 10000` with a 2 s timeout. It writes the records to
+   `~/.cache/ssql/ctrl-o-values.jsonl` (overwritten each press) and returns
+   that path. Otherwise it returns the upstream's source file. A column a
+   join, update or rename makes exists in no file; the sample has it
+   (2026-11-02; before that a `join -as` column listed field names).
    `AUTOCLI_CACHE_FILE` survives only as the **per-invocation sampling
    parameter** the binding passes to `ssql -complete` (never exported).
+   `-value-source` is the read-only form (the file only), used by the
+   playground and serve's `/api/cursor`. serve never allows `-value-sample`:
+   a browser must not run pipelines on the server through the cursor
+   protocol.
 3. Spaced values are single-quoted on insertion (`'Peter Allworth'`).
 
 The token pair is mirrored in autocli via `cf.FieldNameHint` /

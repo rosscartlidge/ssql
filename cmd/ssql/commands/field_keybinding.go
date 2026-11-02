@@ -128,7 +128,7 @@ _ssql_complete_field() {
         vplain=$(AUTOCLI_CACHE_FILE= command ssql -complete "$vpos" "${vargs[@]}" 2>/dev/null)
         if [[ $'\n'"$vplain"$'\n' == *$'\nValues-Use-Ctrl-O\n'* ]]; then
             local vsrc
-            vsrc=$(command ssql -value-source "$line" 2>/dev/null)
+            vsrc=$(command ssql -value-sample "$line" 2>/dev/null)
             if [[ -n "$vsrc" ]]; then
                 # Match against the partial, tolerating an opening quote.
                 local vpartial="${partial#\'}"
