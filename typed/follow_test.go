@@ -106,3 +106,21 @@ func TestFollowNegativeWeight(t *testing.T) {
 	edges := []followEdge{{"A", "B", -1}}
 	_ = slices.Collect(Follow(slices.Values(edges), followSpecFor(FollowLowestSum))(slices.Values([]followSeed{{"A"}})))
 }
+
+// TestFollowEdgesParallelMatchesSerial: the edges as the Stream (DFC161
+// §11) — an ordered Stream in seed order, row for row the serial walk,
+// and FollowStarts walks each distinct start once.
+func TestFollowEdgesParallelMatchesSerial(t *testing.T) {
+	seeds := slices.Values([]followSeed{{"SYD"}, {"PER"}, {"SYD"}, {"MEL"}, {""}})
+	for _, mode := range []FollowMode{FollowFewestHops, FollowLowestSum, FollowAllPaths} {
+		fs := followSpecFor(mode)
+		serial := slices.Collect(Follow(slices.Values(followFlights), fs)(FollowStarts(nil, seeds)))
+		parallel := slices.Collect(FollowEdgesParallel(ParallelFromSlice(followFlights, 4), FollowStarts(nil, seeds), fs).Serial())
+		if !slices.Equal(serial, parallel) {
+			t.Errorf("mode %d:\nparallel %v\nserial   %v", mode, parallel, serial)
+		}
+		if n := len(slices.Collect(FollowStarts([]followSeed{{"MEL"}}, seeds))); n != 4 {
+			t.Errorf("FollowStarts: %d starts, want 4 (MEL SYD PER and the empty one)", n)
+		}
+	}
+}

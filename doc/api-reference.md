@@ -1147,6 +1147,8 @@ type FollowConfig struct {
     Both                          bool        // undirected: every edge usable either way
 }
 func Follow(edges iter.Seq[Record], cfg FollowConfig) Filter[Record, Record]
+func FollowEdges(seeds iter.Seq[Record], cfg FollowConfig) Filter[Record, Record]
+func FollowStarts(field string, values []any, more iter.Seq[Record]) iter.Seq[Record]
 ```
 
 Graph traversal: a join run to a fixpoint ([DFC161](research/dfc161_graph_traversal_join_follow.md)).
@@ -1172,7 +1174,23 @@ routes := ssql.Follow(flights, ssql.FollowConfig{
 })(seeds)
 ```
 
-The CLI form is `traverse flights.csv -from city src -to dst -lowest-sum mins total -depth hops`.
+`StartField`, when set, is the seed column a walk starts from: the
+start keeps its column and `NodeField` (appended when the seed lacks it)
+holds the node reached. `FollowEdges` is the same walk as a filter over
+the edges, the seeds given up front, and `FollowStarts` builds seed rows
+from start values and a stream of rows, each distinct row once — the
+shape of the CLI, where the edges are the stream (DFC161 §11):
+
+```go
+starts := ssql.FollowStarts("src", []any{"SYD", "PER"}, nil)
+routes := ssql.FollowEdges(starts, ssql.FollowConfig{
+    NodeField: "dst", StartField: "src", SrcField: "src", DstField: "dst",
+    Mode:   ssql.FollowLowestSum,
+    Lowest: ssql.FollowSum{Field: "mins", Name: "total"},
+})(flights)
+```
+
+The CLI form is `ssql from flights.csv | ssql traverse -from src -to dst -start SYD -start PER -lowest-sum mins total`.
 
 ### Except and Intersect
 

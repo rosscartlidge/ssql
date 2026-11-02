@@ -15,16 +15,16 @@ func TestFollowSQL(t *testing.T) {
 	dir := t.TempDir()
 	seeds := filepath.Join(dir, "seeds.csv")
 	flights := filepath.Join(dir, "flights.csv")
-	os.WriteFile(seeds, []byte("city,label\nSYD,home\n"), 0o644)
+	os.WriteFile(seeds, []byte("src,label\nSYD,home\n"), 0o644)
 	os.WriteFile(flights, []byte("src,dst,mins\nSYD,MEL,90\nMEL,ADL,75\n"), 0o644)
-	from := "ssql from csv " + seeds
-	join := "ssql traverse " + flights + " -from city src -to dst "
+	from := "ssql from csv " + flights
+	join := "ssql traverse -from src -to dst -start-file " + seeds + " "
 
 	t.Run("duckdb_keyed", func(t *testing.T) {
 		sql := mustDialect(t, dialectDuckDB, from, join+"-depth hops -lowest-sum mins total -path p")
 		wantAll(t, sql, "WITH RECURSIVE", "USING KEY (__sid, __node)", "LEFT JOIN recurring.__walk r",
 			"QUALIFY row_number() OVER (PARTITION BY w.__sid, e.dst", "error('traverse -lowest-sum",
-			"CAST(0 AS HUGEINT)", "w.__node AS city, s.label, w.__depth AS hops, w.__t1 AS total, w.__path AS p")
+			"CAST(0 AS HUGEINT)", "s.src, s.label, w.__node AS dst, w.__depth AS hops, w.__t1 AS total, w.__path AS p")
 	})
 	t.Run("duckdb_all_paths_both", func(t *testing.T) {
 		sql := mustDialect(t, dialectDuckDB, from, join+"-all-paths -both -max-depth 3")
@@ -35,11 +35,17 @@ func TestFollowSQL(t *testing.T) {
 	})
 	t.Run("postgres_all_paths", func(t *testing.T) {
 		sql := mustDialect(t, dialectPostgres, from, join+"-all-paths -sum mins m")
-		wantAll(t, sql, `ARRAY["city"]`, `NOT e."dst" = ANY(w.__path)`, "CAST(0 AS NUMERIC(39,0))")
+		wantAll(t, sql, `ARRAY["src"]`, `NOT e."dst" = ANY(w.__path)`, "CAST(0 AS NUMERIC(39,0))")
 	})
 	t.Run("datafusion_all_paths", func(t *testing.T) {
 		sql := mustDialect(t, dialectDataFusion, from, join+"-all-paths -depth d")
-		wantAll(t, sql, `make_array("city")`, `NOT array_has(w.__path, e."dst")`)
+		wantAll(t, sql, `make_array("src")`, `NOT array_has(w.__path, e."dst")`)
+	})
+	t.Run("start_values", func(t *testing.T) {
+		// -start values are rows of SRC, the file's other columns NULL,
+		// UNIONed with the file's rows so each distinct start walks once.
+		sql := mustDialect(t, dialectDuckDB, from, join+"-start MEL -depth d")
+		wantAll(t, sql, `SELECT 'MEL' AS src, NULL AS label`, "UNION\n  SELECT DISTINCT src, label FROM")
 	})
 	t.Run("refusals", func(t *testing.T) {
 		for _, d := range []sqlDialect{dialectPostgres, dialectDataFusion} {

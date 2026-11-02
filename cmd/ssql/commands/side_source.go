@@ -94,6 +94,21 @@ func generateSideCode(s sideSource) error {
 		c.leftFields = typedFieldNames(c.leftSchema)
 	}
 
+	// No side input (traverse with -start values only): the emitters
+	// run over the main input alone.
+	if s.file == "" {
+		if typedMode() && !pathKey {
+			if c.leftSchema == nil {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: '%s' must follow a typed-mode source", s.name))
+			}
+			if handled, err := s.typed(c, nil, nil, ""); handled || err != nil {
+				return err
+			}
+		}
+		return s.record(c, nil, noType)
+	}
+
 	// Check if the file is a non-regular file (e.g., /dev/fd/N, named pipe)
 	// In generation mode, these contain code fragments from the inner command
 	fileInfo, statErr := os.Stat(s.file)

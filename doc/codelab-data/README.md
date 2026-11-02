@@ -21,6 +21,7 @@ restores them after editing.
 | `sensor.csv` | irregular timestamps, temp + rpm | resample, bucket, window |
 | `alarms.csv` | three alarm timestamps inside `sensor.csv`'s range | join -asof |
 | `flights.csv` | ten flights between Australian cities (`src`, `dst`, `mins`), a cycle and three routes to Darwin | traverse (graph traversal) |
+| `cities.csv` | the eight cities of `flights.csv` (`city`, `name`, `state`) | traverse `-start-file` |
 | `shipments.csv` | day-first dates with a time of day (`05/01/2026 09:15`), a leap day | -format, date_trunc, strftime, -time-format |
 | `signal.csv` | 5 Hz + 20 Hz at 100 samples/s | fft, spectrogram |
 

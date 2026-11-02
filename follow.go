@@ -33,7 +33,12 @@ type FollowConfig struct {
 	// NodeField is the seed's node column; SrcField and DstField are the
 	// edge's endpoints. A reached node's value is written to NodeField.
 	NodeField, SrcField, DstField string
-	Mode                          FollowMode
+	// StartField, when set, is the seed column the walk starts from, so
+	// the start keeps its column and NodeField (appended when the seed
+	// lacks it) holds the node reached — traverse's SRC ⇝ DST rows
+	// (DFC161 §11). Empty: the walk starts from NodeField.
+	StartField string
+	Mode       FollowMode
 	// Lowest is the sum FollowLowestSum minimises; it is written like a
 	// Sums entry.
 	Lowest FollowSum
@@ -363,7 +368,11 @@ func (g *followGraph) row(seed Record, sh *followShape, r *follow.Route[any, []f
 // walk emits seed's routes; false when the consumer stopped.
 func (g *followGraph) walk(seed Record, yield func(Record) bool) bool {
 	sh := g.shape(seed)
-	node, _ := Get[any](seed, g.cfg.NodeField)
+	from := g.cfg.NodeField
+	if g.cfg.StartField != "" {
+		from = g.cfg.StartField
+	}
+	node, _ := Get[any](seed, from)
 	key, ok := followKey(node)
 	zero := make([]followAcc, len(g.accs))
 	for i := range zero {
@@ -372,4 +381,44 @@ func (g *followGraph) walk(seed Record, yield func(Record) bool) bool {
 	return g.spec.Walk(node, key, ok, zero, func(r *follow.Route[any, []followAcc]) bool {
 		return yield(g.row(seed, sh, r))
 	})
+}
+
+// FollowEdges is [Follow] as a filter over the edges, the seeds given
+// up front: traverse's shape (DFC161 §11), where the edge list is the
+// stream and the starts are flags.
+func FollowEdges(seeds iter.Seq[Record], cfg FollowConfig) Filter[Record, Record] {
+	return func(edges iter.Seq[Record]) iter.Seq[Record] {
+		return Follow(edges, cfg)(seeds)
+	}
+}
+
+// FollowStarts is the start rows of a traversal (DFC161 §11): one row
+// {field: v} per value, then the rows of more (nil for none), each
+// distinct row once, in that order.
+func FollowStarts(field string, values []any, more iter.Seq[Record]) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		seen := make(map[string]bool)
+		emit := func(r Record) bool {
+			k := RecordKey(r)
+			if seen[k] {
+				return true
+			}
+			seen[k] = true
+			return yield(r)
+		}
+		schema := NewSchema([]string{field})
+		for _, v := range values {
+			if !emit(NewRecordFromSchema(schema, []any{v})) {
+				return
+			}
+		}
+		if more == nil {
+			return
+		}
+		for r := range more {
+			if !emit(r) {
+				return
+			}
+		}
+	}
 }

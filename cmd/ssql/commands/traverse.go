@@ -3,7 +3,9 @@ package commands
 import (
 	"fmt"
 	"iter"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -11,15 +13,20 @@ import (
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
-// Graph traversal (DFC161): the seeds are the stream, the edges the
-// file, and the traversal is a join run to a fixpoint — each round joins
-// the routes the last round found against the edges again. It was a
-// mode of join (`join -follow`) in v4.135; it is its own command so it
-// can be found and so its flags are only the ones that apply (§10).
+// Graph traversal (DFC161): the edges are the stream, the starts are
+// flags (-start values, a -start-file list), and the traversal is a
+// join run to a fixpoint — each round joins the routes the last round
+// found against the edges again. It was a mode of join (`join -follow`)
+// in v4.135, its own command with the seeds on stdin in v4.136 (§10),
+// and took the edges as its stream on 2026-11-03 (§11): the edge list
+// is the big table and the starts a handful of values.
 //
-//	… | ssql traverse flights.csv -from city src -to dst -depth hops
-//	… | ssql traverse flights.csv -from city src -to dst -lowest-sum mins total
-//	… | ssql traverse flights.csv -from city src -to dst -all-paths -path route
+//	ssql from flights.csv | ssql traverse -from src -to dst -start SYD -depth hops
+//	ssql from flights.csv | ssql traverse -from src -to dst -start SYD -lowest-sum mins total
+//	ssql from flights.csv | ssql traverse -from src -to dst -start-file starts.csv -all-paths -path route
+//
+// Each output row is a start row's columns (SRC the start), DST the
+// node reached, then the results.
 //
 // Exec and record codegen call ssql.Follow; typed emits
 // typed.Follow[Parallel]; generate sql emits a recursive CTE (the keyed
@@ -28,46 +35,57 @@ import (
 // RegisterTraverse registers the traverse subcommand.
 func RegisterTraverse(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("traverse").
-		Description("Graph traversal: from each input row (a seed), follow the edges in FILE until no new route is found — a join repeated to a fixpoint (DFC161)").
-		Example("ssql from cities.csv | ssql where -if city eq SYD | ssql traverse flights.csv -from city src -to dst -depth hops", "Every city reachable from SYD, by the fewest hops (the default)").
-		Example("ssql from cities.csv | ssql traverse flights.csv -from city src -to dst -lowest-sum mins total -path route", "Each city's quickest route from every seed by total mins (Dijkstra)").
-		Example("ssql from cities.csv | ssql where -if city eq SYD | ssql traverse flights.csv -from city src -to dst -all-paths -sum mins total", "Every route that never revisits a city, with its total").
+		Description("Graph traversal: the input rows are the edges; from each start node, follow them until no new route is found — a join repeated to a fixpoint (DFC161)").
+		Example("ssql from flights.csv | ssql traverse -from src -to dst -start SYD -depth hops", "Every city reachable from SYD, by the fewest hops (the default)").
+		Example("ssql from flights.csv | ssql traverse -from src -to dst -start SYD -start PER -lowest-sum mins total -path route", "Each city's quickest route from SYD and from PER by total mins (Dijkstra)").
+		Example("ssql from flights.csv | ssql traverse -from src -to dst -start-file <(ssql from cities.csv | ssql rename -as city src) -all-paths -sum mins total", "Every route that never revisits a city, from every city in a list, its other columns carried through").
 
 		Flag("-from").
-			Arg("node").
-				FieldsFromFlag("").
-				Done().
-			Arg("src").
-				Completer(rightFieldCompleter{}).
-				Done().
+			String().
+			FieldsFromFlag("").
 			Global().
 			Required().
-			Help("The seed's node field and the edge's source field: -from <node> <src>").
+			Help("The edge's source field; a start is a value of it").
 			Done().
 
 		Flag("-to").
 			String().
-			Completer(rightFieldCompleter{}).
+			FieldsFromFlag("").
 			Global().
 			Required().
-			Help("The edge's target field").
+			Help("The edge's target field; the node reached is written to it").
+			Done().
+
+		Flag("-start").
+			String().
+			Completer(startValueCompleter{}).
+			Accumulate().
+			Global().
+			Help("A start node, a value of the -from field (repeatable)").
+			Done().
+
+		Flag("-start-file").
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
+			Global().
+			Help("A list of starts: CSV/TSV/JSON by extension, a _schema JSONL, or <(ssql …); its start column is named as -from, its other columns are carried through").
 			Done().
 
 		Flag("-fewest-hops").
 			Bool().
 			Global().
-			Help("Each node once per seed, by the fewest hops (the default)").
+			Help("Each node once per start, by the fewest hops (the default)").
 			Done().
 
 		Flag("-lowest-sum").
 			Arg("field").
-				Completer(rightFieldCompleter{}).
+				FieldsFromFlag("").
 				Done().
 			Arg("result").
 				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
 				Done().
 			Global().
-			Help("Each node once per seed, by the lowest total of edge FIELD, written to RESULT (Dijkstra; weights must be >= 0)").
+			Help("Each node once per start, by the lowest total of edge FIELD, written to RESULT (Dijkstra; weights must be >= 0)").
 			Done().
 
 		Flag("-all-paths").
@@ -78,7 +96,7 @@ func RegisterTraverse(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 		Flag("-sum").
 			Arg("field").
-				Completer(rightFieldCompleter{}).
+				FieldsFromFlag("").
 				Done().
 			Arg("result").
 				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
@@ -92,14 +110,14 @@ func RegisterTraverse(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			String().
 			Completer(&cf.NoCompleter{Hint: "<result-field>"}).
 			Global().
-			Help("The hop count, 0 on the seed row").
+			Help("The hop count, 0 on the start's own row").
 			Done().
 
 		Flag("-path").
 			String().
 			Completer(&cf.NoCompleter{Hint: "<result-field>"}).
 			Global().
-			Help("The nodes visited, seed first, as a list").
+			Help("The nodes visited, start first, as a list").
 			Done().
 
 		Flag("-max-depth").
@@ -120,38 +138,30 @@ func RegisterTraverse(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Generate Go code instead of executing").
 			Done().
 
-		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
-			Global().
-			Required().
-			Help("The edges: CSV/TSV/JSON inferred from the extension, a _schema JSONL, or <(ssql …)").
-			Done().
-
 		Handler(func(ctx *cf.Context) error {
 			f, err := parseFollowSpec(ctx)
 			if err != nil {
 				return err
 			}
-			file, _ := ctx.GlobalFlags["FILE"].(string)
-			if file == "" {
-				return fmt.Errorf("traverse: the edges file is required")
-			}
 			generate, _ := ctx.GlobalFlags["-generate"].(bool)
 			if shouldGenerate(generate) {
-				return generateTraverseCode(file, f)
+				return generateTraverseCode(f)
 			}
-			seeds := lib.ReadJSONLWithSchema(ctx.Stdin())
-			edges, edgeSchema, err := readAuxInput(file)
-			if err != nil {
-				return err
+			edges := lib.ReadJSONLWithSchema(ctx.Stdin())
+			var startRecs iter.Seq[ssql.Record]
+			var startSchema *lib.Schema
+			if f.startFile != "" {
+				startRecs, startSchema, err = readAuxInput(f.startFile)
+				if err != nil {
+					return err
+				}
+				// Bare .jsonl without a schema header must fail LOUDLY —
+				// a headerless file silently loses field information.
+				if startSchema == nil {
+					return fmt.Errorf("traverse: start file %s has no schema header — pipe through ssql first: -start-file <(ssql from jsonl %s)", f.startFile, f.startFile)
+				}
 			}
-			// Bare .jsonl without a schema header must fail LOUDLY —
-			// a headerless file silently loses field information.
-			if edgeSchema == nil {
-				return fmt.Errorf("traverse: edges file %s has no schema header — pipe through ssql first: ssql traverse <(ssql from jsonl %s) ...", file, file)
-			}
-			return execTraverse(ctx, seeds.Records, seeds.Schema, edges, edgeSchema, f)
+			return execTraverse(ctx, edges.Records, edges.Schema, startRecs, startSchema, f)
 		}).
 		Done()
 	return cmd
@@ -159,7 +169,9 @@ func RegisterTraverse(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 // followSpec is traverse's flags, parsed once by the handler.
 type followSpec struct {
-	node, src, dst string
+	src, dst  string
+	starts    []string // -start, as typed
+	startFile string
 	mode           ssql.FollowMode
 	lowest         ssql.FollowSum
 	sums           []ssql.FollowSum
@@ -192,11 +204,19 @@ func followPairs(raw any) []ssql.FollowSum {
 func parseFollowSpec(ctx *cf.Context) (followSpec, error) {
 	var f followSpec
 	g := ctx.GlobalFlags
-	if m, ok := g["-from"].(map[string]any); ok {
-		f.node, _ = m["node"].(string)
-		f.src, _ = m["src"].(string)
-	}
+	f.src, _ = g["-from"].(string)
 	f.dst, _ = g["-to"].(string)
+	switch v := g["-start"].(type) {
+	case string:
+		f.starts = []string{v}
+	case []any:
+		for _, x := range v {
+			if s, ok := x.(string); ok {
+				f.starts = append(f.starts, s)
+			}
+		}
+	}
+	f.startFile, _ = g["-start-file"].(string)
 	f.depth, _ = g["-depth"].(string)
 	f.path, _ = g["-path"].(string)
 	f.maxDepth, _ = g["-max-depth"].(int)
@@ -211,8 +231,11 @@ func parseFollowSpec(ctx *cf.Context) (followSpec, error) {
 			modes++
 		}
 	}
-	if f.node == "" || f.src == "" || f.dst == "" {
-		return f, fmt.Errorf("traverse needs -from NODE SRC and -to DST: the seed's node field, the edge's source and target fields")
+	if f.src == "" || f.dst == "" {
+		return f, fmt.Errorf("traverse needs -from SRC and -to DST: the edge's source and target fields")
+	}
+	if len(f.starts) == 0 && f.startFile == "" {
+		return f, fmt.Errorf("traverse needs a start: -start NODE (repeatable) or -start-file FILE, a list whose %s column holds the starts", f.src)
 	}
 	if modes > 1 {
 		return f, fmt.Errorf("traverse: -fewest-hops, -lowest-sum and -all-paths are alternatives — give one (-fewest-hops is the default)")
@@ -265,43 +288,107 @@ func (f followSpec) weights() []ssql.FollowSum {
 }
 
 // followCheck validates the traversal against what the field lists
-// allow: the fields present, the weights numeric, the target not the
-// source, and no result column colliding with a seed column or another
-// result. nil field lists are unknown and skipped.
-func followCheck(leftFields, rightFields []string, rightType func(string) string, f followSpec) (ssql.FollowConfig, error) {
+// allow: the edge fields present, the weights numeric, the target not
+// the source, a start file's start column named as -from and none named
+// as -to, and no result column colliding with SRC, DST, a start column
+// or another result. nil field lists are unknown and skipped.
+func followCheck(edgeFields []string, edgeType func(string) string, startFields []string, f followSpec) (ssql.FollowConfig, error) {
 	var cfg ssql.FollowConfig
 	if f.src == f.dst {
-		return cfg, fmt.Errorf("traverse -to %s: the edge's target must be a different field from its source (-from %s %s)", f.dst, f.node, f.src)
+		return cfg, fmt.Errorf("traverse -to %s: the edge's target must be a different field from its source (-from %s)", f.dst, f.src)
 	}
-	if leftFields != nil && !fieldListHasOrPath(leftFields, f.node) {
-		return cfg, fmt.Errorf("traverse: seed field %q not found (available: %s)", f.node, strings.Join(leftFields, ", "))
-	}
-	if rightFields != nil {
-		for _, rf := range append([]string{f.src, f.dst}, followFields(f.weights())...) {
-			if !fieldListHasOrPath(rightFields, rf) {
-				return cfg, fmt.Errorf("traverse: edge field %q not found (available: %s)", rf, strings.Join(rightFields, ", "))
+	if edgeFields != nil {
+		for _, ef := range append([]string{f.src, f.dst}, followFields(f.weights())...) {
+			if !fieldListHasOrPath(edgeFields, ef) {
+				return cfg, fmt.Errorf("traverse: edge field %q not found (available: %s)", ef, strings.Join(edgeFields, ", "))
 			}
 		}
 		for _, w := range f.weights() {
-			switch base, _ := lib.ParseWireType(rightType(w.Field)); base {
+			switch base, _ := lib.ParseWireType(edgeType(w.Field)); base {
 			case "", lib.TypeInt, lib.TypeInt128, lib.TypeFloat, lib.TypeDecimal:
 			default:
 				return cfg, fmt.Errorf("traverse: edge field %q is %s; a sum needs a number", w.Field, base)
 			}
 		}
 	}
-	seen := map[string]bool{}
+	if startFields != nil {
+		if !slices.Contains(startFields, f.src) {
+			return cfg, fmt.Errorf("traverse -start-file %s: no %s column — the starts are read from the column -from names (available: %s); rename it in a procsub: -start-file <(ssql from FILE | ssql rename -as COLUMN %s)", f.startFile, f.src, strings.Join(startFields, ", "), f.src)
+		}
+		if slices.Contains(startFields, f.dst) {
+			return cfg, fmt.Errorf("traverse -start-file %s: column %q is where -to writes the node reached — drop or rename it", f.startFile, f.dst)
+		}
+	}
+	seen := map[string]bool{f.src: true, f.dst: true}
 	for _, n := range f.accNames() {
-		if seen[n] || (leftFields != nil && fieldListHasOrPath(leftFields, n)) || n == f.node {
-			return cfg, fmt.Errorf("traverse: result column %q is already a column (seed: %s)", n, strings.Join(leftFields, ", "))
+		if seen[n] || slices.Contains(startFields, n) {
+			return cfg, fmt.Errorf("traverse: result column %q is already a column (-from %s, -to %s, start columns: %s)", n, f.src, f.dst, strings.Join(startFields, ", "))
 		}
 		seen[n] = true
 	}
 	return ssql.FollowConfig{
-		NodeField: f.node, SrcField: f.src, DstField: f.dst,
+		NodeField: f.dst, StartField: f.src, SrcField: f.src, DstField: f.dst,
 		Mode: f.mode, Lowest: f.lowest, Sums: f.sums,
 		DepthField: f.depth, PathField: f.path, MaxDepth: f.maxDepth, Both: f.both,
 	}, nil
+}
+
+// traverseStartValues converts the -start texts to the type of the
+// edges' SRC column (DFC161 §11): text stays text, an int or float
+// column needs one, and an unknown type is inferred as a CSV field is.
+// A value that does not convert is an error, never a start that matches
+// nothing. Every lane converts through here.
+func traverseStartValues(starts []string, field, typ string) ([]any, error) {
+	out := make([]any, 0, len(starts))
+	for _, t := range starts {
+		var v any
+		switch base, _ := lib.ParseWireType(typ); base {
+		case "":
+			v = parseValue(t)
+		case lib.TypeString:
+			v = t
+		case lib.TypeInt:
+			n, err := strconv.ParseInt(t, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("traverse -start %s: %s is an int column, and %q is not an int", t, field, t)
+			}
+			v = n
+		case lib.TypeFloat:
+			x, err := strconv.ParseFloat(t, 64)
+			if err != nil {
+				return nil, fmt.Errorf("traverse -start %s: %s is a float column, and %q is not a number", t, field, t)
+			}
+			v = x
+		default:
+			return nil, fmt.Errorf("traverse -start %s: %s is a %s column; give its starts with -start-file", t, field, base)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// goAnyLiteral is the start values as a Go []any literal ("nil" when
+// there are none) for record codegen.
+func goAnyLiteral(values []any) (string, error) {
+	if len(values) == 0 {
+		return "nil", nil
+	}
+	parts := make([]string, len(values))
+	for i, v := range values {
+		switch x := v.(type) {
+		case string:
+			parts[i] = strconv.Quote(x)
+		case int64:
+			parts[i] = fmt.Sprintf("int64(%d)", x)
+		case float64:
+			parts[i] = fmt.Sprintf("float64(%s)", strconv.FormatFloat(x, 'g', -1, 64))
+		case bool:
+			parts[i] = strconv.FormatBool(x)
+		default:
+			return "", fmt.Errorf("traverse -start %v: a %T start has no literal form; give it with -start-file", v, v)
+		}
+	}
+	return "[]any{" + strings.Join(parts, ", ") + "}", nil
 }
 
 func followFields(sums []ssql.FollowSum) []string {
@@ -325,37 +412,46 @@ func followSumType(edgeType string) string {
 }
 
 // execTraverse runs the traversal in the interpreter.
-func execTraverse(ctx *cf.Context, leftRecords iter.Seq[ssql.Record], leftSchema *lib.Schema, rightSeq iter.Seq[ssql.Record], rightSchema *lib.Schema, f followSpec) error {
-	var leftFields []string
-	if leftSchema != nil {
-		leftFields = leftSchema.Fields
+func execTraverse(ctx *cf.Context, edges iter.Seq[ssql.Record], edgeSchema *lib.Schema, startRecs iter.Seq[ssql.Record], startSchema *lib.Schema, f followSpec) error {
+	var edgeFields, startFields []string
+	edgeType := noType
+	if edgeSchema != nil {
+		edgeFields, edgeType = edgeSchema.Fields, edgeSchema.TypeOf
 	}
-	cfg, err := followCheck(leftFields, rightSchema.Fields, rightSchema.TypeOf, f)
+	if startSchema != nil {
+		startFields = startSchema.Fields
+	}
+	cfg, err := followCheck(edgeFields, edgeType, startFields, f)
 	if err != nil {
 		return err
 	}
-	routes := ssql.Follow(rightSeq, cfg)(leftRecords)
+	values, err := traverseStartValues(f.starts, f.src, edgeType(f.src))
+	if err != nil {
+		return err
+	}
+	routes := ssql.FollowEdges(ssql.FollowStarts(f.src, values, startRecs), cfg)(edges)
 
-	var outputSchema *lib.Schema
-	if leftSchema != nil {
-		outputSchema = lib.NewSchema()
-		for _, fld := range leftSchema.Fields {
-			outputSchema.AddField(fld, leftSchema.TypeOf(fld))
-		}
-		if !outputSchema.HasField(cfg.NodeField) {
-			outputSchema.AddField(cfg.NodeField, rightSchema.TypeOf(cfg.DstField))
-		}
-		if f.depth != "" {
-			outputSchema.AddField(f.depth, lib.TypeInt)
-		}
-		for _, w := range f.weights() {
-			outputSchema.AddField(w.Name, followSumType(rightSchema.TypeOf(w.Field)))
-		}
-		if f.path != "" {
-			outputSchema.AddField(f.path, lib.TypeJSON)
+	// The start columns (a -start row has only SRC), DST, the results.
+	out := lib.NewSchema()
+	if startSchema != nil {
+		for _, fld := range startSchema.Fields {
+			out.AddField(fld, startSchema.TypeOf(fld))
 		}
 	}
-	if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, routes); err != nil {
+	if !out.HasField(f.src) {
+		out.AddField(f.src, edgeType(f.src))
+	}
+	out.AddField(f.dst, edgeType(f.dst))
+	if f.depth != "" {
+		out.AddField(f.depth, lib.TypeInt)
+	}
+	for _, w := range f.weights() {
+		out.AddField(w.Name, followSumType(edgeType(w.Field)))
+	}
+	if f.path != "" {
+		out.AddField(f.path, lib.TypeJSON)
+	}
+	if err := lib.WriteJSONLWithSchema(ctx.Stdout(), out, routes); err != nil {
 		return fmt.Errorf("writing output: %w", err)
 	}
 	return nil
@@ -363,7 +459,7 @@ func execTraverse(ctx *cf.Context, leftRecords iter.Seq[ssql.Record], leftSchema
 
 // followConfigGo renders the config as Go source for record codegen.
 func followConfigGo(cfg ssql.FollowConfig) string {
-	parts := []string{fmt.Sprintf("NodeField: %q, SrcField: %q, DstField: %q", cfg.NodeField, cfg.SrcField, cfg.DstField)}
+	parts := []string{fmt.Sprintf("NodeField: %q, StartField: %q, SrcField: %q, DstField: %q", cfg.NodeField, cfg.StartField, cfg.SrcField, cfg.DstField)}
 	switch cfg.Mode {
 	case ssql.FollowLowestSum:
 		parts = append(parts, "Mode: ssql.FollowLowestSum", fmt.Sprintf("Lowest: ssql.FollowSum{Field: %q, Name: %q}", cfg.Lowest.Field, cfg.Lowest.Name))
@@ -392,36 +488,48 @@ func followConfigGo(cfg ssql.FollowConfig) string {
 	return "ssql.FollowConfig{" + strings.Join(parts, ", ") + "}"
 }
 
-// generateTraverseCode generates Go code for traverse: the side source
-// (generateSideCode) with the traversal's emitters. A typed pipeline
-// whose traversal has no typed form runs it in record mode, with a plan
-// note saying why (surfaced by -explain).
-func generateTraverseCode(file string, f followSpec) error {
+// generateTraverseCode generates Go code for traverse: the main input
+// is the edges, the side source (generateSideCode) the -start-file list
+// when there is one. A typed pipeline whose traversal has no typed form
+// runs it in record mode, with a plan note saying why (surfaced by
+// -explain).
+func generateTraverseCode(f followSpec) error {
 	var notes []string
-	s := sideSource{name: "traverse", file: file, leftKeys: []string{f.node}, rightKeys: []string{f.src, f.dst}}
-	s.typed = func(c sideCtx, rightSchema *lib.TypedSchema, rightFragments []*lib.CodeFragment, subCommandStr string) (bool, error) {
-		handled, reason, err := emitTypedFollow(c.inputVar, c.funcName, c.leftSchema, rightSchema, rightFragments, subCommandStr, f)
+	s := sideSource{name: "traverse", file: f.startFile, leftKeys: []string{f.src, f.dst}, rightKeys: []string{f.src}}
+	s.typed = func(c sideCtx, startSchema *lib.TypedSchema, startFragments []*lib.CodeFragment, subCommandStr string) (bool, error) {
+		handled, reason, err := emitTypedFollow(c, startSchema, startFragments, subCommandStr, f)
 		if !handled && err == nil {
 			notes = []string{fmt.Sprintf("record fallback (%s)", reason)}
 		}
 		return handled, err
 	}
-	s.record = func(c sideCtx, rightFields []string, rightType func(string) string) error {
-		cfg, err := followCheck(c.leftFields, rightFields, rightType, f)
+	s.record = func(c sideCtx, startFields []string, _ func(string) string) error {
+		edgeType := c.leftType
+		if c.leftSchema != nil {
+			edgeType = typedWireType(c.leftSchema)
+		}
+		cfg, err := followCheck(c.leftFields, edgeType, startFields, f)
 		if err != nil {
 			return lib.WriteErrorAndExit(getCommandString(), err)
 		}
-		return generateFollowStmt(c.inputVar, c.funcName, cfg, notes)
+		values, err := traverseStartValues(f.starts, f.src, edgeType(f.src))
+		if err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		lit, err := goAnyLiteral(values)
+		if err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		more := "nil"
+		if f.startFile != "" {
+			more = c.funcName + "()"
+		}
+		code := fmt.Sprintf("joined := ssql.FollowEdges(ssql.FollowStarts(%q, %s, %s), %s)(%s)", f.src, lit, more, followConfigGo(cfg), c.inputVar)
+		frag := lib.NewStmtFragment("joined", c.inputVar, code, nil, getCommandString())
+		frag.PlanNotes = notes
+		return lib.WriteCodeFragment(frag)
 	}
 	return generateSideCode(s)
-}
-
-// generateFollowStmt writes the record-mode stmt fragment.
-func generateFollowStmt(inputVar, funcName string, cfg ssql.FollowConfig, notes []string) error {
-	code := fmt.Sprintf("joined := ssql.Follow(%s(), %s)(%s)", funcName, followConfigGo(cfg), inputVar)
-	frag := lib.NewStmtFragment("joined", inputVar, code, nil, getCommandString())
-	frag.PlanNotes = notes
-	return lib.WriteCodeFragment(frag)
 }
 
 // typedWireType is a typed schema field's wire type name ("" when the
@@ -448,32 +556,78 @@ func typedWireType(s *lib.TypedSchema) func(string) string {
 	}
 }
 
-// emitTypedFollow writes the func + stmt fragments for a typed
-// traversal: typed.FollowParallel over the seed Stream (each seed's walk
-// is independent), typed.Follow over a Seq. handled is false, with the
-// reason, when the traversal has no typed form — a -path list (the typed
-// tier has no list columns, DFC145) or node fields of different types —
-// and nothing has been written: the caller traverses in record mode.
-func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.TypedSchema, rightFragments []*lib.CodeFragment, subCommandStr string, f followSpec) (handled bool, reason string, err error) {
-	cfg, err := followCheck(typedFieldNames(leftSchema), typedFieldNames(rightSchema), typedWireType(rightSchema), f)
+// emitTypedFollow writes the fragments for a typed traversal over the
+// edge Stream (DFC161 §11): typed.FollowEdgesParallel, typed.Follow over
+// a Seq, the starts typed.FollowStarts over the -start literals and the
+// start file's func. handled is false, with the reason, when the
+// traversal has no typed form — a -path list (the typed tier has no list
+// columns, DFC145), node fields of different types, or -start values
+// beside a start file with other columns (a typed row would hold zeros
+// where the record lanes leave them absent) — and nothing has been
+// written: the caller traverses in record mode.
+func emitTypedFollow(c sideCtx, startSchema *lib.TypedSchema, startFragments []*lib.CodeFragment, subCommandStr string, f followSpec) (handled bool, reason string, err error) {
+	edgeSchema := c.leftSchema
+	var startFields []string
+	if startSchema != nil {
+		startFields = typedFieldNames(startSchema)
+	}
+	edgeType := typedWireType(edgeSchema)
+	cfg, err := followCheck(typedFieldNames(edgeSchema), edgeType, startFields, f)
+	if err != nil {
+		return false, "", lib.WriteErrorAndExit(getCommandString(), err)
+	}
+	values, err := traverseStartValues(f.starts, f.src, edgeType(f.src))
 	if err != nil {
 		return false, "", lib.WriteErrorAndExit(getCommandString(), err)
 	}
 	if f.path != "" {
 		return false, "-path is a list, and the typed tier has no list columns (DFC145)", nil
 	}
-	seedF, _ := lookupSchemaField(leftSchema, cfg.NodeField)
-	srcF, _ := lookupSchemaField(rightSchema, cfg.SrcField)
-	dstF, _ := lookupSchemaField(rightSchema, cfg.DstField)
-	switch seedF.GoType {
+	srcF, _ := lookupSchemaField(edgeSchema, cfg.SrcField)
+	dstF, _ := lookupSchemaField(edgeSchema, cfg.DstField)
+	keyT := srcF.GoType
+	switch keyT {
 	case "string", "int64", "float64":
 	default:
-		return false, fmt.Sprintf("node field %s is %s; typed keys are text or numbers", cfg.NodeField, seedF.GoType), nil
+		return false, fmt.Sprintf("node field %s is %s; typed keys are text or numbers", cfg.SrcField, keyT), nil
 	}
-	if srcF.GoType != seedF.GoType || dstF.GoType != seedF.GoType {
-		return false, fmt.Sprintf("node fields of different types (%s %s, %s %s, %s %s)", cfg.NodeField, seedF.GoType, cfg.SrcField, srcF.GoType, cfg.DstField, dstF.GoType), nil
+	if dstF.GoType != keyT {
+		return false, fmt.Sprintf("node fields of different types (%s %s, %s %s)", cfg.SrcField, keyT, cfg.DstField, dstF.GoType), nil
 	}
-	keyT := seedF.GoType
+
+	// The start rows: the start file's, or one field, SRC.
+	var structDefs []string
+	start := startSchema
+	if start != nil {
+		sf, _ := lookupSchemaField(start, f.src)
+		if sf.GoType != keyT {
+			return false, fmt.Sprintf("the start column %s is %s and the edges' is %s", f.src, sf.GoType, keyT), nil
+		}
+		if len(values) > 0 && len(start.Fields) > 1 {
+			return false, fmt.Sprintf("a -start row has only %s, and a typed row would hold zeros for the start file's other columns", f.src), nil
+		}
+	} else {
+		start = &lib.TypedSchema{TypeName: edgeSchema.TypeName + "Start",
+			Fields: []lib.TypedSchemaField{{Name: f.src, GoName: lib.GoNameFromColumn(f.src), GoType: keyT}}}
+		structDefs = append(structDefs, lib.RenderStructDefWithComment(start, start.TypeName+" is a traversal's start."))
+	}
+	startSrc, _ := lookupSchemaField(start, f.src)
+	var lits []string
+	for _, v := range values {
+		var lit string
+		switch x := v.(type) {
+		case string:
+			lit = strconv.Quote(x)
+		case int64:
+			lit = strconv.FormatInt(x, 10)
+		case float64:
+			lit = strconv.FormatFloat(x, 'g', -1, 64)
+		default:
+			return false, fmt.Sprintf("a %T start has no typed literal", v), nil
+		}
+		lits = append(lits, fmt.Sprintf("{%s: %s}", startSrc.GoName, lit))
+	}
+
 	keyFn := func(typ, v, field string) string {
 		if keyT == "string" {
 			return fmt.Sprintf("func(%s %s) (string, bool) { return %s.%s, %s.%s != \"\" }", v, typ, v, field, v, field)
@@ -481,10 +635,11 @@ func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.Typ
 		return fmt.Sprintf("func(%s %s) (%s, bool) { return %s.%s, true }", v, typ, keyT, v, field)
 	}
 
-	// The running totals, one field per -sum (then -lowest-sum).
-	route := &lib.TypedSchema{TypeName: leftSchema.TypeName + "Route"}
-	acc := &lib.TypedSchema{TypeName: leftSchema.TypeName + "RouteAcc"}
-	route.Fields = append(route.Fields, leftSchema.Fields...)
+	// The route: the start's columns, DST, then the results.
+	route := &lib.TypedSchema{TypeName: edgeSchema.TypeName + "Route"}
+	acc := &lib.TypedSchema{TypeName: edgeSchema.TypeName + "RouteAcc"}
+	route.Fields = append(route.Fields, start.Fields...)
+	route.Fields = append(route.Fields, lib.TypedSchemaField{Name: f.dst, GoName: lib.GoNameFromColumn(f.dst), GoType: keyT})
 	if f.depth != "" {
 		route.Fields = append(route.Fields, lib.TypedSchemaField{Name: f.depth, GoName: lib.GoNameFromColumn(f.depth), GoType: "int64"})
 	}
@@ -492,7 +647,7 @@ func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.Typ
 	var lowestCmp, negative string
 	usesCmp := false
 	for i, w := range f.weights() {
-		ef, _ := lookupSchemaField(rightSchema, w.Field)
+		ef, _ := lookupSchemaField(edgeSchema, w.Field)
 		af := lib.TypedSchemaField{Name: w.Name, GoName: lib.GoNameFromColumn(w.Name), Scale: ef.Scale}
 		var step, cmpE, neg string
 		switch ef.GoType {
@@ -529,11 +684,11 @@ func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.Typ
 		}
 	}
 
-	seedT, edgeT, routeT, accT := leftSchema.TypeName, rightSchema.TypeName, route.TypeName, acc.TypeName
+	startT, edgeT, routeT, accT := start.TypeName, edgeSchema.TypeName, route.TypeName, acc.TypeName
 	var assigns []string
 	for _, fl := range route.Fields {
 		switch {
-		case fl.Name == cfg.NodeField:
+		case fl.Name == f.dst:
 			assigns = append(assigns, fmt.Sprintf("%s: node", fl.GoName))
 		case fl.Name == f.depth:
 			assigns = append(assigns, fmt.Sprintf("%s: depth", fl.GoName))
@@ -554,7 +709,7 @@ func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.Typ
 		lines = append(lines, fmt.Sprintf("MaxDepth: %d", cfg.MaxDepth))
 	}
 	lines = append(lines,
-		"SeedNode: "+keyFn(seedT, "s", seedF.GoName),
+		"SeedNode: "+keyFn(startT, "s", startSrc.GoName),
 		"Src: "+keyFn(edgeT, "e", srcF.GoName),
 		"Dst: "+keyFn(edgeT, "e", dstF.GoName))
 	if cfg.Both {
@@ -577,14 +732,19 @@ func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.Typ
 			fmt.Sprintf("Negative: func(e %s) bool { return %s }", edgeT, negative),
 			fmt.Sprintf("LowestField: %q", cfg.Lowest.Field))
 	}
-	lines = append(lines, fmt.Sprintf("Emit: func(s %s, node %s, depth int64, a %s) %s {\n\t\t\treturn %s{%s}\n\t\t}", seedT, keyT, accT, routeT, routeT, strings.Join(assigns, ", ")))
-	spec := fmt.Sprintf("typed.FollowSpec[%s, %s, %s, %s, %s]{\n\t\t%s,\n\t}", seedT, edgeT, routeT, accT, keyT, strings.Join(lines, ",\n\t\t"))
+	lines = append(lines, fmt.Sprintf("Emit: func(s %s, node %s, depth int64, a %s) %s {\n\t\t\treturn %s{%s}\n\t\t}", startT, keyT, accT, routeT, routeT, strings.Join(assigns, ", ")))
+	spec := fmt.Sprintf("typed.FollowSpec[%s, %s, %s, %s, %s]{\n\t\t%s,\n\t}", startT, edgeT, routeT, accT, keyT, strings.Join(lines, ",\n\t\t"))
 
-	if err := lib.WriteCodeFragment(lib.NewFuncFragment(funcName, rightFragments, subCommandStr)); err != nil {
-		return true, "", fmt.Errorf("writing func fragment: %w", err)
+	more := "nil"
+	if startFragments != nil {
+		if err := lib.WriteCodeFragment(lib.NewFuncFragment(c.funcName, startFragments, subCommandStr)); err != nil {
+			return true, "", fmt.Errorf("writing func fragment: %w", err)
+		}
+		more = c.funcName + "()"
 	}
-	parallel := fmt.Sprintf("joined := typed.FollowParallel(%s, %s(), %s)", inputVar, funcName, spec)
-	serial := fmt.Sprintf("joined := typed.Follow(%s(), %s)(%s)", funcName, spec, inputVar)
+	starts := fmt.Sprintf("typed.FollowStarts([]%s{%s}, %s)", startT, strings.Join(lits, ", "), more)
+	parallel := fmt.Sprintf("joined := typed.FollowEdgesParallel(%s, %s, %s)", c.inputVar, starts, spec)
+	serial := fmt.Sprintf("joined := typed.Follow(%s, %s)(%s)", c.inputVar, spec, starts)
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	if strings.Contains(spec, "ssql.") {
 		imports = append(imports, "github.com/rosscartlidge/ssql/v4")
@@ -592,17 +752,44 @@ func emitTypedFollow(inputVar, funcName string, leftSchema, rightSchema *lib.Typ
 	if usesCmp {
 		imports = append(imports, "cmp")
 	}
-	frag := lib.NewStmtFragment("joined", inputVar, parallel, imports, getCommandString())
-	frag.InputTypedSchema = leftSchema
+	frag := lib.NewStmtFragment("joined", c.inputVar, parallel, imports, getCommandString())
+	frag.InputTypedSchema = edgeSchema
 	frag.OutputTypedSchema = route
-	frag.StructDefs = []string{
-		lib.RenderStructDefWithComment(route, routeT+" is a route produced by traverse: the seed's columns, the node reached, the totals."),
-		lib.RenderStructDefWithComment(acc, accT+" is a route's running totals."),
-	}
+	frag.StructDefs = append(structDefs,
+		lib.RenderStructDefWithComment(route, routeT+" is a route produced by traverse: the start's columns, the node reached, the totals."),
+		lib.RenderStructDefWithComment(acc, accT+" is a route's running totals."))
 	frag.IsStream = true
 	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
 	frag.AltCodeIfSeq = serial
 	frag.AltImportsIfSeq = imports
 	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	return true, "", lib.WriteCodeFragment(frag)
+}
+
+// startValueCompleter completes a -start value: values of the field
+// -from names, sampled from the cross-pipe source the Ctrl-O binding
+// passes (AUTOCLI_CACHE_FILE). Without one it answers the value hint, so
+// Tab says "Values-Use-Ctrl-O" and Ctrl-O knows a value slot.
+type startValueCompleter struct{}
+
+func (startValueCompleter) Complete(ctx cf.CompletionContext) ([]string, error) {
+	field, _ := ctx.GlobalFlags["-from"].(string)
+	if field == "" {
+		return []string{"<VALUE>"}, nil
+	}
+	src := os.Getenv("AUTOCLI_CACHE_FILE")
+	if src == "" {
+		return []string{cf.FieldValueHint}, nil
+	}
+	values, err := completionFieldValueSource(src, field, 100, 10000)
+	if err != nil || len(values) == 0 {
+		return []string{"<VALUE>"}, nil
+	}
+	var out []string
+	for _, v := range values {
+		if strings.HasPrefix(v, ctx.Partial) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
 }

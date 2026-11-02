@@ -307,9 +307,9 @@ func optimizePipelineCmdsWith(input io.Reader, opts optimiseOptions) ([]*pipelin
 			cmd.JoinProcSubCmds = pendingFuncBodies[0]
 			pendingFuncBodies = pendingFuncBodies[1:]
 		}
-		if consumesFileProcSubs(cmd.Kind) {
+		if flags := procSubFlags(cmd.Kind); flags != nil {
 			for i := 0; i+1 < len(cmd.RawArgs); i++ {
-				if (cmd.RawArgs[i] == "-file" || cmd.RawArgs[i] == "-f") &&
+				if slices.Contains(flags, cmd.RawArgs[i]) &&
 					strings.HasPrefix(cmd.RawArgs[i+1], "/dev/fd/") && len(pendingFuncBodies) > 0 {
 					cmd.UnionProcSubs = append(cmd.UnionProcSubs, pendingFuncBodies[0])
 					pendingFuncBodies = pendingFuncBodies[1:]
@@ -412,8 +412,6 @@ func parseCmdFields(cmd *pipelineCmd) {
 		parseMergeCmd(cmd)
 	case "join":
 		parseJoinCmd(cmd)
-	case "traverse":
-		parseSideFileCmd(cmd)
 	case "sort":
 		parseSortCmd(cmd)
 	case "limit":
@@ -2728,7 +2726,7 @@ func cmdWords(cmd *pipelineCmd) []stageWord {
 		return text(parts)
 	}
 
-	if consumesFileProcSubs(cmd.Kind) && len(cmd.UnionProcSubs) > 0 {
+	if flags := procSubFlags(cmd.Kind); flags != nil && len(cmd.UnionProcSubs) > 0 {
 		// Reconstruct -file <(inner pipeline) — the fragment's command
 		// string holds the DEAD /dev/fd/N the generation run happened
 		// to get; rendering it verbatim made replays read a stale fd.
@@ -2736,9 +2734,9 @@ func cmdWords(cmd *pipelineCmd) []stageWord {
 		idx := 0
 		for i := 0; i < len(cmd.RawArgs); {
 			a := cmd.RawArgs[i]
-			if (a == "-file" || a == "-f") && i+1 < len(cmd.RawArgs) &&
+			if slices.Contains(flags, a) && i+1 < len(cmd.RawArgs) &&
 				strings.HasPrefix(cmd.RawArgs[i+1], "/dev/fd/") && idx < len(cmd.UnionProcSubs) {
-				out = append(out, stageWord{Text: "-file"}, stageWord{Inner: cmd.UnionProcSubs[idx]})
+				out = append(out, stageWord{Text: a}, stageWord{Inner: cmd.UnionProcSubs[idx]})
 				idx++
 				i += 2
 				continue
@@ -2915,8 +2913,15 @@ func ruleLimitLastToSource(cmds []*pipelineCmd) []ruleApplication {
 	return rules
 }
 
-// consumesFileProcSubs reports the commands whose side inputs are
-// `-file <(pipeline)` arguments, one func fragment each, in order.
-func consumesFileProcSubs(kind string) bool {
-	return kind == "union" || kind == "except" || kind == "intersect"
+// procSubFlags are the flags whose value may be a procsub the
+// optimiser rebuilds from its func fragment: union/except/intersect's
+// -file, traverse's -start-file (DFC161 §11). nil: none.
+func procSubFlags(kind string) []string {
+	switch kind {
+	case "union", "except", "intersect":
+		return []string{"-file", "-f"}
+	case "traverse":
+		return []string{"-start-file"}
+	}
+	return nil
 }

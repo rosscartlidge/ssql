@@ -183,12 +183,12 @@ ssql from orders.csv | ssql join <(ssql from customers.csv | ssql where -if tier
 
 A field present on both sides with different values is an error (a silent collision would lose data): rename with `-as`, suffix with `-suffix`, or drop a side's non-key fields altogether with `-exclude-left` / `-exclude-right`.
 
-**Graph traversal** is its own command, `traverse`: a join repeated until no new route is found. The seeds are the stream, the edges the file; `-from NODE SRC` names the seed's node field and the edge's source, `-to DST` the edge's target. One mode: `-fewest-hops` (default), `-lowest-sum FIELD NAME` (Dijkstra; weights ≥ 0) or `-all-paths`; results `-depth NAME`, `-sum FIELD NAME`, `-path NAME`; `-max-depth N`, `-both` (undirected).
+**Graph traversal** is its own command, `traverse`: a join repeated until no new route is found. The edges are the stream; `-from SRC` and `-to DST` name the edge's two ends, and the starts are `-start NODE` (repeatable) or `-start-file FILE` (a file or `<(…)` whose start column has the `-from` name — `rename -as` it first; its other columns carry through). Each output row is a route: SRC the start, DST the node reached, then the results. One mode: `-fewest-hops` (default), `-lowest-sum FIELD NAME` (Dijkstra; weights ≥ 0) or `-all-paths`; results `-depth NAME`, `-sum FIELD NAME`, `-path NAME`; `-max-depth N`, `-both` (undirected). A `where` before `traverse` filters edges; after it, routes.
 
 ```bash
-ssql from seeds.csv  | ssql traverse flights.csv -from city src -to dst -depth hops     # every city reachable from each seed, by fewest hops
-ssql from seeds.csv  | ssql traverse flights.csv -from city src -to dst -lowest-sum mins total -path route  # cheapest route to each city
-ssql from seeds.csv  | ssql traverse flights.csv -from city src -to dst -all-paths -max-depth 3   # every route of at most 3 hops
+ssql from flights.csv | ssql traverse -from src -to dst -start SYD -depth hops     # every city reachable from SYD, by fewest hops
+ssql from flights.csv | ssql traverse -from src -to dst -start SYD -lowest-sum mins total -path route  # cheapest route to each city
+ssql from flights.csv | ssql traverse -from src -to dst -start-file <(ssql from cities.csv | ssql rename -as city src) -all-paths -max-depth 3   # every route of at most 3 hops, from every listed city
 ```
 
 ### 5. Group-by, rollup, window
@@ -466,7 +466,7 @@ ssql from lines app.log \
 | a random sample | `ssql sample N` or `from csv FILE -sample N` |
 | join / combine / look up | `ssql join FILE -using F` or `-on L R`; keep unmatched: `-type left` |
 | as of / latest before / most recent quote | `ssql join FILE -using KEY -asof TIME` |
-| reachable / route / path / hierarchy / transitive closure / graph traversal | `ssql traverse EDGES -from NODE SRC -to DST` (fewest hops; `-lowest-sum W NAME` cheapest; `-all-paths`; `-both` undirected; `-depth`, `-sum`, `-path`) |
+| reachable / route / path / hierarchy / transitive closure / graph traversal | `… edges … | ssql traverse -from SRC -to DST -start NODE` (or `-start-file FILE`) (fewest hops; `-lowest-sum W NAME` cheapest; `-all-paths`; `-both` undirected; `-depth`, `-sum`, `-path`) |
 | not in / never / missing from | `ssql except -file FILE -using KEY` |
 | also in / at least one | `ssql intersect -file FILE -using KEY` |
 | union / append / stack | `ssql union -file FILE` |

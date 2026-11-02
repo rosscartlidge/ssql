@@ -64,7 +64,7 @@ func TestSideFile(t *testing.T) {
 		{"ssql join <(ssql from kind.csv) -on a_kind ", ""},
 		{"ssql join -on a_kind ", ""},
 		{"ssql join notafile -on x ", ""},
-		{"ssql traverse flights.csv -from city src -to ", "flights.csv"},
+		{"ssql traverse -from src -to ", ""}, // the edges are the stream (DFC161 §11)
 		{"ssql where -if a eq b ", ""},
 	}
 	for _, c := range cases {

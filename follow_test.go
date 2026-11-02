@@ -188,3 +188,33 @@ func TestFollowErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestFollowStartField: with StartField the start keeps its column and
+// NodeField, appended, holds the node reached (DFC161 §11); FollowStarts
+// walks the values, then the rows, each distinct row once.
+func TestFollowStartField(t *testing.T) {
+	var edges []Record
+	for _, e := range [][2]string{{"A", "B"}, {"B", "C"}} {
+		edges = append(edges, MakeMutableRecord().String("src", e[0]).String("dst", e[1]).Freeze())
+	}
+	more := []Record{
+		MakeMutableRecord().String("src", "B").String("name", "bee").Freeze(),
+		MakeMutableRecord().String("src", "B").String("name", "bee").Freeze(),
+	}
+	cfg := FollowConfig{NodeField: "dst", StartField: "src", SrcField: "src", DstField: "dst", DepthField: "hops"}
+	var got []string
+	for r := range Follow(slices.Values(edges), cfg)(FollowStarts("src", []any{"A", "A"}, slices.Values(more))) {
+		var cols []string
+		for k, v := range r.All() {
+			cols = append(cols, fmt.Sprintf("%s=%v", k, v))
+		}
+		got = append(got, strings.Join(cols, " "))
+	}
+	want := []string{
+		"src=A dst=A hops=0", "src=A dst=B hops=1", "src=A dst=C hops=2",
+		"src=B name=bee dst=B hops=0", "src=B name=bee dst=C hops=1",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}

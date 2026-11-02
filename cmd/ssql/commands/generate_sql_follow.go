@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -9,23 +10,23 @@ import (
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
-// translateTraverse renders `traverse` (DFC161) as a recursive
-// CTE in a derived table: the seeds numbered (__sid keeps several seeds
-// apart), the edges (with their reverses under -both, deduplicated by
-// UNION), and __walk — the anchor is every seed at depth 0, each step
-// joins the routes the last step found to the edges again, never to a
-// node already on the path. That is -all-paths, in every dialect. The
-// keyed modes keep one route per (seed, node): DuckDB's USING KEY with
-// the recurring table, and an in-round QUALIFY that carries the whole
-// tie key — without it two candidates for one node in one round leave
-// an arbitrary one (the 565-minute Darwin of DFC161 §4). Postgres and
-// DataFusion have no keyed recursion and refuse them, by name.
+// translateTraverse renders `traverse` (DFC161) as a recursive CTE in
+// a derived table. The upstream is the edges (with their reverses under
+// -both, deduplicated by UNION); __seeds is the starts — the -start
+// values and the -start-file rows, UNIONed, so each distinct row once
+// (§11) — numbered (__sid keeps several starts apart); __walk's anchor
+// is every start at depth 0, and each step joins the routes the last
+// step found to the edges again, never to a node already on the path.
+// That is -all-paths, in every dialect. The keyed modes keep one route
+// per (start, node): DuckDB's USING KEY with the recurring table, and an
+// in-round QUALIFY that carries the whole tie key — without it two
+// candidates for one node in one round leave an arbitrary one (the
+// 565-minute Darwin of DFC161 §4). Postgres and DataFusion have no keyed
+// recursion and refuse them, by name.
 func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) error {
-	filePath := args[0]
-	var node, src string
 	var f followSpec
 	lowest := false
-	for i := 1; i < len(args); i++ {
+	for i := 0; i < len(args); i++ {
 		need := func(n int) error {
 			if i+n >= len(args) {
 				return fmt.Errorf("traverse %s needs %d argument(s)", args[i], n)
@@ -33,27 +34,27 @@ func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 			return nil
 		}
 		switch args[i] {
-		case "-from":
-			if err := need(2); err != nil {
-				return err
-			}
-			node, src = args[i+1], args[i+2]
-			i += 2
-		case "-to", "-depth", "-path", "-max-depth":
+		case "-from", "-to", "-start", "-start-file", "-depth", "-path", "-max-depth":
 			if err := need(1); err != nil {
 				return err
 			}
-			switch args[i] {
+			switch v := args[i+1]; args[i] {
+			case "-from":
+				f.src = v
 			case "-to":
-				f.dst = args[i+1]
+				f.dst = v
+			case "-start":
+				f.starts = append(f.starts, v)
+			case "-start-file":
+				f.startFile = v
 			case "-depth":
-				f.depth = args[i+1]
+				f.depth = v
 			case "-path":
-				f.path = args[i+1]
+				f.path = v
 			case "-max-depth":
-				n, err := strconv.Atoi(args[i+1])
+				n, err := strconv.Atoi(v)
 				if err != nil || n < 0 {
-					return fmt.Errorf("traverse -max-depth %s: not a positive number", args[i+1])
+					return fmt.Errorf("traverse -max-depth %s: not a positive number", v)
 				}
 				f.maxDepth = n
 			}
@@ -75,18 +76,18 @@ func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 		case "-both":
 			f.both = true
 		default:
-			if strings.HasPrefix(args[i], "-") {
-				return fmt.Errorf("traverse: %s has no SQL translation", args[i])
-			}
+			return fmt.Errorf("traverse: %s has no SQL translation", args[i])
 		}
 	}
 	if lowest {
 		f.mode = ssql.FollowLowestSum
 	}
-	if node == "" || f.dst == "" {
-		return fmt.Errorf("traverse needs -from NODE SRC and -to DST")
+	if f.src == "" || f.dst == "" {
+		return fmt.Errorf("traverse needs -from SRC and -to DST")
 	}
-	f.node, f.src = node, src
+	if len(f.starts) == 0 && f.startFile == "" {
+		return fmt.Errorf("traverse needs a start: -start NODE or -start-file FILE")
+	}
 
 	// What the dialect cannot do, refused by name.
 	if sqlDialectCur != dialectDuckDB {
@@ -101,49 +102,46 @@ func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 		}
 	}
 
-	// The edges: their source text, columns and kinds.
-	var edgeSrc string
-	var edgeFields []string
-	edgeType := noType
-	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
-		side := buildJoinQuery(funcFrags[len(funcFrags)-1])
-		if side == nil {
-			return fmt.Errorf("traverse: the edge pipeline has no SQL translation")
-		}
-		edgeSrc = sqlSubquery("(" + renderSelect(side) + ")")
-		body := funcFrags[len(funcFrags)-1].FuncBody
-		edgeFields = fragmentFields(body)
-		var adv map[string]string
-		if len(body) > 0 {
-			adv = body[len(body)-1].AdvisoryTypes
-		}
-		// The side's translation just recorded the integer columns it
-		// knows (a computed column included); the fragment's advisory
-		// types cover the rest.
-		sideInts := map[string]bool{}
-		for fl, k := range sqlColumnKinds {
-			sideInts[fl] = k == "int"
-		}
-		edgeType = func(fl string) string {
-			if t := advisoryToSchemaType(adv[fl]); t != "" {
-				return t
+	// The edges are the upstream: its columns and their kinds, taken
+	// before the start file's translation records its own.
+	edgeFields := q.columns
+	edgeKinds := maps.Clone(sqlColumnKinds)
+	edgeType := func(fl string) string { return edgeKinds[fl] }
+
+	// The start file: its source text and columns.
+	var startSrc string
+	var startFields []string
+	if f.startFile != "" {
+		if strings.HasPrefix(f.startFile, "/dev/fd/") && len(funcFrags) > 0 {
+			side := buildJoinQuery(funcFrags[len(funcFrags)-1])
+			if side == nil {
+				return fmt.Errorf("traverse: the -start-file pipeline has no SQL translation")
 			}
-			if sideInts[fl] {
-				return lib.TypeInt
+			startSrc = sqlSubquery("(" + renderSelect(side) + ")")
+			// The side query's own columns keep their order; the
+			// fragments' advisory types are a sorted fallback.
+			startFields = side.columns
+			if startFields == nil {
+				startFields = fragmentFields(funcFrags[len(funcFrags)-1].FuncBody)
 			}
-			return ""
-		}
-	} else {
-		s, err := dialectSource(filePath)
-		if err != nil {
-			return err
-		}
-		edgeSrc = s
-		if _, schema, err := readAuxInput(filePath); err == nil && schema != nil {
-			edgeFields, edgeType = schema.Fields, schema.TypeOf
+			clear(sqlColumnKinds)
+			maps.Copy(sqlColumnKinds, edgeKinds)
+		} else {
+			src, err := dialectSource(f.startFile)
+			if err != nil {
+				return err
+			}
+			startSrc = src
+			if _, schema, err := readAuxInput(f.startFile); err == nil && schema != nil {
+				startFields = schema.Fields
+			}
 		}
 	}
-	if _, err := followCheck(q.columns, edgeFields, edgeType, f); err != nil {
+	if _, err := followCheck(edgeFields, edgeType, startFields, f); err != nil {
+		return err
+	}
+	values, err := traverseStartValues(f.starts, f.src, edgeType(f.src))
+	if err != nil {
 		return err
 	}
 	totals := f.weights()
@@ -164,24 +162,74 @@ func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 		return fmt.Errorf("traverse -both: the edges' columns are unknown, so their reverses cannot be written — read the edges from a CSV file, or use generate go")
 	}
 
+	// The starts: each -start value a row of SRC (the start file's other
+	// columns NULL), then the file's rows; UNION keeps each distinct row
+	// once, as FollowStarts does.
+	var parts []string
+	for _, v := range values {
+		cols := []string{sqlTypedLiteral(v) + " AS " + quoteIdent(f.src)}
+		for _, c := range startFields {
+			if c != f.src {
+				cols = append(cols, "NULL AS "+quoteIdent(c))
+			}
+		}
+		parts = append(parts, "SELECT "+strings.Join(cols, ", "))
+	}
+	union := "\n  UNION\n  "
+	if startSrc != "" {
+		sel := "*"
+		if startFields != nil {
+			qs := make([]string, len(startFields))
+			for i, c := range startFields {
+				qs[i] = quoteIdent(c)
+			}
+			sel = strings.Join(qs, ", ")
+		} else if len(values) > 0 {
+			if sqlDialectCur != dialectDuckDB {
+				return dialectRefuse("traverse -start with a -start-file", "the start file's columns are unknown, so the -start rows cannot be padded to them — read the starts from a CSV file")
+			}
+			union = "\n  UNION BY NAME\n  "
+		}
+		parts = append(parts, "SELECT DISTINCT "+sel+" FROM "+startSrc)
+	}
+	seeds := strings.Join(parts, union)
+	seedCols := startFields
+	if f.startFile == "" {
+		seedCols = []string{f.src}
+	}
+	if seedCols == nil && sqlDialectCur != dialectDuckDB {
+		return dialectRefuse("traverse", "the start file's columns are unknown — name them with `include`, or use a CSV/TSV list")
+	}
+
 	if q.hasClauses() {
 		wrapAsSubquery(q)
 	}
 	if q.fromClause == "" {
-		return fmt.Errorf("traverse: no seed source to translate")
-	}
-	seedCols := q.columns
-	if seedCols == nil && sqlDialectCur != dialectDuckDB {
-		return dialectRefuse("traverse", "it rewrites the seed's node column and the translator does not know the seed's columns — name them with `include`, or use a CSV/TSV source")
+		return fmt.Errorf("traverse: no edge source to translate")
 	}
 	var outCols []string
 	if seedCols != nil {
-		outCols = append(append(outCols, seedCols...), f.accNames()...)
+		outCols = append(append(append(outCols, seedCols...), f.dst), f.accNames()...)
 	}
-	wrapAsSQLOnly(q, "traverse", func(seeds string) string {
-		return sqlSubquery(followCTE(seeds, edgeSrc, edgeFields, node, src, f, totals, totalTypes, seedCols))
+	wrapAsSQLOnly(q, "traverse", func(edges string) string {
+		return sqlSubquery(followCTE(seeds, edges, edgeFields, f, totals, totalTypes, seedCols))
 	})
 	sqlOnlyReset(q, outCols)
+	// The output's kinds: SRC and DST keep the edges'; the edges' other
+	// columns are gone and a start file's are unknown.
+	for _, c := range edgeFields {
+		if c != f.src && c != f.dst {
+			delete(sqlColumnKinds, c)
+		}
+	}
+	for _, c := range startFields {
+		if c != f.src {
+			delete(sqlColumnKinds, c)
+		}
+	}
+	if k := edgeKinds[f.src]; k != "" {
+		sqlColumnKinds[f.dst] = k
+	}
 	if f.depth != "" {
 		sqlColumnKinds[f.depth] = "int"
 	}
@@ -191,10 +239,11 @@ func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 	return nil
 }
 
-// followCTE is the recursive CTE text (translateFollowJoin).
-func followCTE(seeds, edgeSrc string, edgeFields []string, node, src string, f followSpec, totals []ssql.FollowSum, totalTypes []string, seedCols []string) string {
+// followCTE is the recursive CTE text (translateTraverse): seeds is the
+// starts' SELECT, edgeSrc the upstream's FROM text.
+func followCTE(seeds, edgeSrc string, edgeFields []string, f followSpec, totals []ssql.FollowSum, totalTypes []string, seedCols []string) string {
 	qi := quoteIdent
-	dst := f.dst
+	src, dst := f.src, f.dst
 	edges := "SELECT * FROM " + edgeSrc
 	if f.both {
 		swapped := make([]string, len(edgeFields))
@@ -216,17 +265,17 @@ func followCTE(seeds, edgeSrc string, edgeFields []string, node, src string, f f
 	var single, appendTo, onPath string
 	switch sqlDialectCur {
 	case dialectPostgres:
-		single, appendTo, onPath = "ARRAY["+qi(node)+"]", "w.__path || "+ed, ed+" = ANY(w.__path)"
+		single, appendTo, onPath = "ARRAY["+qi(src)+"]", "w.__path || "+ed, ed+" = ANY(w.__path)"
 	case dialectDataFusion:
-		single, appendTo, onPath = "make_array("+qi(node)+")", "array_append(w.__path, "+ed+")", "array_has(w.__path, "+ed+")"
+		single, appendTo, onPath = "make_array("+qi(src)+")", "array_append(w.__path, "+ed+")", "array_has(w.__path, "+ed+")"
 	default:
-		single, appendTo, onPath = "["+qi(node)+"]", "list_append(w.__path, "+ed+")", "list_contains(w.__path, "+ed+")"
+		single, appendTo, onPath = "["+qi(src)+"]", "list_append(w.__path, "+ed+")", "list_contains(w.__path, "+ed+")"
 	}
 	keyed := f.mode != ssql.FollowAllPaths
 
 	// The anchor and the step, column by column.
 	walkCols := []string{"__sid", "__node", "__depth", "__path"}
-	anchor := []string{"__sid AS __sid", qi(node) + " AS __node", "0 AS __depth", single + " AS __path"}
+	anchor := []string{"__sid AS __sid", qi(src) + " AS __node", "0 AS __depth", single + " AS __path"}
 	step := []string{"w.__sid", ed, "w.__depth + 1", appendTo}
 	var newTotals []string
 	for i, w := range totals {
@@ -248,7 +297,19 @@ func followCTE(seeds, edgeSrc string, edgeFields []string, node, src string, f f
 
 	var b strings.Builder
 	b.WriteString("(WITH RECURSIVE\n")
-	fmt.Fprintf(&b, "__seeds AS (SELECT *, row_number() OVER () AS __sid FROM %s),\n", seeds)
+	// The starts are numbered by their own columns: they are distinct,
+	// so that order is total, and __seeds is read twice (the anchor and
+	// the final join) — DataFusion evaluates a CTE per reading, and an
+	// OVER () numbering of a UNION differed between the two (DFC161 §11).
+	over := ""
+	if seedCols != nil {
+		cols := make([]string, len(seedCols))
+		for i, c := range seedCols {
+			cols[i] = qi(c)
+		}
+		over = "ORDER BY " + strings.Join(cols, ", ")
+	}
+	fmt.Fprintf(&b, "__seeds AS (SELECT *, row_number() OVER (%s) AS __sid FROM (\n  %s\n)),\n", over, seeds)
 	fmt.Fprintf(&b, "__edges AS (%s),\n", edges)
 	usingKey := ""
 	if keyed {
@@ -280,19 +341,16 @@ func followCTE(seeds, edgeSrc string, edgeFields []string, node, src string, f f
 	}
 	b.WriteString(")\n")
 
-	// The seed's columns with the node replaced, then the results.
+	// The start's columns, the node reached as DST, then the results.
 	var sel []string
 	if seedCols != nil {
 		for _, c := range seedCols {
-			if c == node {
-				sel = append(sel, "w.__node AS "+qi(c))
-			} else {
-				sel = append(sel, "s."+qi(c))
-			}
+			sel = append(sel, "s."+qi(c))
 		}
 	} else {
-		sel = append(sel, "s.* EXCLUDE (__sid) REPLACE (w.__node AS "+qi(node)+")")
+		sel = append(sel, "s.* EXCLUDE (__sid)")
 	}
+	sel = append(sel, "w.__node AS "+qi(dst))
 	if f.depth != "" {
 		sel = append(sel, "w.__depth AS "+qi(f.depth))
 	}

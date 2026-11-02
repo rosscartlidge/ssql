@@ -108,6 +108,10 @@ printf '%%s' "$READLINE_LINE"
 	// 2026-11-02: `… | ssql join kind.csv -on a_kind kind -as kind_name
 	// a_kind_name … | ssql where -if a_kind_name eq ^O` listed field names,
 	// because relationship.csv, the last file, has no such column).
+	edges := filepath.Join(dir, "edges.csv")
+	if err := os.WriteFile(edges, []byte("src,dst\nAAA,B\nAAA,C\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	kinds := filepath.Join(dir, "kinds.csv")
 	if err := os.WriteFile(kinds, []byte("k,kname\nx,Xray\ny,Yankee\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -120,6 +124,10 @@ printf '%%s' "$READLINE_LINE"
 		// the upstream narrows the values: one name left, not three
 		struct{ in, want string }{fbase + " | ssql where -if school eq SSBHS | ssql where -if name eq ",
 			fbase + " | ssql where -if school eq SSBHS | ssql where -if name eq 'Ross Cartlidge' "},
+		// traverse -start is a value of the field -from names, read from
+		// the edges upstream (DFC161 §11): AAA is the one src value.
+		struct{ in, want string }{"ssql from csv " + edges + " | ssql traverse -from src -to dst -start ",
+			"ssql from csv " + edges + " | ssql traverse -from src -to dst -start AAA "},
 		// No values (here the source is missing) means no suggestions,
 		// never the field names: at a value slot a name is a wrong answer
 		// that looks like the bug above (Ross, 2026-11-02, run from the

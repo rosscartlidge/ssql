@@ -482,6 +482,8 @@ type FollowSpec[S any, E comparable, O, A any, K cmp.Ordered] struct {
 }
 func Follow[S any, E comparable, O, A any, K cmp.Ordered](edges iter.Seq[E], fs FollowSpec[S, E, O, A, K]) func(iter.Seq[S]) iter.Seq[O]
 func FollowParallel[S any, E comparable, O, A any, K cmp.Ordered](seeds Stream[S], edges iter.Seq[E], fs FollowSpec[S, E, O, A, K]) Stream[O]
+func FollowEdgesParallel[S any, E comparable, O, A any, K cmp.Ordered](edges Stream[E], seeds iter.Seq[S], fs FollowSpec[S, E, O, A, K]) Stream[O]
+func FollowStarts[S comparable](values []S, more iter.Seq[S]) iter.Seq[S]
 ```
 
 Walks the graph of `edges` from every seed: one output row per route the
@@ -490,7 +492,11 @@ hops (BFS), once by the lowest total (Dijkstra), or every simple path. Ties
 are broken by value (hops, path, totals), never by input order. The walk is
 the same code as `ssql.Follow`'s, so the typed and record lanes agree row for
 row. `FollowParallel` builds the adjacency once and walks each seed shard
-independently. Behind `traverse` ([DFC161](research/dfc161_graph_traversal_join_follow.md)).
+independently. `FollowEdgesParallel` takes the edges as the Stream — its
+shards read concurrently, in order, into one adjacency — and walks the
+seeds in parallel shards, an ordered Stream in seed order; `FollowStarts`
+is the seed list (values, then a stream's rows, each distinct one once).
+Behind `traverse` ([DFC161](research/dfc161_graph_traversal_join_follow.md)).
 
 ## JSONL and JSON array I/O
 

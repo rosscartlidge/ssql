@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`traverse` takes the edges as its stream, and the starts as flags** ([DFC161](doc/research/dfc161_graph_traversal_join_follow.md) §11). `… seeds … | ssql traverse EDGES.csv -from NODE SRC -to DST` (v4.136) is now `… edges … | ssql traverse -from SRC -to DST -start NODE`, with `-start` repeatable and `-start-file FILE` (CSV/TSV/JSON, a `_schema` JSONL, or `<(…)`) for a list. The edge list is usually the big table and the starts a handful of values, so the edges belong on stdin, and filtering them is a `where` before `traverse` instead of a procsub. A start file's start column must have the `-from` field's name (`rename -as` it first), and its other columns come through on every route. Each output row is now SRC (the start), DST (the node reached), then the results, so the start is no longer overwritten. Each distinct start is walked once. A `-start` value is converted to the type of the edges' SRC column, and a value that does not convert is an error. The old grammar is now an error. Library additions: `ssql.FollowConfig.StartField`, `ssql.FollowEdges`, `ssql.FollowStarts`, `typed.FollowEdgesParallel`, `typed.FollowStarts`. The playground's `cities.csv` gained `name` and `state` columns, and the codelab has its own copy.
+
 ## [4.136.1] - 2026-11-02
 
 ### Fixed

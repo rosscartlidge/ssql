@@ -137,34 +137,26 @@ func TestCompleteSource(t *testing.T) {
 			"ssql from kind.csv",
 		},
 		{
-			"traverse -from 1st arg (the seed's node) completes upstream",
-			"ssql from from.csv | ssql traverse flights.csv -from ",
-			"ssql from from.csv",
-		},
-		{
-			"traverse -from 2nd arg (the edge's source) is a side field",
-			"ssql from from.csv | ssql traverse flights.csv -from city ",
+			// traverse's edges are the stream (DFC161 §11): every field
+			// flag completes from the upstream.
+			"traverse -from completes upstream",
+			"ssql from flights.csv | ssql traverse -from ",
 			"ssql from flights.csv",
 		},
 		{
-			"traverse -to names a side field (direct file)",
-			"ssql from from.csv | ssql traverse flights.csv -from city src -to ",
+			"traverse -to completes upstream",
+			"ssql from flights.csv | ssql traverse -from src -to ",
 			"ssql from flights.csv",
 		},
 		{
-			"traverse -lowest-sum 1st arg is a side field",
-			"ssql from from.csv | ssql traverse flights.csv -from city src -to dst -lowest-sum ",
+			"traverse -lowest-sum 1st arg completes upstream",
+			"ssql from flights.csv | ssql traverse -from src -to dst -start SYD -lowest-sum ",
 			"ssql from flights.csv",
 		},
 		{
-			"traverse -lowest-sum 2nd arg (result name) is NOT a side field",
-			"ssql from from.csv | ssql traverse flights.csv -from city src -to dst -lowest-sum mins ",
-			"ssql from from.csv",
-		},
-		{
-			"traverse -sum 1st arg is a side field (procsub)",
-			"ssql from from.csv | ssql traverse <(ssql from flights.csv) -from city src -to dst -sum ",
-			"ssql from flights.csv",
+			"traverse -start-file procsub: inside it, its own upstream",
+			"ssql from flights.csv | ssql traverse -from src -to dst -start-file <(ssql from cities.csv | ssql rename ",
+			"ssql from cities.csv",
 		},
 		{
 			"join -asof-on 2nd arg is a right field",

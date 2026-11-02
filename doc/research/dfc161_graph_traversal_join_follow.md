@@ -2,15 +2,16 @@
 
 Reference: DFC161
 Created: 2026-10-31
-Last modified: 2026-11-02
+Last modified: 2026-11-03
 
 [Back to Index](./README.md)
 
 Status: **built 2026-10-31 (§9) as `join -follow`; design questions
-answered the same day (§7); moved to its own command, `traverse … -from
-NODE SRC -to DST`, on 2026-11-02 (§10).** The grammar in §2–§3 and the
-examples below are the `join -follow` form; read §10 for the command as
-it is. Ross, after DFC160:
+answered the same day (§7); moved to its own command on 2026-11-02
+(§10); the edges became the stream and the starts flags on 2026-11-03
+(§11): `… edges … | traverse -from SRC -to DST -start NODE`.** The
+grammar in §2–§3 and the examples below are the `join -follow` form,
+§10 the first `traverse`; read §11 for the command as it is. Ross, after DFC160:
 "I actually think our biggest gap is not being able to do recursive joins
 so we can do graph traversal … we wouldn't need recursion — I think we
 could do it with a loop inside join. What is your feeling on the best way
@@ -432,6 +433,96 @@ What the move touched, and found:
 - **SQL.** `translateTraverse` is the CTE translator reading `-from`
   and `-to`; `traverse` keeps the columns its translation set (seed
   columns plus results) where `join` reset them to unknown.
+
+## 11. Revision 2026-11-03: the edges are the stream
+
+Ross, the day after §10: "I have a feeling that the set of links should
+be the stdin to traverse and the srcs to follow should be in the args".
+Yes. §10 kept option A's model (seeds on stdin, edges in a FILE), and
+§2's objections to option B were the reason. Looked at again, they were
+the wrong way round:
+
+- **The edge list is the big table; the starts are a handful of
+  values.** Ross's link table is 14.6 M rows. Under §10 it had to be the
+  FILE, and filtering it meant a procsub. Stdin carries the big thing
+  everywhere else in ssql.
+- **The graph is the data, the start a parameter**, as `sort`'s keys or
+  `top`'s N are. `from links.csv | where … | traverse` reads in order.
+- **§2's objections no longer hold.** "Seeds computed by a pipeline need
+  a file": `-start-file` takes a procsub, the mirror of §10's edges
+  procsub, for the rarer case. "A second join implementation": the walk
+  already hashed the edges and was handed the seeds; only which input
+  is stdin changes.
+
+### Grammar
+
+```
+… edges … | ssql traverse -from SRC -to DST [-start NODE]… [-start-file FILE]
+                          [-fewest-hops | -lowest-sum FIELD NAME | -all-paths]
+                          [-depth NAME] [-sum FIELD NAME]… [-path NAME] [-max-depth N] [-both]
+```
+
+- `-from SRC` and `-to DST` are both edge fields now, one argument each
+  (the two-argument `-from NODE SRC` is gone), and complete from the
+  upstream like any field flag.
+- `-start NODE` (repeatable) is a starting node. Its text is converted
+  to the type of the edges' SRC column, as `cast` converts (a text node
+  stays text; an int column needs an int); when that type is unknown it
+  is inferred as a CSV field is. A value that cannot be converted is an
+  error, not a start that matches nothing.
+- `-start-file FILE` (once; combine lists with `union` in a procsub) is
+  a list of starts: CSV/TSV/JSON by
+  extension, a `_schema` JSONL, or a procsub, as `join`'s file. **Its
+  start column must be named SRC**, the column `-from` names: one
+  name for one field, no second argument. A list whose column is called
+  something else is renamed in the procsub
+  (`-start-file <(ssql from cities.csv | ssql rename -as city src)`),
+  which is pipeline text and says what happens. A file without SRC is an
+  error listing its fields.
+- At least one start is required. "From every node" (all-pairs
+  reachability) on a 14.6 M-row edge list is not a default; it can be an
+  explicit flag later if it earns one.
+- The starts are the `-start` values in flag order, then each file's
+  rows in order, **each distinct row walked once** (a `-start` value is
+  the row `{SRC: value}`; file rows are compared whole).
+
+### Output
+
+One row per route, in start order: **the start row's columns (SRC
+holding the start), then DST holding the node reached, then the
+results** (depth, the `-sum`s, the `-lowest-sum` total, the path; §3
+item 10). A `-start` row has only SRC; a start file's other columns come
+through, so a city's name rides along without a join back. The output
+reads as the edge list's own shape: `traverse` turns edges (SRC → DST)
+into reachability (SRC ⇝ DST, with hops and totals), and the depth-0 row
+is SRC ⇝ SRC.
+
+A start file column named DST, or one with a result's name, is refused,
+as `join` refuses a collision. §3 item 6 (the seed's node is
+overwritten) no longer applies: the start stays in SRC.
+
+### What changed in the engine
+
+- **`ssql.FollowConfig.StartField`** (new, additive): the seed column a
+  walk starts from, when it is not NodeField. The CLI sets NodeField to
+  DST and StartField to SRC, so the start stays and the reached node is
+  appended. **`ssql.FollowStarts`** builds the start rows (the values,
+  then a file's rows, distinct) and **`ssql.FollowEdges(seeds, cfg)`**
+  is the walk as a filter over the edges, for exec and record codegen
+  alike: a record stage must keep the shape `out := FILTER(input)`,
+  because the assembler finds the input after the last `)(`.
+- **`typed.FollowEdgesParallel(edges Stream, seeds, spec)`** (new): the
+  edge stream's shards are materialised concurrently, in shard order,
+  into one adjacency, and the starts walk it in parallel shards, output
+  in start order. The serial form is the existing `typed.Follow(edges,
+  spec)(seeds)`; **`typed.FollowStarts`** is the typed start list.
+  `typed.FollowParallel` (a seed Stream) stays exported and unused.
+- **`traverse` is a barrier over its stdin**: every edge is read before
+  the first route is emitted. It always was over the edges; they are
+  just the stream now.
+- **SQL**: the upstream is the `__edges` CTE and `__seeds` is the
+  `-start` values (`SELECT v AS src`, typed by the column's kind) and the
+  start file, `UNION`ed, which also makes them distinct.
 
 ## 8. Fixture
 

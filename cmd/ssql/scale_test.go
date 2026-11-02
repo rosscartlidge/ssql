@@ -224,12 +224,11 @@ func TestScaleBudgets(t *testing.T) {
 		// asserted too: a walk that stops early is fast.
 		writeFollowGraphs(t, dir)
 		repo, _ := filepath.Abs("../..")
-		seed := "printf 'node\\n0\\n' | " + bin + " from csv - | "
-		budget(t, dir, seed+bin+" traverse follow_graph.csv -from node src -to dst -depth d | "+bin+" count | grep -qx 200000", 30*time.Second)
-		budget(t, dir, seed+bin+" traverse follow_graph.csv -from node src -to dst -lowest-sum w t | "+bin+" count | grep -qx 200000", 30*time.Second)
-		budget(t, dir, seed+bin+" traverse follow_dag.csv -from node src -to dst -all-paths -depth d | "+bin+" count | grep -qx 797161", 30*time.Second)
-		budget(t, dir, "printf 'node\\n0\\n' > follow_seed.csv && SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
-			bin+" from csv follow_seed.csv | "+bin+" traverse follow_graph.csv -from node src -to dst -lowest-sum w t | "+bin+" count' | grep -qx 200000", 90*time.Second)
+		budget(t, dir, bin+" from csv follow_graph.csv | "+bin+" traverse -from src -to dst -start 0 -depth d | "+bin+" count | grep -qx 200000", 30*time.Second)
+		budget(t, dir, bin+" from csv follow_graph.csv | "+bin+" traverse -from src -to dst -start 0 -lowest-sum w t | "+bin+" count | grep -qx 200000", 30*time.Second)
+		budget(t, dir, bin+" from csv follow_dag.csv | "+bin+" traverse -from src -to dst -start 0 -all-paths -depth d | "+bin+" count | grep -qx 797161", 30*time.Second)
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from csv follow_graph.csv | "+bin+" traverse -from src -to dst -start 0 -lowest-sum w t | "+bin+" count' | grep -qx 200000", 90*time.Second)
 	})
 	t.Run("lookup-join", func(t *testing.T) {
 		// A lookup join (two -on clauses into one side, -as) over 3 M rows,

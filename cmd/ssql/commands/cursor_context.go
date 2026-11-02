@@ -250,8 +250,7 @@ func tokenizeStageOpen(s string) ([]string, bool) {
 
 // rightFieldCompleter marks an argument that names a field of a
 // command's SIDE source, its FILE or <(…)> — join's -on 2nd, -as 1st and
-// -asof-on 2nd; traverse's -from 2nd, -to, and the field of -lowest-sum
-// and -sum. Tab can't see that source, so it hints Ctrl-O; Ctrl-O finds
+// -asof-on 2nd. Tab can't see that source, so it hints Ctrl-O; Ctrl-O finds
 // the slot by this declaration (rightFieldSlot), so a new side-field
 // flag, or a new two-input command, needs no second list to drift from.
 type rightFieldCompleter struct{}
@@ -364,7 +363,7 @@ func ValueSample(before string, tree *cf.Command) string {
 // CompleteSource returns the shell command whose `SSQL_MODE=schema` output
 // should drive field-NAME completion at the cursor, or "" if none applies:
 //   - cursor inside a process substitution → that procsub's internal upstream;
-//   - cursor at a side-field slot (join, traverse) → the side source (procsub or file);
+//   - cursor at a side-field slot (join) → the side source (procsub or file);
 //   - otherwise → the upstream pipeline feeding the current stage.
 func CompleteSource(before string, tree *cf.Command) string {
 	if p, ok := enclosingProcsub(before); ok {
@@ -400,7 +399,7 @@ func CompleteSource(before string, tree *cf.Command) string {
 }
 
 // sideFile returns a two-input stage's direct-file side argument — the
-// FILE positional its builder declares (join, traverse), bound by the
+// FILE positional its builder declares (join), bound by the
 // completion engine's parse (DFC116 F4) — or "" when the side is a
 // procsub or absent.
 func sideFile(stage string, tree *cf.Command) string {

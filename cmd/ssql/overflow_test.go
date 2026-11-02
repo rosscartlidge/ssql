@@ -139,8 +139,8 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		// a route's total along traverse (DFC161): two hops weighing
 		// 2^63 − 2 and 2^63 − 1 — an int128, not an overflow; the keyed
 		// default mode runs on DuckDB, -all-paths on DataFusion and rust
-		"traverse_sum_widens":     {bin + " from range 1 -start 0 | " + bin + " traverse <(" + bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr src 'n - 9223372036854775806' -set-expr dst 'n - 9223372036854775805' -set-expr w n | " + bin + " exclude n) -from n src -to dst -sum w t | " + bin + " where -if n eq 2", "18446744073709551613"},
-		"traverse_all_sum_widens": {bin + " from range 1 -start 0 | " + bin + " traverse <(" + bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr src 'n - 9223372036854775806' -set-expr dst 'n - 9223372036854775805' -set-expr w n | " + bin + " exclude n) -from n src -to dst -all-paths -sum w t | " + bin + " where -if n eq 2", "18446744073709551613"},
+		"traverse_sum_widens":     {bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr src 'n - 9223372036854775806' -set-expr dst 'n - 9223372036854775805' -set-expr w n | " + bin + " exclude n | " + bin + " traverse -from src -to dst -start 0 -sum w t | " + bin + " where -if dst eq 2", "18446744073709551613"},
+		"traverse_all_sum_widens": {bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr src 'n - 9223372036854775806' -set-expr dst 'n - 9223372036854775805' -set-expr w n | " + bin + " exclude n | " + bin + " traverse -from src -to dst -start 0 -all-paths -sum w t | " + bin + " where -if dst eq 2", "18446744073709551613"},
 		// E: decimal sums past 2^53 cents, exact at the scale
 		"dec_group_by_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " group-by -sum n t", "27021597764222982.00"},
 		"dec_expr_sum":     {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "27021597764222982.00"},

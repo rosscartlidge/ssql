@@ -52,6 +52,10 @@ func (fs FollowSpec[S, E, O, A, K]) spec(edges iter.Seq[E]) *follow.Spec[K, K, E
 	for e := range edges {
 		rows = append(rows, e)
 	}
+	return fs.specRows(rows)
+}
+
+func (fs FollowSpec[S, E, O, A, K]) specRows(rows []E) *follow.Spec[K, K, E, A] {
 	if fs.Both {
 		rows = follow.Undirected(rows, fs.Swap, func(e E) E { return e })
 	}
@@ -137,4 +141,57 @@ func FollowParallel[S any, E comparable, O, A any, K cmp.Ordered](seeds Stream[S
 		}
 	}
 	return Stream[O]{shards: out, n: seeds.n, ordered: seeds.ordered}
+}
+
+// FollowEdgesParallel is the traversal with the edges as the Stream
+// (DFC161 §11): the edge shards are read concurrently, in shard order,
+// into one adjacency, and the seeds walk it in parallel shards, so the
+// output is in seed order (an ordered Stream).
+func FollowEdgesParallel[S any, E comparable, O, A any, K cmp.Ordered](edges Stream[E], seeds iter.Seq[S], fs FollowSpec[S, E, O, A, K]) Stream[O] {
+	sp := fs.specRows(materialise(edges))
+	var starts []S
+	for s := range seeds {
+		starts = append(starts, s)
+	}
+	in := ParallelFromSlice(starts, edges.n)
+	out := make([]iter.Seq[O], len(in.shards))
+	for i, shard := range in.shards {
+		shard := shard
+		out[i] = func(yield func(O) bool) {
+			for s := range shard {
+				if !fs.walk(sp, s, yield) {
+					return
+				}
+			}
+		}
+	}
+	return Stream[O]{shards: out, n: len(out), ordered: true}
+}
+
+// FollowStarts is a traversal's start rows (DFC161 §11): values, then
+// the rows of more (nil for none), each distinct row once, in order.
+func FollowStarts[S comparable](values []S, more iter.Seq[S]) iter.Seq[S] {
+	return func(yield func(S) bool) {
+		seen := make(map[S]bool)
+		emit := func(s S) bool {
+			if seen[s] {
+				return true
+			}
+			seen[s] = true
+			return yield(s)
+		}
+		for _, v := range values {
+			if !emit(v) {
+				return
+			}
+		}
+		if more == nil {
+			return
+		}
+		for s := range more {
+			if !emit(s) {
+				return
+			}
+		}
+	}
 }

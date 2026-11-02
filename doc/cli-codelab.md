@@ -626,35 +626,46 @@ and as SQL.
 Some questions are a join repeated an unknown number of times: every
 city you can reach from Sydney, however many flights it takes; everyone
 under a manager, at any depth; every part inside an assembly.
-`flights.csv` is an edge list — `src`, `dst`, `mins`. `traverse` starts
-from each row of the stream (a seed), joins it to the edges, and joins
-the cities it found again, round after round, until a round finds
-nothing new. `-from city src` names the seed's node field and the
-edge's source; `-to dst` the edge's target. The seed is a one-line CSV
-on stdin:
+`flights.csv` is an edge list — `src`, `dst`, `mins` — and it is the
+stream. `traverse` starts at each `-start` node, joins it to the edges,
+and joins the cities it found again, round after round, until a round
+finds nothing new. `-from src` and `-to dst` name the edge's two ends:
 
 ```bash
-printf 'city\nSYD\n' | ssql from csv - | ssql traverse flights.csv -from city src -to dst -depth hops -path route | ssql to table
+ssql from flights.csv | ssql traverse -from src -to dst -start SYD -depth hops -path route | ssql to table
 ```
 
-Each city appears once, reached by the fewest hops (the default mode,
-`-fewest-hops`); the seed is the row at depth 0, and its other columns
-come along. Perth is two hops away through Brisbane — but three hops
-through Melbourne and Adelaide is quicker. `-lowest-sum FIELD NAME`
-keeps each city's cheapest route instead:
+Each row is a route: `src` the start, `dst` the city reached. The start
+itself is the row at depth 0. Each city appears once, reached by the
+fewest hops (the default mode, `-fewest-hops`). Perth is two hops away
+through Brisbane — but three hops through Melbourne and Adelaide is
+quicker. `-lowest-sum FIELD NAME` keeps each city's cheapest route
+instead, and `-start` can be given more than once:
 
 ```bash
-printf 'city\nSYD\n' | ssql from csv - | ssql traverse flights.csv -from city src -to dst -lowest-sum mins total -path route | ssql to table
+ssql from flights.csv | ssql traverse -from src -to dst -start SYD -start PER -lowest-sum mins total -path route | ssql to table
 ```
 
-`-all-paths` keeps every route that never visits a city twice — Darwin
-three times here, which on a dense graph is a very large number of rows,
-so the cheap modes are the default. `-sum FIELD NAME` totals any edge
-field along the route, `-max-depth N` stops after N hops, and `-both`
-treats every edge as usable either way:
+`-all-paths` keeps every route that never visits a city twice, which on
+a dense graph is a very large number of rows, so the cheap modes are the
+default. `-sum FIELD NAME` totals any edge field along the route,
+`-max-depth N` stops after N hops, and `-both` treats every edge as
+usable either way. Because the edges are the stream, a `where` before
+`traverse` changes the graph: with no leg over five hours, the 330-minute
+Brisbane–Perth flight is gone, and Darwin has two routes instead of
+three:
 
 ```bash
-printf 'city\nSYD\n' | ssql from csv - | ssql traverse flights.csv -from city src -to dst -all-paths -sum mins total -depth hops | ssql where -if city eq DRW | ssql to table
+ssql from flights.csv | ssql where -if mins lt 300 | ssql traverse -from src -to dst -start SYD -all-paths -sum mins total -depth hops | ssql where -if dst eq DRW | ssql to table
+```
+
+When the starts are a list, `-start-file` reads them from a file or a
+pipeline. Its start column must have the `-from` field's name, so
+`rename` it first; its other columns come through on every route.
+Every city reachable in one flight from Queensland:
+
+```bash
+ssql from flights.csv | ssql traverse -from src -to dst -start-file <(ssql from cities.csv | ssql where -if state eq QLD | ssql rename -as city src) -max-depth 1 | ssql to table
 ```
 
 A tie is broken by value — fewer hops, then the route compared city by
