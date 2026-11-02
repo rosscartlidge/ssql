@@ -2,7 +2,7 @@
 
 Reference: DFC157
 Created: 2026-10-27
-Last modified: 2026-10-31
+Last modified: 2026-11-02
 Revisits: [DFC132](./dfc132_rust_target_datafusion.md) §4
 
 [Back to Index](./README.md)
@@ -254,6 +254,14 @@ What the table says:
    frame carried in one pass, the whole frame once; 50 k rows 53 s →
    0.15 s in exec, 9 s → 0.02 s typed; the 14.6 M-row pipeline 35 s
    typed, 219 s exec); the scale gate has its first window cases.
+
+**Later (2026-11-02, DFC158 §3.15):** an eighth row, a two-clause lookup
+join over the CSV rows, is the first DataFusion does not win: 2.45 s
+against typed Go's 1.03 s and DuckDB's 1.04 s, with 3.8 GB peak.
+DataFusion's plan builds every hash join on the 14.6 M-row side and
+hash-partitions those rows once per join, because a CSV gives the
+planner no row count. Since the rust lane lowers onto the same engine,
+the fix belongs in the lowering (DFC158 §4 item 8).
 
 Method: `scratchpad/bench/run.sh` and `run2.sh` (this session), three
 runs each, best wall; DataFusion's "plan" time (SQL → logical plan) was

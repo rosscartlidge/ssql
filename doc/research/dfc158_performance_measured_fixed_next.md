@@ -2,7 +2,7 @@
 
 Reference: DFC158
 Created: 2026-10-28
-Last modified: 2026-10-29
+Last modified: 2026-11-02
 
 [Back to Index](./README.md)
 
@@ -747,6 +747,63 @@ refusals — it failed with the order check removed),
 different orders take `WindowParallel`), `window_presorted_bounded`
 in the equivalence suite (exec streams, typed presorted, DuckDB sorts).
 
+### 3.15 A lookup join in every lane, and why exec beats record (2026-11-02)
+
+Ross brought a pipeline that typed mode refused ("only single-clause
+joins without -as renames"): a two-clause lookup into one kind table,
+a second join, a projection and a filter, over the 1.2 GB CSV:
+
+```bash
+ssql from csv shuffled.csv | ssql join kind.csv -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name | ssql join relationship.csv -using relationship | ssql include a_name a_kind_name relationship_name z_kind_name z_name | ssql where -if a_kind_name eq EK_PORT -if relationship_name eq RK_TRAVERSES | ssql to csv
+```
+
+The same day the lookup got an inner form (`ssql.InnerLookupJoin`; it
+had ignored `-type`), a typed and parallel form (`typed.LookupJoin`)
+and a SQL form (a JOIN per clause). It is now the driver's eighth row,
+`lookup`, which reads the kind and relationship tables beside the
+Parquet file (`-kinds`, `-rels`). The driver also gained the two lanes
+the engine table leaves out, `-engines …,record,exec`, and `-only` to
+run one row. Machine A, idle, best of three (exec and record take
+minutes per run); every lane gave the same 103,037 rows:
+
+| | DataFusion (generated Rust) | typed | DuckDB 1.5.0 | `generate go` (record) | exec |
+|---|---:|---:|---:|---:|---:|
+| wall | 2.26 s | **1.05 s** | 1.36 s | 125.5 s | 86.4 s |
+| peak RSS | 3.2 GB | 1.2 GB | 940 MB | 200 MB | 39 MB (the largest process) |
+
+**Exec beats record.** Ross's guess was the process per stage, and it
+holds. CPU against wall time, then each run pinned to one core
+(`taskset -c 0`):
+
+| | wall | user + sys | CPU / wall |
+|---|---:|---:|---:|
+| exec | 87.8 s | 348 s | 396 % |
+| record | 125.5 s | 247 s | 196 % |
+| exec, one core | 266.7 s | 266 s | 99 % |
+| record, one core | 170.2 s | 170 s | 99 % |
+
+The interpreted pipeline does about 40% more work than the record
+program, because each stage decodes and re-encodes JSONL for the next.
+But its seven processes run at once, on about four cores, so it wins on
+wall time. Pinned to one core it loses by 1.6×. The record program is
+one goroutine chain. Its 196% is the garbage collector, whose cost
+shows when it shares the core: 170 s pinned against 125 s free. A
+record-mode pipeline that was parallel by stage (a goroutine per stage,
+batches between them) would get exec's overlap without exec's encoding
+cost. That is the old per-row channel trap (§1 of `claude/concurrency.md`)
+unless the hand-off is in batches. The typed program is 85–120× faster
+than either, and is the answer for a pipeline this size.
+
+**DataFusion is the slow engine on this row**, although it reads the
+same CSV in 0.24 s in the CSV group-by row. Its physical plan builds
+every hash join on the big side: the 14.6 M-row scan is the first
+child of each `HashJoinExec`, and the joins run `mode=Partitioned`, so
+those rows are hash-partitioned across 24 partitions three times, once
+per join. A CSV file has no row count, so the planner cannot see that
+the kind table has 536 rows. A broadcast join (`CollectLeft`, the small
+side built once) is what DuckDB and the typed program do in effect. See
+§4 item 8.
+
 ## 4. What we can do, ranked
 
 Expected win first, cost second. Each item that changes a
@@ -821,7 +878,16 @@ could change, an equivalence case; none of them changes a result.
    present. The 2026-10-27 table was produced by scratchpad scripts; this
    is the same method, so a change is measured in one command and a
    release note's numbers are reproducible. It is not a gate; the scale
-   gate is the gate.
+   gate is the gate. Since 2026-11-02 it runs eight pipelines: the eighth
+   is the lookup join of §3.15. `-engines` also takes `record` and
+   `exec`, and `-only` runs a subset.
+
+8. **DataFusion's joins against a small CSV build on the big side**
+   (§3.15). Before choosing a fix, measure the candidates: put the small
+   side first in the lowering, give DataFusion a row count, or set a
+   broadcast threshold option in the generated program's
+   `SessionConfig`. The rust and datafusion lanes must stay equal case
+   for case (DFC157 §5).
 
 What is NOT on the list: a columnar or vectorised runtime for typed Go.
 DFC132's reasoning stands: a third runtime would own the semantics a

@@ -2,7 +2,7 @@
 
 Reference: DFC159
 Created: 2026-10-30
-Last modified: 2026-10-30
+Last modified: 2026-11-02
 
 [Back to Index](./README.md)
 
@@ -238,9 +238,15 @@ Machine A (24 cores), 14.6 M rows, whole-process wall, best of three
 | 10 M rows, three chained joins, count | **0.26 s** | 0.89 s | 0.29 s |
 | decimal cast + sum | **0.04 s** | 0.23 s | 0.06 s |
 | windowed running sum over 26 partitions | **5.7 s** | 9.2 s | 14.0 s |
+| two-clause lookup join into a small CSV, then a join and a filter (added 2026-11-02) | 2.45 s | **1.03 s** | 1.04 s |
 
 A vectorised, morsel-parallel engine over Arrow batches beats a
-row-at-a-time program on every row here, CSV reading included. The
+row-at-a-time program on every row here but the last, CSV reading
+included. On the last, DataFusion builds each hash join on the big side
+(a CSV gives its planner no row count) and hash-partitions 14.6 M rows
+once per join. Until the lowering puts the small side where DataFusion
+builds, that shape is faster as `generate go`
+([DFC158](./dfc158_performance_measured_fixed_next.md) §3.15). The
 binary starts in about 20 ms despite its size.
 
 ## 7. Edges

@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Typed and SQL forms for lookup joins.** `join kind.csv -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name` was refused by typed mode ("only single-clause joins without -as renames") and by `generate sql`. Typed and parallel now emit `typed.LookupJoin` / `typed.LookupJoinParallel`: one key pair per clause, the right side indexed once per clause. A pipeline of this shape over a 1.2 GB file took 2.8 s typed against 88 s exec. A clause that copies every right field, or keys of different types across clauses, runs that stage in record mode. `generate sql` joins the side once per clause (`JOIN … AS __r0 ON …`), so DuckDB is an independent oracle for the lookup, and `generate rust` runs that SQL.
 
+- **`scripts/bench-engines.sh` has a lookup row and runs every lane on request.** The eighth pipeline is Ross's lookup join (`-kinds`, `-rels`; by default `kind.csv` and `relationship.csv` beside the Parquet file). `-engines` also takes `record` and `exec`, and `-only` runs a subset of rows. Measured in DFC158 §3.15: typed 1.03 s, DuckDB 1.04 s, generated Rust 2.45 s (its joins build on the big side), exec 86 s and record 125 s. Exec beats record because its process-per-stage pipeline keeps about four cores busy; pinned to one core, exec loses by 1.6×.
+
 ### Fixed
 
 - **`generate sql` translated only the last clause of a multi-clause join.** `join FILE -on a k - -on b k` became one join on `b`; it now goes through the lookup translation above (or is refused when a clause has no `-as`).

@@ -1,11 +1,15 @@
 #!/bin/bash
 # bench-engines.sh — the engine table of doc/performance.md §1a, repeatable.
 #
-# Runs the same seven pipelines three ways over one Parquet file — the
+# Runs the same eight pipelines three ways over one Parquet file — the
 # typed Go program (`generate go -build`), DuckDB (`generate sql | duckdb`)
 # and Apache DataFusion through the generated Rust program (`generate rust
 # -build`) — best of N runs each, whole-process wall and peak RSS, output
-# to /dev/null, and prints the table in the doc's format. The 2026-10-27
+# to /dev/null, and prints the table in the doc's format. Two more lanes
+# on request (-engines): the record-mode program (`generate go -mode
+# record -build`) and the interpreted pipeline itself, one ssql process
+# per stage (exec) — minutes per cell on the 14.6 M-row file; exec's peak
+# RSS is its largest process, not the sum of the stages. The 2026-10-27
 # table (DFC157 §4, DFC158 §1) came from one-off scripts in a session
 # scratchpad; this is the same method in the repo, so a change can be
 # measured in one command and a release note's numbers reproduced.
@@ -22,7 +26,17 @@
 #   -join DIR  the 10 M-row join corpus (data/depts/regions/cities.csv;
 #              default /tmp/ssql-typed-scale when it exists; the typed/
 #              benchmarks generate it, see doc/performance.md "Reproducing")
-#   -engines L comma list of typed,duckdb,rust (default: all that are installed)
+#   -kinds F   the lookup row's kind table, kind,kind_name (default
+#              kind.csv beside the Parquet file, when it exists)
+#   -rels F    its relationship table, relationship,relationship_name
+#              (default relationship.csv beside the Parquet file)
+#   -lk VALUE  the lookup row's `where -if a_kind_name eq VALUE` (default EK_PORT)
+#   -lr VALUE  and `-if relationship_name eq VALUE` (default RK_TRAVERSES)
+#   -engines L comma list of typed,duckdb,rust,record,exec (default: typed,
+#              duckdb and rust, those that are installed)
+#   -only L    comma list of pipeline names to run (cube, groupby_parquet,
+#              groupby_csv, filter_write, join3, lookup, decimal, window;
+#              default: all)
 #   -runs N    runs per cell, best reported                 (default 3)
 #   -timeout S cap per run in seconds                       (default 1800)
 #   -o FILE    also write the table to FILE
@@ -42,6 +56,7 @@ usage() { sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2; 
 
 K=a_kind S=a_name V=relationship K2=z_kind S2=z_name EQ=7
 CSV="" JOIN="" ENGINES="" RUNS=3 TIMEOUT=1800 OUT=""
+KINDS="" RELS="" LK=EK_PORT LR=RK_TRAVERSES ONLY=""
 PARQUET=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -53,8 +68,13 @@ while [ $# -gt 0 ]; do
     -eq) EQ=$2; shift 2 ;;
     -csv) CSV=$2; shift 2 ;;
     -join) JOIN=$2; shift 2 ;;
+    -kinds) KINDS=$2; shift 2 ;;
+    -rels) RELS=$2; shift 2 ;;
+    -lk) LK=$2; shift 2 ;;
+    -lr) LR=$2; shift 2 ;;
     -engines) ENGINES=$2; shift 2 ;;
     -runs) RUNS=$2; shift 2 ;;
+    -only) ONLY=$2; shift 2 ;;
     -timeout) TIMEOUT=$2; shift 2 ;;
     -o) OUT=$2; shift 2 ;;
     -h|--help) usage ;;
@@ -104,6 +124,8 @@ if [ -z "$CSV" ]; then
 fi
 CSV=$(readlink -f "$CSV")
 [ -z "$JOIN" ] && [ -d /tmp/ssql-typed-scale ] && [ -f /tmp/ssql-typed-scale/data.csv ] && JOIN=/tmp/ssql-typed-scale
+[ -z "$KINDS" ] && [ -f "$(dirname "$PARQUET")/kind.csv" ] && KINDS=$(dirname "$PARQUET")/kind.csv
+[ -z "$RELS" ] && [ -f "$(dirname "$PARQUET")/relationship.csv" ] && RELS=$(dirname "$PARQUET")/relationship.csv
 
 # ---- the pipelines ------------------------------------------------------
 # name@@label@@pipeline (the label is the table's first column; @@ because a label may hold an escaped |)
@@ -115,14 +137,32 @@ PIPES+=("filter_write@@\`where -if $V eq $EQ \\| include $K $S $S2 \\| to csv\`@
 if [ -n "$JOIN" ]; then
   PIPES+=("join3@@10 M rows, \`where age gt 30\`, three chained \`join -using\`, \`count\`@@$SSQL from csv $JOIN/data.csv | $SSQL where -if age gt 30 | $SSQL join $JOIN/depts.csv -using dept_id | $SSQL join $JOIN/regions.csv -using region_id | $SSQL join $JOIN/cities.csv -using city_id | $SSQL count")
 fi
+if [ -n "$KINDS" ] && [ -n "$RELS" ]; then
+  # Ross's pipeline (2026-11-02): a two-clause lookup into one kind table
+  # (-as on each clause), a second join, a projection and a filter, over
+  # the CSV rows. Typed refused it until that day.
+  PIPES+=("lookup@@CSV, \`join kinds -on $K kind -as … - -on $K2 kind -as …\`, \`join rels\`, \`include\`, \`where\`@@$SSQL from csv $CSV | $SSQL join $KINDS -on $K kind -as kind_name ${K}_name - -on $K2 kind -as kind_name ${K2}_name | $SSQL join $RELS -using $V | $SSQL include $S ${K}_name relationship_name ${K2}_name $S2 | $SSQL where -if ${K}_name eq $LK -if relationship_name eq $LR | $SSQL to csv")
+fi
 PIPES+=("decimal@@\`cast -type $V decimal:2 \\| group-by $K -sum\`@@$SSQL from parquet $PARQUET | $SSQL cast -type $V decimal:2 | $SSQL group-by $K -sum $V total | $SSQL to csv")
 PIPES+=("window@@\`window -partition $K -order $S -sum $V\` then \`group-by $K -max\`@@$SSQL from parquet $PARQUET | $SSQL window -partition $K -order $S -sum $V running | $SSQL group-by $K -max running m | $SSQL to csv")
+
+if [ -n "$ONLY" ]; then
+  KEPT=()
+  for entry in "${PIPES[@]}"; do
+    case ",$ONLY," in *,"${entry%%@@*}",*) KEPT+=("$entry") ;; esac
+  done
+  [ ${#KEPT[@]} -gt 0 ] || { echo "-only $ONLY names no pipeline" >&2; exit 2; }
+  PIPES=("${KEPT[@]}")
+fi
 
 # ---- builds -------------------------------------------------------------
 # One program or SQL file per pipeline and engine, under the cache; the
 # builds are not timed.
 build_typed() { # name pipeline
   "$SSQL" generate go -build "$CACHE/$1.typed" -pipeline "$2" > /dev/null 2> "$CACHE/$1.typed.err"
+}
+build_record() { # name pipeline
+  "$SSQL" generate go -mode record -build "$CACHE/$1.record" -pipeline "$2" > /dev/null 2> "$CACHE/$1.record.err"
 }
 build_rust() { # name pipeline
   "$SSQL" generate rust -build "$CACHE/$1.rust" -pipeline "$2" > /dev/null 2> "$CACHE/$1.rust.err"
@@ -184,6 +224,15 @@ for entry in "${PIPES[@]}"; do
     else R[$name,rust]="skip:$(tail -1 "$CACHE/$name.rust.err")"; fi
     echo "   rust   ${R[$name,rust]}" >&2
   fi
+  if has record; then
+    if build_record "$name" "$pipe"; then R[$name,record]=$(measure "$CACHE/$name.record")
+    else R[$name,record]="skip:$(tail -1 "$CACHE/$name.record.err")"; fi
+    echo "   record ${R[$name,record]}" >&2
+  fi
+  if has exec; then
+    R[$name,exec]=$(measure bash -c "set -o pipefail; $pipe")
+    echo "   exec   ${R[$name,exec]}" >&2
+  fi
 done
 
 # ---- the table ----------------------------------------------------------
@@ -194,6 +243,8 @@ done
   has rust && { hdr="$hdr DataFusion (generated Rust) |"; sep="$sep---:|"; }
   has typed && { hdr="$hdr ssql \`generate go\` (typed) |"; sep="$sep---:|"; }
   has duckdb && { hdr="$hdr DuckDB $("$DUCKDB" --version 2>/dev/null | awk '{print $1}') |"; sep="$sep---:|"; }
+  has record && { hdr="$hdr ssql \`generate go\` (record) |"; sep="$sep---:|"; }
+  has exec && { hdr="$hdr ssql pipeline (exec) |"; sep="$sep---:|"; }
   echo "$hdr"; echo "$sep"
   for entry in "${PIPES[@]}"; do
     name=${entry%%@@*}; rest=${entry#*@@}; label=${rest%%@@*}
@@ -201,6 +252,8 @@ done
     has rust && row="$row $(fmt_cell "${R[$name,rust]}") |"
     has typed && row="$row $(fmt_cell "${R[$name,typed]}") |"
     has duckdb && row="$row $(fmt_cell "${R[$name,duckdb]}") |"
+    has record && row="$row $(fmt_cell "${R[$name,record]}") |"
+    has exec && row="$row $(fmt_cell "${R[$name,exec]}") |"
     echo "$row"
   done
   echo
@@ -212,6 +265,8 @@ done
     has rust && cells="$cells $(fmt_rss "${R[$name,rust]}") /"
     has typed && cells="$cells $(fmt_rss "${R[$name,typed]}") /"
     has duckdb && cells="$cells $(fmt_rss "${R[$name,duckdb]}") /"
+    has record && cells="$cells $(fmt_rss "${R[$name,record]}") /"
+    has exec && cells="$cells $(fmt_rss "${R[$name,exec]}") /"
     echo "- $name:${cells% /}"
   done
   # Output row counts that disagree between engines are worth a look (every
@@ -222,7 +277,7 @@ done
     name=${entry%%@@*}
     [ "$name" = join3 ] && continue
     counts=""
-    for e in rust typed duckdb; do
+    for e in rust typed duckdb record exec; do
       has "$e" || continue
       v=${R[$name,$e]}
       case "$v" in fail|skip:*) continue ;; esac
@@ -233,7 +288,7 @@ done
   done
   for entry in "${PIPES[@]}"; do
     name=${entry%%@@*}
-    for e in rust typed duckdb; do
+    for e in rust typed duckdb record exec; do
       has "$e" || continue
       case "${R[$name,$e]}" in skip:*) echo "- $name/$e not measured: ${R[$name,$e]#skip:}" ;; esac
     done

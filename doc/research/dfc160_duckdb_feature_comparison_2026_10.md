@@ -2,7 +2,7 @@
 
 Reference: DFC160
 Created: 2026-10-31
-Last modified: 2026-10-31
+Last modified: 2026-11-02
 Deprecates: [DFC136](./dfc136_duckdb_feature_comparison_2026_09.md)
 
 [Back to Index](./README.md)
@@ -185,6 +185,7 @@ measurement to quote:
 | three chained joins, `count` | **0.25 s** | 0.51 s | 0.35 s |
 | decimal cast + sum | **0.05 s** | 0.26 s | 0.06 s |
 | window running sum + group-by | 5.8 s | **3.2 s** | 13.2 s |
+| two-clause lookup join, a join, a filter, CSV (2026-11-02) | 2.45 s | **1.03 s** | 1.04 s |
 
 Reading it honestly:
 
@@ -195,12 +196,18 @@ Reading it honestly:
 - **DuckDB is faster on three.** The Parquet count (0.03 against 0.14 s),
   the joins and the decimal sum. A vectorised executor over a columnar
   file wins wherever a scan and an aggregate dominate.
-- **DataFusion, through `generate rust`, is fastest on six of seven.**
+- **DataFusion, through `generate rust`, is fastest on six of eight.**
   That is the real answer to "what if I need DuckDB's speed": the same
-  pipeline, with `rust` in place of `go`.
-- **The interpreter is not in the table.** It is serial and runs per
-  record through a map, so an ad-hoc `ssql` command line over millions of
-  rows is several times slower than DuckDB. Code generation is how ssql
+  pipeline, with `rust` in place of `go`. The lookup row (added
+  2026-11-02, after typed mode learned that join) is its worst: it
+  builds each hash join on the 14.6 M-row side, because a CSV gives its
+  planner no row count (DFC158 §3.15). Typed Go and DuckDB tie there.
+- **The interpreter is not in the main table.** It runs per record
+  through a map, one process per stage, so an ad-hoc `ssql` command line
+  over millions of rows is far slower than DuckDB. On the lookup row
+  (`-engines …,exec`, 2026-11-02) it took 86 s against DuckDB's 1.4 s,
+  using about four cores at once; the record-mode program took 125 s on
+  one goroutine chain (DFC158 §3.15). Code generation is how ssql
   goes fast, and the interactive path is not built for speed.
 - **Memory.** Peak RSS is usually higher for typed Go than for either
   engine: 1.2 GB against 666 MB for DuckDB on the CSV group-by, 4.3 GB

@@ -121,6 +121,41 @@ Peak RSS, same order: cube 184 MB / 506 MB / 427 MB; Parquet group-by
 write 1.7 GB / 4.0 GB / 1.3 GB; join 310 MB / 405 MB / 353 MB; decimal
 98 MB / 320 MB / 52 MB; window 1.7 GB / 4.3 GB / 2.9 GB.
 
+**After the lookup join** (main, 2026-11-02, `scripts/bench-engines.sh`):
+the table gets an eighth row, Ross's lookup pipeline. It is a two-clause
+`join -as` into one kind table, a second join, `include` and `where`,
+over the CSV rows. Typed mode refused that join until that day
+([DFC158](research/dfc158_performance_measured_fixed_next.md) §3.15).
+The other rows moved within noise:
+
+| Pipeline (14.6 M rows; the join 10 M) | DataFusion (generated Rust) | ssql `generate go` (typed) | DuckDB 1.5.0 |
+|---|---:|---:|---:|
+| `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.19 s** | 0.22 s | 0.35 s |
+| `group-by relationship -count`, Parquet | **0.02 s** | 0.10 s | 0.03 s |
+| `group-by relationship -count`, the same rows as CSV | **0.24 s** | 0.33 s | 0.85 s |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.77 s** | 1.39 s | 2.97 s |
+| 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.24 s** | 0.51 s | 0.34 s |
+| CSV, `join kind.csv -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name \| join relationship.csv -using relationship \| include … \| where …` | 2.45 s | **1.03 s** | 1.04 s |
+| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.05 s** | 0.25 s | 0.06 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | 5.7 s | **3.3 s** | 13.4 s |
+
+Peak RSS for the lookup: 3.8 GB / 1.2 GB / 971 MB. DataFusion is the
+slow one here, although it reads the same CSV in 0.24 s. Its plan builds
+each hash join on the 14.6 M-row side and hash-partitions those rows
+three times, once per join: a CSV has no row count, so the planner
+cannot see that the kind table is small. The same row with the two Go
+lanes that are not in the table (`-engines rust,typed,duckdb,record,exec`):
+
+| | DataFusion | typed | DuckDB | `generate go` (record) | the pipeline itself (exec) |
+|---|---:|---:|---:|---:|---:|
+| lookup | 2.26 s | **1.05 s** | 1.36 s | 125.5 s | 86.4 s |
+
+Record is slower than exec on this pipeline. Pinning each to one core
+shows why. Exec does about 40% more work (348 s CPU against record's
+247 s), because every stage re-encodes JSONL for the next. But its seven
+processes keep about four cores busy, so it wins on wall time. Pinned to
+one core, exec takes 267 s and record 170 s.
+
 Honest framing: this is a scan-and-aggregate query, where a pruned
 parallel read wins. On the join-heavy benchmark in §3 DuckDB is still
 ahead. Postgres is in the table for scale, not as a target: it has to
@@ -262,6 +297,8 @@ go -explain` says which form each stage of your pipeline got.
 # program over one Parquet file, best of three, printed in the table's format
 # (column names are options; see the script's header; measure on an idle machine)
 scripts/bench-engines.sh FILE.parquet
+# one row, every lane: the record program and the interpreted pipeline too
+scripts/bench-engines.sh FILE.parquet -only lookup -engines rust,typed,duckdb,record,exec
 
 # §1, §2: any parquet/CSV file you have; -build then time the binary
 ssql generate go -pipeline 'ssql from parquet FILE | ssql group-by a b c -count n -cube | ssql to csv' -build ./cube
