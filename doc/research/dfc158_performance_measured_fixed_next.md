@@ -771,6 +771,31 @@ minutes per run); every lane gave the same 103,037 rows:
 | wall | 2.26 s | **1.05 s** | 1.36 s | 125.5 s | 86.4 s |
 | peak RSS | 3.2 GB | 1.2 GB | 940 MB | 200 MB | 39 MB (the largest process) |
 
+The full table from the same session's driver run (`scripts/bench-engines.sh
+~/csvs/shuffled.parquet`; machine A, 24 cores, 62 GB, idle; build
+414c881c, after the lookup join; best of three, whole-process wall,
+output to /dev/null). The seven rows that were already there moved
+within noise of §3.6 and §3.11:
+
+| Pipeline (14.6 M rows; the join 10 M) | DataFusion (generated Rust) | ssql `generate go` (typed) | DuckDB 1.5.0 |
+|---|---:|---:|---:|
+| `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.19 s** | 0.22 s | 0.35 s |
+| `group-by relationship -count`, Parquet | **0.02 s** | 0.10 s | 0.03 s |
+| `group-by relationship -count`, the same rows as CSV | **0.24 s** | 0.33 s | 0.85 s |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.77 s** | 1.39 s | 2.97 s |
+| 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.24 s** | 0.51 s | 0.34 s |
+| CSV, `join kind.csv -on a_kind kind -as … - -on z_kind kind -as …`, `join relationship.csv -using relationship`, `include`, `where` | 2.45 s | **1.03 s** | 1.04 s |
+| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.05 s** | 0.25 s | 0.06 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | 5.74 s | **3.31 s** | 13.38 s |
+
+Peak RSS, same order: cube 179 MB / 491 MB / 427 MB; Parquet group-by
+68 MB / 187 MB / 36 MB; CSV group-by 78 MB / 1.2 GB / 666 MB; filtered
+write 1.8 GB / 4.1 GB / 1.3 GB; join 302 MB / 402 MB / 287 MB; lookup
+3.8 GB / 1.2 GB / 971 MB; decimal 98 MB / 375 MB / 52 MB; window
+1.6 GB / 4.2 GB / 2.8 GB. Every engine gave the same output row count
+on every row. The lookup timings differ a little from the five-lane run
+above (2.26 / 1.05 / 1.36 s there): the two runs were separate.
+
 **Exec beats record.** Ross's guess was the process per stage, and it
 holds. CPU against wall time, then each run pinned to one core
 (`taskset -c 0`):
