@@ -180,9 +180,14 @@ func equivCommon(a, b []string) []string {
 // is a key one record carries twice: every JSON reader keeps one copy,
 // so no parsing oracle can see it — the hive glob form attached its
 // derived key twice to every record for a day (2026-10-14) and every
-// lane agreed.
+// lane agreed. A row that carries every column is the authority: the
+// positional rule alone depends on the row order, and a lane whose
+// rows come in any order and drop NULL keys (the rust lane's JSON
+// writer) put a later column first when a row lacking one column came
+// before a row lacking another (lookup_join_left, 2026-11-02).
 func equivColumnOrder(raw string) (fields []string, dup string) {
 	seen := map[string]bool{}
+	var widest []string
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "{") || strings.HasPrefix(line, `{"_schema"`) {
@@ -191,6 +196,7 @@ func equivColumnOrder(raw string) (fields []string, dup string) {
 		dec := json.NewDecoder(strings.NewReader(line))
 		depth, prev := 0, ""
 		inLine := map[string]bool{}
+		var row []string
 		for {
 			tok, err := dec.Token()
 			if err != nil {
@@ -218,6 +224,7 @@ func equivColumnOrder(raw string) (fields []string, dup string) {
 					dup = key
 				}
 				inLine[key] = true
+				row = append(row, key)
 				if !seen[key] {
 					seen[key] = true
 					placed := false
@@ -237,6 +244,12 @@ func equivColumnOrder(raw string) (fields []string, dup string) {
 				prev = key
 			}
 		}
+		if len(row) > len(widest) {
+			widest = row
+		}
+	}
+	if len(widest) == len(fields) {
+		return widest, dup
 	}
 	return fields, dup
 }
@@ -4979,5 +4992,19 @@ func TestSQLSnapshot(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEquivColumnOrderWidestRow: rows that each lack a different column,
+// in an order that misleads the positional rule, take the order of the
+// row that has every column.
+func TestEquivColumnOrderWidestRow(t *testing.T) {
+	raw := `{"link":"l4","a_name":"one"}
+{"link":"l5","z_name":"one"}
+{"link":"l3","a_name":"two","z_name":"one"}
+`
+	got, _ := equivColumnOrder(raw)
+	if want := []string{"link", "a_name", "z_name"}; !slices.Equal(got, want) {
+		t.Fatalf("equivColumnOrder = %v, want %v", got, want)
 	}
 }
