@@ -24,7 +24,7 @@ var ShellIntegrations = []ShellIntegration{
 	{"-completion-script", "tab completion: commands, flags, fields", ""},
 	{"-field-keybinding", "Ctrl-O: pipeline-aware field and value completion", FieldKeybindingScript},
 	{"-optimise-keybinding", "Ctrl-T: optimise the pipeline in place", OptimiseKeybindingScript},
-	{"-help-keybinding", "Alt-h: help under cursor · Alt-H: list key bindings", HelpKeybindingScript},
-	{"-code-keybinding", "Alt-g: show the typed Go the pipeline generates", CodeKeybindingScript},
-	{"-run-keybinding", "Alt-r: compile the pipeline as typed Go and run it", RunKeybindingScript},
+	{"-help-keybinding", "Alt-h (vi: Ctrl-X h): help under cursor · Alt-H (Ctrl-X H): list key bindings", HelpKeybindingScript},
+	{"-code-keybinding", "Alt-g (vi: Ctrl-X g): show the typed Go the pipeline generates", CodeKeybindingScript},
+	{"-run-keybinding", "Alt-r (vi: Ctrl-X r): compile the pipeline as typed Go and run it", RunKeybindingScript},
 }

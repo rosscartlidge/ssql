@@ -16,11 +16,16 @@ Then, while editing any `ssql … | ssql …` line:
 | Key | What it does |
 |---|---|
 | **Ctrl-O** | Complete a **field name or value** from the upstream pipeline — position-aware: names come from the live schema, values are sampled from the pipeline's own source file (spaced values arrive quoted). Works across process substitution and a `join`'s right-hand side |
-| **Alt-h** | **Help for the flag/command under the cursor** — and on an expression argument, the full function reference so you're not writing expressions blind |
-| **Alt-g** | Show the **typed Go** this pipeline compiles to (in a popup under tmux, otherwise your pager) — without running it |
-| **Alt-r** | **Compile the pipeline as typed Go and run it** — the fast path, one keystroke away. Only the `ssql` stages compile; a producer before them, or a `| less` / `> file` after them, stays where you typed it |
+| **Alt-h** · vi: **Ctrl-X h** | **Help for the flag/command under the cursor** — and on an expression argument, the full function reference so you're not writing expressions blind |
+| **Alt-g** · vi: **Ctrl-X g** | Show the **typed Go** this pipeline compiles to (in a popup under tmux, otherwise your pager) — without running it |
+| **Alt-r** · vi: **Ctrl-X r** | **Compile the pipeline as typed Go and run it** — the fast path, one keystroke away. Only the `ssql` stages compile; a producer before them, or a `| less` / `> file` after them, stays where you typed it |
 | **Ctrl-T** | **Optimise** the pipeline on the line, in place — push filters into SSH, collapse sort+limit to `top`, prune columns |
-| **Alt-H** | List these key bindings |
+| **Alt-H** · vi: **Ctrl-X H** | List these key bindings |
+
+**In vi mode (`set -o vi`) the Alt keys are not bound**: Alt sends Esc, and
+in vi Esc is the key that leaves insert mode, so a binding on Esc h would
+steal Esc h (cursor left) whenever you type it quickly. Vi users press
+Ctrl-X and then the letter; the Ctrl-X keys work in emacs mode too.
 
 Why key bindings rather than plain Tab-completion? Because a value like a field
 name depends on what the *upstream* stages produce, and bash's completion can't

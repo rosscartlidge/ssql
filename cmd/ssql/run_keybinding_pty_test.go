@@ -9,10 +9,10 @@ import (
 )
 
 // runPtyDriver drives a real pty: spawns interactive bash, sources
-// `ssql -run-keybinding`, types an ssql pipeline, presses Alt-r, and checks
-// the binding fired — in both emacs and vi modes under a low keyseq-timeout.
-// Alt-r is ESC-prefixed, so vi mode (where ESC also leaves insert mode) is
-// the real test; this is why a pty is mandatory. The assertion is on the
+// `ssql -run-keybinding`, types an ssql pipeline, presses Alt-r (emacs) or
+// Ctrl-X r (vi, where ESC leaves insert mode and is never bound), and
+// checks the binding fired, under a low keyseq-timeout; this is why a pty
+// is mandatory. The assertion is on the
 // compile notice (always printed when the binding fires), NOT the compiled
 // output — so the test doesn't hinge on a Go toolchain / module resolution
 // being available in the pty. Prints "MODE: PASS|FAIL" per mode; "SKIP:
@@ -42,7 +42,8 @@ def run(vi):
         send("set -o vi\n"); drain()
     send("ssql version | ssql to table")
     time.sleep(0.5)
-    os.write(fd, b"\x1br")               # Alt-r (ESC r)
+    # Alt-r in emacs; Ctrl-X r in vi, where ESC leaves insert mode
+    os.write(fd, b"\x18r" if vi else b"\x1br")
     time.sleep(1.2)
     after = drain().decode(errors="replace")
     os.write(fd, b"\x03\n"); time.sleep(0.2); os.close(fd)

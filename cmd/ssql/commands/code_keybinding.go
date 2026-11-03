@@ -18,7 +18,7 @@ package commands
 // and pipes that through `ssql generate go`, so it's near-instant even on
 // huge files. Display reuses the shared popup (tmux `display-popup`, or inline
 // when not in tmux); the generated program scrolls in the pager.
-const CodeKeybindingScript = `# ssql show-generated-code keybinding — install with:
+var CodeKeybindingScript = `# ssql show-generated-code keybinding — install with:
 #   eval "$(ssql -code-keybinding)"
 # Then, with an ssql pipeline on the line, press Alt-g. Rebind below.
 
@@ -59,8 +59,6 @@ ${msg:-<no output — is this a complete ssql pipeline?>}"
     _ssql_show_help "$out"
 }
 
-# Bind in every keymap — a single key, no keyseq-timeout dependency.
-bind -m emacs -x '"\eg": _ssql_show_go'
-bind -m vi-insert -x '"\eg": _ssql_show_go'
-bind -m vi-command -x '"\eg": _ssql_show_go'
-`
+# Bind in every keymap (generated from the KeyBindings table: an Alt key
+# is emacs-only, vi gets Ctrl-X and a letter — ESC leaves insert mode there).
+` + KeyBindLines("_ssql_show_go")

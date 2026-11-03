@@ -68,7 +68,7 @@ Bob,25,65000" | ssql from csv | ssql where -if age gt 28
 ```
 
 Then turn bash into an ssql-aware editor — completion plus the Ctrl-O / Alt-h /
-Alt-g / Alt-r / Ctrl-T key bindings (see [The Shell Experience](cli-shell.md)):
+Alt-g / Alt-r / Ctrl-T key bindings (in vi mode, Ctrl-X h / g / r) (see [The Shell Experience](cli-shell.md)):
 
 ```bash
 echo 'eval "$(ssql -shell-init)"' >> ~/.bashrc && source ~/.bashrc

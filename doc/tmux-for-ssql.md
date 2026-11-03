@@ -109,8 +109,9 @@ Ctrl-b x        close the current pane
   and a short one prints inline — everything still works, tmux just
   looks nicer.
 - **Alt-h does nothing.** The terminal is keeping Alt for itself: press
-  Escape then h, or on macOS enable "Use Option as Meta key" in the
-  terminal's keyboard settings.
+  Ctrl-X then h, or on macOS enable "Use Option as Meta key" in the
+  terminal's keyboard settings. In vi mode the Alt keys are not bound
+  (Esc leaves insert mode there): use Ctrl-X h, g and r.
 - **Colours look off** after enabling the mouse. Add
   `set -g default-terminal "tmux-256color"` to `~/.tmux.conf`.
 - **A setting did not take.** `~/.tmux.conf` is read when the tmux

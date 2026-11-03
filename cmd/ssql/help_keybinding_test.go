@@ -95,13 +95,17 @@ func TestHelpKeybindingEmitted(t *testing.T) {
 	for _, want := range []string{
 		"_ssql_help_at", "READLINE_LINE", "-help-at", "display-popup", "$TMUX",
 		`bind -m emacs -x '"\eh": _ssql_help_at'`,
-		`bind -m vi-insert -x '"\eh": _ssql_help_at'`,
-		`bind -m vi-command -x '"\eh": _ssql_help_at'`,
+		`bind -m emacs -x '"\C-xh": _ssql_help_at'`,
+		`bind -m vi-insert -r '\eh'`,
+		`bind -m vi-insert -x '"\C-xh": _ssql_help_at'`,
+		`bind -m vi-command -x '"\C-xh": _ssql_help_at'`,
 		// Alt-H cheat-sheet of the whole key-binding family.
 		"_ssql_help_keys", "ssql key bindings",
 		`bind -m emacs -x '"\eH": _ssql_help_keys'`,
-		`bind -m vi-insert -x '"\eH": _ssql_help_keys'`,
-		`bind -m vi-command -x '"\eH": _ssql_help_keys'`,
+		`bind -m emacs -x '"\C-xH": _ssql_help_keys'`,
+		`bind -m vi-insert -r '\eH'`,
+		`bind -m vi-insert -x '"\C-xH": _ssql_help_keys'`,
+		`bind -m vi-command -x '"\C-xH": _ssql_help_keys'`,
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("help keybinding script missing %q", want)

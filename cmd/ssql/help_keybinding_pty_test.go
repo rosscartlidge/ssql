@@ -10,10 +10,10 @@ import (
 
 // helpPtyDriver drives a real pty: spawns interactive bash, sources
 // `ssql -help-keybinding`, types an ssql command with the cursor on the
-// "-sum" flag, presses Alt-h, and checks the flag's help was printed inline
-// — in both emacs and vi modes under a low keyseq-timeout. Alt-h is an
-// ESC-prefixed key, so vi mode (where ESC also leaves insert mode) is the
-// real test; this is exactly why a pty is mandatory. TMUX is unset so the
+// "-sum" flag, and checks Ctrl-X h prints the flag's help inline in both
+// emacs and vi modes, Alt-h too in emacs — and that in vi ESC h, typed in
+// one write, is NOT help: ESC leaves insert mode there, and vi users type
+// ESC h to move left. That is exactly why a pty is mandatory. TMUX is unset so the
 // binding takes the inline-print branch we can scrape. Prints
 // "MODE: PASS|FAIL" per mode; "SKIP: <reason>" + exit 0 if no usable pty.
 const helpPtyDriver = `
@@ -36,19 +36,33 @@ def run(vi):
     send("export PATH=%s:$PATH\n" % binDir); drain()
     send("unset TMUX; export SSQL_POPUP=inline\n"); drain()
     send("bind 'set keyseq-timeout 1'\n"); drain()
+    # A shell that sourced an older script holds ESC h in the vi maps;
+    # sourcing this one must take it back.
+    send("bind -m vi-insert -x '\"\\eh\": _ssql_help_at'\n"); drain()
     send('eval "$(ssql -help-keybinding)"\n'); drain()
     if vi:
         send("set -o vi\n"); drain()
     send("ssql group-by dept -sum")
     time.sleep(0.5)
-    os.write(fd, b"\x1bh")               # Alt-h (ESC h)
-    time.sleep(0.9)
-    after = drain().decode(errors="replace")
+    def fire(keys):
+        os.write(fd, keys)
+        time.sleep(0.9)
+        out = drain().decode(errors="replace")
+        return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[A-Za-z]', '', out)
+    # Ctrl-X h is help in every keymap.
+    # emacs: Alt-h (ESC h) too. vi: ESC h is ESC (leave insert mode)
+    # then h (cursor left), however fast it is typed — an ESC-prefixed
+    # binding in a vi keymap stole it (Ross, 2026-11-03, set -o vi).
+    ok = True
+    if vi:
+        ok = "Sum field values" not in fire(b"\x1bh")
+    else:
+        got = fire(b"\x1bh")
+        ok = "Sum field values" in got and "-sumh" not in got
+    got = fire(b"\x18h")
+    ok = ok and "Sum field values" in got and "-sumh" not in got
     os.write(fd, b"\x03\n"); time.sleep(0.2); os.close(fd)
-    clean = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[A-Za-z]', '', after)
-    # PASS: the -sum flag's help printed (inline), and 'h' did not self-insert
-    # into the line (which would leave "-sumh").
-    return ("Sum field values" in clean) and ("-sumh" not in clean)
+    return ok
 
 try:
     ok_e = run(False)

@@ -25,7 +25,7 @@ package commands
 // after `go install …/cmd/ssql@vX.Y.Z`); without them it prints a clear
 // error. Output streams wherever the line sends it; readline redraws your
 // line underneath.
-const RunKeybindingScript = `# ssql convert-to-typed-and-run keybinding — install with:
+var RunKeybindingScript = `# ssql convert-to-typed-and-run keybinding — install with:
 #   eval "$(ssql -run-keybinding)"
 # Then, with an ssql pipeline on the line, press Alt-r. Rebind below.
 
@@ -81,8 +81,6 @@ $(_ssql_clean_err "$(<"$errf")")"
     rm -f "$errf" "$bin"
 }
 
-# Bind in every keymap — a single key, no keyseq-timeout dependency.
-bind -m emacs -x '"\er": _ssql_typed_run'
-bind -m vi-insert -x '"\er": _ssql_typed_run'
-bind -m vi-command -x '"\er": _ssql_typed_run'
-`
+# Bind in every keymap (generated from the KeyBindings table: an Alt key
+# is emacs-only, vi gets Ctrl-X and a letter — ESC leaves insert mode there).
+` + KeyBindLines("_ssql_typed_run")

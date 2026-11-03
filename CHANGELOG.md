@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **vi mode: Esc h is the cursor moving left again, not ssql help.** The Alt keys (Alt-h, Alt-H, Alt-g, Alt-r) were bound in the vi keymaps too, and Alt sends Esc, so Esc h typed quickly in insert mode ran help instead of leaving insert mode and moving left; Esc g and Esc r ran the Go view and the typed run. In vi mode those actions are now **Ctrl-X h, Ctrl-X H, Ctrl-X g and Ctrl-X r**, and nothing Esc-prefixed is bound in a vi keymap. Re-sourcing `ssql -shell-init` removes the old bindings from a running shell. Emacs mode keeps the Alt keys and gains the Ctrl-X ones, so one set works in both. The `bind` lines are now generated from the key table, and a test fails if an Esc-prefixed key is ever bound in a vi keymap.
+
 ## [4.137.0] - 2026-11-03
 
 ### Changed

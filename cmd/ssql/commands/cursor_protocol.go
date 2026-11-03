@@ -93,7 +93,7 @@ func helpAtWords(tree *cf.Command, rest []string, pos int) (string, string, int,
 		if pos >= 1 && pos-1 < len(rest) {
 			for _, name := range exprFunctionCandidates(rest[pos-1]) {
 				if entry, ok := FunctionEntry(name); ok {
-					ref = entry + "\n(Alt-h elsewhere in the expression, or `ssql functions`, for the full reference)\n"
+					ref = entry + "\n(Alt-h or Ctrl-X h elsewhere in the expression, or `ssql functions`, for the full reference)\n"
 					break
 				}
 			}

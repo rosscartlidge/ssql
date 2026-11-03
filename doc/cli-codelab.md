@@ -165,9 +165,11 @@ serve` workspace, which you meet in section 4, Tab does everything,
 because that console owns the whole line.)
 
 If Alt-h does nothing, your terminal is keeping Alt for itself: press
-Esc and then h instead, or on macOS enable "Use Option as Meta key" in
-the terminal's keyboard settings. Alt-H (capital) lists every key ssql
-binds.
+Ctrl-X and then h instead, or on macOS enable "Use Option as Meta key"
+in the terminal's keyboard settings. In vi mode (`set -o vi`) the Alt
+keys are not bound at all, because Esc leaves insert mode there: use
+Ctrl-X h, and Ctrl-X and the letter for the other Alt keys below. Alt-H
+(Ctrl-X H) lists every key ssql binds.
 
 From here on, whenever a flag or field name is mentioned, remember you
 never have to type it from memory.

@@ -9,10 +9,10 @@ import (
 )
 
 // codePtyDriver drives a real pty: spawns interactive bash, sources
-// `ssql -code-keybinding`, types an ssql pipeline, presses Alt-g, and checks
-// the generated Go was shown — in both emacs and vi modes under a low
-// keyseq-timeout. Alt-g is ESC-prefixed, so vi mode (where ESC also leaves
-// insert mode) is the real test; this is why a pty is mandatory. TMUX is
+// `ssql -code-keybinding`, types an ssql pipeline, presses Alt-g (emacs) or
+// Ctrl-X g (vi, where ESC leaves insert mode and is never bound), and
+// checks the generated Go was shown, under a low keyseq-timeout; this is
+// why a pty is mandatory. TMUX is
 // unset so the binding takes the inline branch we can scrape. Prints "MODE:
 // PASS|FAIL" per mode; "SKIP: <reason>" + exit 0 if no usable pty.
 const codePtyDriver = `
@@ -40,7 +40,8 @@ def run(vi):
         send("set -o vi\n"); drain()
     send("ssql from csv %s | ssql to table" % csv)
     time.sleep(0.5)
-    os.write(fd, b"\x1bg")               # Alt-g (ESC g)
+    # Alt-g in emacs; Ctrl-X g in vi, where ESC leaves insert mode
+    os.write(fd, b"\x18g" if vi else b"\x1bg")
     time.sleep(0.9)
     after = drain().decode(errors="replace")
     os.write(fd, b"\x03\n"); time.sleep(0.2); os.close(fd)

@@ -19,7 +19,7 @@ package commands
 // Reversible with readline undo (Ctrl-_ in emacs, u in vi). A single key,
 // not a chord, so it's robust under a low keyseq-timeout (see the
 // -field-keybinding rationale).
-const OptimiseKeybindingScript = `# ssql in-situ pipeline optimiser — install with:
+var OptimiseKeybindingScript = `# ssql in-situ pipeline optimiser — install with:
 #   eval "$(ssql -optimise-keybinding)"
 # Then, with an ssql pipeline on the line, press Ctrl-T to rewrite it to
 # its optimised form. Undo with Ctrl-_ (emacs) or u (vi). Rebind below.
@@ -36,8 +36,6 @@ _ssql_optimise_pipeline() {
     fi
 }
 
-# Bind in every keymap — a single key, no keyseq-timeout dependency.
-bind -m emacs -x '"\C-t": _ssql_optimise_pipeline'
-bind -m vi-insert -x '"\C-t": _ssql_optimise_pipeline'
-bind -m vi-command -x '"\C-t": _ssql_optimise_pipeline'
-`
+# Bind in every keymap (generated from the KeyBindings table: an Alt key
+# is emacs-only, vi gets Ctrl-X and a letter — ESC leaves insert mode there).
+` + KeyBindLines("_ssql_optimise_pipeline")

@@ -107,8 +107,10 @@ func TestRunKeybindingEmitted(t *testing.T) {
 	for _, want := range []string{
 		"_ssql_typed_run", "READLINE_LINE", "SSQL_MODE=typed", "-split-pipeline", "generate go -build",
 		`bind -m emacs -x '"\er": _ssql_typed_run'`,
-		`bind -m vi-insert -x '"\er": _ssql_typed_run'`,
-		`bind -m vi-command -x '"\er": _ssql_typed_run'`,
+		`bind -m emacs -x '"\C-xr": _ssql_typed_run'`,
+		`bind -m vi-insert -r '\er'`,
+		`bind -m vi-insert -x '"\C-xr": _ssql_typed_run'`,
+		`bind -m vi-command -x '"\C-xr": _ssql_typed_run'`,
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("run keybinding script missing %q", want)

@@ -318,5 +318,6 @@ generate go | sql | ssql
       | ssql generate sql | duckdb
 
   Authoring help: Alt-g shows the generated Go; Alt-r compiles and runs it;
-  Ctrl-T optimises the pipeline in place (all via eval "$(ssql -shell-init)").
+  Ctrl-T optimises the pipeline in place (all via eval "$(ssql -shell-init)";
+  in vi mode, Ctrl-X g and Ctrl-X r).
 `

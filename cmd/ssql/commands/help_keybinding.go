@@ -65,14 +65,9 @@ _ssql_help_keys() {
     _ssql_show_help "` + KeyBindingsHelp() + `"
 }
 
-# Bind in every keymap — single keys, no keyseq-timeout dependency.
-bind -m emacs -x '"\eh": _ssql_help_at'
-bind -m vi-insert -x '"\eh": _ssql_help_at'
-bind -m vi-command -x '"\eh": _ssql_help_at'
-bind -m emacs -x '"\eH": _ssql_help_keys'
-bind -m vi-insert -x '"\eH": _ssql_help_keys'
-bind -m vi-command -x '"\eH": _ssql_help_keys'
-`
+# Bind in every keymap (generated from the KeyBindings table: an Alt key
+# is emacs-only, vi gets Ctrl-X and a letter — ESC leaves insert mode there).
+` + KeyBindLines("_ssql_help_at") + KeyBindLines("_ssql_help_keys")
 
 // ssqlPopupFunc is the shared bash `_ssql_show_help` function embedded by the
 // help (-help-keybinding) and code-view (-code-keybinding) bindings. It shows

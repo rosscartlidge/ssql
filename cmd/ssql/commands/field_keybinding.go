@@ -51,7 +51,7 @@ func init() {
 // instead of data, so it reads only file headers — near-instant) and
 // completes the field name from the result. See
 // doc/research/bash-pipeline-completion-options.md.
-const FieldKeybindingScript = `# ssql field-completion keybinding — install with:
+var FieldKeybindingScript = `# ssql field-completion keybinding — install with:
 #   eval "$(ssql -field-keybinding)"
 # Then inside a pipeline, at a field position, press Ctrl-O.
 # Rebind elsewhere by changing the bind lines at the bottom.
@@ -218,7 +218,4 @@ _ssql_complete_field() {
 
 # Bind in every keymap so it works whether you are in emacs or vi mode
 # (a bare bind installs only into the keymap active when sourced).
-bind -m emacs -x '"\C-o": _ssql_complete_field'
-bind -m vi-insert -x '"\C-o": _ssql_complete_field'
-bind -m vi-command -x '"\C-o": _ssql_complete_field'
-`
+` + KeyBindLines("_ssql_complete_field")

@@ -86,8 +86,10 @@ func TestCodeKeybindingEmitted(t *testing.T) {
 		"_ssql_show_go", "_ssql_show_help", "READLINE_LINE", "SSQL_MODE=typed",
 		"generate go", "display-popup", "$TMUX",
 		`bind -m emacs -x '"\eg": _ssql_show_go'`,
-		`bind -m vi-insert -x '"\eg": _ssql_show_go'`,
-		`bind -m vi-command -x '"\eg": _ssql_show_go'`,
+		`bind -m emacs -x '"\C-xg": _ssql_show_go'`,
+		`bind -m vi-insert -r '\eg'`,
+		`bind -m vi-insert -x '"\C-xg": _ssql_show_go'`,
+		`bind -m vi-command -x '"\C-xg": _ssql_show_go'`,
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("code keybinding script missing %q", want)
