@@ -12,6 +12,7 @@ import (
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/internal/pqcols"
 )
 
 // generateFromParquetCodeTyped emits a typed-mode init fragment for
@@ -109,6 +110,13 @@ func readParquetTypedSchema(filename string, columns []string) (*lib.TypedSchema
 		return nil, fmt.Errorf("reading Parquet schema: %w", err)
 	}
 
+	// A UUID column arrives as 16-byte binary; only the Parquet logical
+	// type says it is a UUID, which the typed reader then decodes as text.
+	isUUID := map[string]bool{}
+	for i, u := range pqcols.UUIDFields(pf, reader.Manifest) {
+		isUUID[arrowSchema.Field(i).Name] = u
+	}
+
 	// Optional column selection. Resolution is case-insensitive,
 	// matching the typed runtime.
 	var keep []arrow.Field
@@ -138,7 +146,7 @@ func readParquetTypedSchema(filename string, columns []string) (*lib.TypedSchema
 		} else {
 			usedNames[gn] = 1
 		}
-		gt, err := arrowToGoTypeName(af.Type)
+		gt, err := arrowToGoTypeName(af.Type, isUUID[af.Name])
 		if err != nil {
 			return nil, fmt.Errorf("column %q: %w", af.Name, err)
 		}
@@ -150,6 +158,7 @@ func readParquetTypedSchema(filename string, columns []string) (*lib.TypedSchema
 			Name:   af.Name,
 			GoName: gn,
 			GoType: gt,
+			JSON:   pqcols.Nested(af.Type),
 			Scale:  scale,
 		})
 	}
@@ -167,8 +176,15 @@ func readParquetTypedSchema(filename string, columns []string) (*lib.TypedSchema
 // arrowToGoTypeName maps an Arrow data type to the Go type identifier
 // the typed runtime expects. Mirrors the cases the parquet decoder
 // handles in typed/io_parquet.go.
-func arrowToGoTypeName(t arrow.DataType) (string, error) {
+func arrowToGoTypeName(t arrow.DataType, uuid bool) (string, error) {
+	if pqcols.Nested(t) {
+		return "string", nil // a nested value: its JSON text, the json wire type (DFC144 Level 0)
+	}
 	switch t.ID() {
+	case arrow.FIXED_SIZE_BINARY:
+		if uuid {
+			return "string", nil // a Parquet UUID: its canonical text
+		}
 	case arrow.STRING, arrow.LARGE_STRING:
 		return "string", nil
 	case arrow.BOOL:

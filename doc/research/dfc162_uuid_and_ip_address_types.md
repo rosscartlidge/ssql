@@ -65,6 +65,12 @@ pipeline knows the column holds addresses.
 
 ### Two Parquet bugs found while probing (independent of any decision)
 
+**Both fixed 2026-11-03.** The record and typed readers now map fields
+to leaves through `internal/pqcols`. A nested column reads as `json`, a
+map as an object as DuckDB writes it. A UUID column reads as its
+canonical text. The equivalence cases `parquet_nested_uuid` and
+`parquet_past_nested_columns` read a DuckDB-written file.
+
 1. **A Parquet `UUID` column reads as base64.** DuckDB writes `UUID` as
    `FIXED_LEN_BYTE_ARRAY(16)` with the UUID logical type. ssql reads it
    as raw bytes and prints `a6e4EJ2tEdGAtADAT9QwyA==` where the value

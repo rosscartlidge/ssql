@@ -24,6 +24,7 @@ import (
 	"github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	ssql "github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/internal/pqcols"
 )
 
 // ParquetOption configures a Parquet reader. Pass to [ReadParquet],
@@ -187,16 +188,8 @@ func readParquet[T any](r parquet.ReaderAtSeeker, o parquetOpts, rowYield func(T
 		return
 	}
 
-	arrowSchema, err := reader.Schema()
-	if err != nil {
-		if errYield != nil {
-			errYield(fmt.Errorf("typed.ReadParquet: schema: %w", err))
-		}
-		return
-	}
-
 	// Map struct fields to parquet columns.
-	plan, err := buildParquetReadPlan[T](arrowSchema, o)
+	plan, err := buildParquetReadPlan[T](pf, reader, o)
 	if err != nil {
 		if errYield != nil {
 			errYield(err)
@@ -254,7 +247,7 @@ func parquetFileProps(mem memory.Allocator) *parquet.ReaderProperties {
 // §3.8) where DataFusion, reading 8 k-row batches, used 1.7 GB. The
 // decoders copy what they keep, so a released batch is never referenced.
 func yieldParquetBatches[T any](ctx context.Context, reader *pqarrow.FileReader, plan *parquetReadPlan, rowGroups []int, yield func(T) bool) error {
-	rr, err := reader.GetRecordReader(ctx, plan.colIndices, rowGroups)
+	rr, err := reader.GetRecordReader(ctx, plan.leaves, rowGroups)
 	if err != nil {
 		return err
 	}
@@ -299,6 +292,9 @@ func yieldRecordRows[T any](rec arrow.Record, plan *parquetReadPlan, yield func(
 // from the file.
 type parquetReadPlan struct {
 	colIndices []int
+	// leaves are the Parquet leaf columns under colIndices, what the
+	// record reader takes: a nested field is several leaves (DFC162 §1).
+	leaves []int
 	// decoders[i] decodes Arrow column i (indexed against colIndices,
 	// not the raw Parquet schema) into a struct field at the given
 	// offset. nil decoder means "drop this column".
@@ -318,7 +314,12 @@ type parquetDecodeFn func(p unsafe.Pointer, arr arrow.Array, idx int)
 // matching Arrow column, and constructs a decoder that copies the
 // column's value into the struct field. Reflection happens here,
 // once.
-func buildParquetReadPlan[T any](sch *arrow.Schema, o parquetOpts) (*parquetReadPlan, error) {
+func buildParquetReadPlan[T any](pf *file.Reader, reader *pqarrow.FileReader, o parquetOpts) (*parquetReadPlan, error) {
+	sch, err := reader.Schema()
+	if err != nil {
+		return nil, fmt.Errorf("typed.ReadParquet: schema: %w", err)
+	}
+	uuid := pqcols.UUIDFields(pf, reader.Manifest)
 	var zero T
 	rt := reflect.TypeOf(zero)
 	if rt == nil || rt.Kind() != reflect.Struct {
@@ -367,7 +368,7 @@ func buildParquetReadPlan[T any](sch *arrow.Schema, o parquetOpts) (*parquetRead
 			// User asked to skip this column.
 			continue
 		}
-		dfn, err := parquetDecoderFor(sch.Field(idx).Type, f.Type)
+		dfn, err := parquetDecoderFor(sch.Field(idx).Type, uuid[idx], f.Type)
 		if err != nil {
 			return nil, fmt.Errorf("typed.ReadParquet: field %q: %w", name, err)
 		}
@@ -421,6 +422,7 @@ func buildParquetReadPlan[T any](sch *arrow.Schema, o parquetOpts) (*parquetRead
 		plan.colIndices[i] = p.colIdx
 		plan.decoders[i] = p.decoder
 	}
+	plan.leaves = pqcols.Leaves(reader.Manifest, plan.colIndices)
 	return plan, nil
 }
 
@@ -433,9 +435,16 @@ func buildParquetReadPlan[T any](sch *arrow.Schema, o parquetOpts) (*parquetRead
 // Pointer fields not yet supported in v1 — parquet schema would need
 // to track nullability and we'd need a "set if not null" path.
 // They're rare in typed pipelines and easy to add later.
-func parquetDecoderFor(arrowT arrow.DataType, structT reflect.Type) (parquetDecodeFn, error) {
+func parquetDecoderFor(arrowT arrow.DataType, uuid bool, structT reflect.Type) (parquetDecodeFn, error) {
 	if structT.Kind() == reflect.Pointer {
 		return nil, fmt.Errorf("pointer field types not yet supported in typed.ReadParquet")
+	}
+	if pqcols.Nested(arrowT) {
+		// A nested value is its JSON text in a string field (DFC144 Level 0).
+		if structT.Kind() != reflect.String {
+			return nil, fmt.Errorf("Parquet column is %v, struct field is %v (a nested column is a string holding its JSON)", arrowT, structT)
+		}
+		return decodeParquetNested, nil
 	}
 	switch arrowT.ID() {
 	case arrow.STRING, arrow.LARGE_STRING:
@@ -484,6 +493,15 @@ func parquetDecoderFor(arrowT arrow.DataType, structT reflect.Type) (parquetDeco
 			return nil, fmt.Errorf("Parquet column is %v, struct field is %v (a DECIMAL(p,0) column is an ssql.Int128, a DECIMAL(p,s) an ssql.Decimal)", arrowT, structT)
 		}
 		return decodeParquetInt128, nil
+	case arrow.FIXED_SIZE_BINARY:
+		// A UUID column (the Parquet logical type) is its canonical text.
+		if !uuid {
+			return nil, fmt.Errorf("unsupported Arrow column type %v", arrowT)
+		}
+		if structT.Kind() != reflect.String {
+			return nil, fmt.Errorf("Parquet column is a UUID, struct field is %v (must be string)", structT)
+		}
+		return decodeParquetUUID, nil
 	default:
 		return nil, fmt.Errorf("unsupported Arrow column type %v", arrowT)
 	}
@@ -522,6 +540,14 @@ func decodeParquetString(p unsafe.Pointer, arr arrow.Array, idx int) {
 	case *array.LargeString:
 		*(*string)(p) = a.Value(idx)
 	}
+}
+
+func decodeParquetUUID(p unsafe.Pointer, arr arrow.Array, idx int) {
+	*(*string)(p) = pqcols.UUIDString(arr.(*array.FixedSizeBinary).Value(idx))
+}
+
+func decodeParquetNested(p unsafe.Pointer, arr arrow.Array, idx int) {
+	*(*string)(p) = pqcols.JSON(arr, idx)
 }
 
 func decodeParquetBool(p unsafe.Pointer, arr arrow.Array, idx int) {
@@ -712,11 +738,9 @@ func readParquetUnitsParallel[T any](op string, files []string, consts [][]Parqu
 		if plan == nil {
 			reader, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator)
 			if err == nil {
-				var sch *arrow.Schema
-				if sch, err = reader.Schema(); err == nil {
-					plan, err = buildParquetReadPlan[T](sch, o)
-					for _, f := range sch.Fields() {
-						fileCols[strings.ToLower(f.Name)] = true
+				if plan, err = buildParquetReadPlan[T](pf, reader, o); err == nil {
+					for _, f := range reader.Manifest.Fields {
+						fileCols[strings.ToLower(f.Field.Name)] = true
 					}
 				}
 			}

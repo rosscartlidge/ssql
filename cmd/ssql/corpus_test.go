@@ -92,6 +92,16 @@ func corpusBin(t *testing.T) string {
 	return corpusBinPath
 }
 
+// repoTestdata is a file of the repository's testdata directory, for
+// the corpus data map.
+func repoTestdata(name string) string {
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", name))
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
 // corpusData writes the shared test data files (employees, customers,
 // orders) into a temp dir and returns the path. The files are small
 // (<60 rows) so each pipeline round-trip stays fast.
@@ -138,6 +148,9 @@ func corpusData(t *testing.T) string {
 			"pq/c.parquet":                     corpusParquet(true, pqRow{4, "fay", "east", 15}),
 			"pqbad/other.parquet":              corpusParquet(false, pqRow{8, "gil", "", 1}),
 			"pqhive/region=north/data.parquet": corpusParquet(false, pqRow{6, "hal", "", 9}, pqRow{3, "gus", "", 2.5}),
+			// Struct, UUID, list and map columns written by DuckDB: six fields
+			// over eight leaves (DFC162 §1); see parquet_nested_test.go.
+			"nested_uuid.parquet": repoTestdata("nested_uuid.parquet"),
 			// A second region for `from catalog -hive` (DFC149): the glob
 			// reads both, the derived region column prunes to one; and a
 			// layout whose files already carry a region column (a clash).

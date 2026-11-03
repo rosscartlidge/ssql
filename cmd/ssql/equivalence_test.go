@@ -458,12 +458,13 @@ func equivDialectSQL(t *testing.T, dialect, bin, pipeline string, env []string) 
 
 // datafusionRunner executes the SQL on stdin with the DataFusion Python
 // bindings and prints one JSON object per row (dates and other non-JSON
-// values as strings, the way ssql reads them from CSV).
+// values as strings, the way ssql reads them from CSV; a map as an
+// object, as the other lanes write it, where to_pylist gives pairs).
 const datafusionRunner = `import json, sys
 from datafusion import SessionContext, SessionConfig
 ctx = SessionContext(SessionConfig().set("datafusion.catalog.has_header", "true")).enable_url_table()
 sql = sys.stdin.read().strip().rstrip(";")
-for row in ctx.sql(sql).to_pylist():
+for row in ctx.sql(sql).to_arrow_table().to_pylist(maps_as_pydicts="strict"):
     print(json.dumps(row, default=str))
 `
 
@@ -1800,6 +1801,33 @@ var equivCases = []EquivCase{
 			{"region": "east", "total": 23.75, "n": 2},
 			{"region": "north", "total": 52.5, "n": 2},
 			{"region": "south", "total": 24.75, "n": 2}},
+	},
+	{
+		// Nested and UUID columns (DFC162 §1): the readers took field
+		// indices where pqarrow takes leaf indices, so every column past
+		// the struct was wrong or gone (the map panicked), and the UUID
+		// read as base64. A struct, list or map is its JSON (a map an
+		// object, as DuckDB writes it), the UUID its canonical text; the
+		// DuckDB lane reads the file itself, an independent oracle.
+		Name:     "parquet_nested_uuid",
+		Pipeline: `{{.bin}} from parquet {{.data}}/nested_uuid.parquet | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"n": 1, "s": map[string]any{"x": 10, "y": "a"}, "u": "6ba7b810-9dad-11d1-80b4-00c04fd430c8", "l": []any{1, 2}, "mp": map[string]any{"k": 1}, "m": 100},
+			{"n": 2, "s": map[string]any{"x": 20, "y": "b"}, "l": []any{}, "mp": map[string]any{}, "m": 200}},
+		Skip: map[string]string{
+			"go-typed":    "typed cannot hold the null UUID: it reads as \"\" (DFC124 §3)",
+			"go-parallel": "typed cannot hold the null UUID: it reads as \"\" (DFC124 §3)",
+			"datafusion":  "DataFusion has no UUID type: a Parquet UUID reads as 16-byte binary (DFC162 §2)",
+		},
+	},
+	{
+		// The columns past the struct, projected in a non-file order, with
+		// no null so the typed lanes run too.
+		Name:     "parquet_past_nested_columns",
+		Pipeline: `{{.bin}} from parquet {{.data}}/nested_uuid.parquet -columns m -columns mp -columns n | {{.bin}} sort m`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"m": 100, "mp": map[string]any{"k": 1}, "n": 1}, {"m": 200, "mp": map[string]any{}, "n": 2}},
 	},
 	{
 		// An explicit list with -columns in a non-file order: the

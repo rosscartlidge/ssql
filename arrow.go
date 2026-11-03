@@ -16,6 +16,7 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/decimal128"
 	"github.com/apache/arrow/go/v18/arrow/ipc"
 	"github.com/apache/arrow/go/v18/arrow/memory"
+	"github.com/rosscartlidge/ssql/v4/internal/pqcols"
 )
 
 // ReadArrow reads an Arrow IPC file and returns an iterator of Records.
@@ -189,6 +190,10 @@ func arrowValueToGo(arr arrow.Array, idx int) any {
 		return a.Value(idx).ToTime()
 	case *array.Date64:
 		return a.Value(idx).ToTime()
+	case *array.Struct, *array.List, *array.LargeList, *array.FixedSizeList, *array.Map:
+		// A nested value is its JSON text (DFC144 Level 0), as from json
+		// reads one; a map is an object, as DuckDB writes it.
+		return JSONString(pqcols.JSON(a, idx))
 	default:
 		// For unsupported types, return string representation
 		return fmt.Sprintf("%v", arr.ValueStr(idx))

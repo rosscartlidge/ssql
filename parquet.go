@@ -18,6 +18,7 @@ import (
 	"github.com/apache/arrow/go/v18/parquet/compress"
 	"github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/rosscartlidge/ssql/v4/internal/pqcols"
 )
 
 // ReadParquet reads a Parquet file and returns an iterator of Records.
@@ -203,20 +204,32 @@ func readParquetFromReaderWithColumns(r parquet.ReaderAtSeeker, columns []string
 		rowGroups = append(rowGroups, i)
 	}
 
+	// pqarrow reads by LEAF column: a nested field is several leaves, and
+	// field indices read the wrong columns past the first one (DFC162 §1).
+	leaves := pqcols.Leaves(reader.Manifest, colIndices)
+
 	if h, ok := r.(*HTTPFile); ok {
-		if err := h.Prefetch(parquetChunkRanges(pf, arrowSchema, colIndices, rowGroups, h.Size())); err != nil {
+		if err := h.Prefetch(parquetChunkRanges(pf, leaves, rowGroups, h.Size())); err != nil {
 			return nil, fmt.Errorf("reading Parquet column chunks: %w", err)
 		}
 		defer h.DropPrefetched()
 	}
 
-	tbl, err := reader.ReadRowGroups(ctx, colIndices, rowGroups)
+	tbl, err := reader.ReadRowGroups(ctx, leaves, rowGroups)
 	if err != nil {
 		return nil, fmt.Errorf("reading Parquet row groups: %w", err)
 	}
 
 	resultSchema := tbl.Schema()
 	ssqlSchema := arrowSchemaToSSQLSchema(resultSchema)
+	// A UUID column arrives as 16 raw bytes; it reads as its canonical text.
+	uuidField := pqcols.UUIDFields(pf, reader.Manifest)
+	isUUID := make([]bool, resultSchema.NumFields())
+	for col := range isUUID {
+		if i := arrowSchema.FieldIndices(resultSchema.Field(col).Name); len(i) > 0 {
+			isUUID[col] = uuidField[i[0]]
+		}
+	}
 
 	return func(yield func(Record) bool) {
 		defer tbl.Release()
@@ -234,7 +247,9 @@ func readParquetFromReaderWithColumns(r parquet.ReaderAtSeeker, columns []string
 					if offset < chunk.Len() {
 						if !chunk.IsNull(offset) {
 							idx := ssqlSchema.Index(resultSchema.Field(col).Name)
-							if idx >= 0 {
+							if idx >= 0 && isUUID[col] {
+								values[idx] = pqcols.UUIDString(chunk.(*array.FixedSizeBinary).Value(offset))
+							} else if idx >= 0 {
 								values[idx] = arrowValueToGo(chunk, offset)
 							}
 						}
@@ -252,24 +267,14 @@ func readParquetFromReaderWithColumns(r parquet.ReaderAtSeeker, columns []string
 }
 
 // parquetChunkRanges lists the byte range of every column chunk the
-// reader is about to read: the leaf columns under the selected fields,
-// in every selected row group. The range is the one arrow's
+// reader is about to read: the given leaf columns, in every selected
+// row group. The range is the one arrow's
 // RowGroupReader computes (dictionary page first when it precedes the
 // data, plus the PARQUET-816 padding for old parquet-mr files), so
 // arrow's own ReadAt lands inside it.
-func parquetChunkRanges(pf *file.Reader, sch *arrow.Schema, colIndices, rowGroups []int, size int64) []ByteRange {
+func parquetChunkRanges(pf *file.Reader, leaves, rowGroups []int, size int64) []ByteRange {
 	const maxDictHeaderSize = 100 // arrow's PARQUET-816 padding
-	selected := make(map[string]bool, len(colIndices))
-	for _, i := range colIndices {
-		selected[sch.Field(i).Name] = true
-	}
 	md := pf.MetaData()
-	var leaves []int
-	for j := 0; j < md.Schema.NumColumns(); j++ {
-		if path := md.Schema.Column(j).ColumnPath(); len(path) > 0 && selected[path[0]] {
-			leaves = append(leaves, j)
-		}
-	}
 	var ranges []ByteRange
 	for _, rg := range rowGroups {
 		rgMeta := md.RowGroup(rg)
@@ -467,6 +472,9 @@ func parquetSchemaFieldsFromReader(r parquet.ReaderAtSeeker) ([]string, map[stri
 
 // wireTypeForArrow maps an arrow type to the ssql wire-type vocabulary.
 func wireTypeForArrow(t arrow.DataType) string {
+	if pqcols.Nested(t) {
+		return "json" // the reader yields a JSONString (DFC144 Level 0)
+	}
 	switch t.ID() {
 	case arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
 		arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64:

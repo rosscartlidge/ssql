@@ -81,6 +81,12 @@ Nothing is parsed that you do not use. A pipeline that only sorts and
 writes never opens the JSON; a stage that names something inside it
 does, once per row, for that field only.
 
+Columnar files arrive the same way. A Parquet or Arrow struct, list or
+map column is a `json` field: a struct is an object in field order, a
+list an array, and a map an object keyed by its keys' text, which is
+what DuckDB's `to_json` writes. A Parquet UUID column is its canonical
+text (`6ba7b810-9dad-11d1-80b4-00c04fd430c8`).
+
 ## 3. Looking inside: dotted paths
 
 Wherever a command takes a **field name**, a dotted path names something

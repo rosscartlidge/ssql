@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Parquet files with a struct, list or map column read correctly.** The readers gave pqarrow top-level field indices where it takes leaf-column indices. A nested field is several leaves, so every column after the first nested one was read wrong, without an error. A struct lost fields, a later column disappeared, and a map column panicked the reader. Both the record reader and the typed (serial and parallel) readers now map fields to their leaves ([DFC162](doc/research/dfc162_uuid_and_ip_address_types.md) §1).
+- **A nested Parquet or Arrow column is a `json` value**, as `from json` reads one ([DFC144](doc/research/dfc144_non_scalar_values.md) Level 0). Before, it was a string of Arrow's text. A struct is an object in field order, a list an array, and a map an object keyed by its keys' text, as DuckDB's `to_json` writes it (Arrow's own text gave a map as a list of key/value pairs). Typed codegen gives such a column a string field holding the JSON. Before, it refused the file.
+- **A Parquet UUID column reads as its canonical text** (`6ba7b810-9dad-11d1-80b4-00c04fd430c8`), not base64, in every lane.
+
 ## [4.137.1] - 2026-11-03
 
 ### Fixed
