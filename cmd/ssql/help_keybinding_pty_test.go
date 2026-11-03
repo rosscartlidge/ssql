@@ -59,8 +59,20 @@ def run(vi):
     else:
         got = fire(b"\x1bh")
         ok = "Sum field values" in got and "-sumh" not in got
-    got = fire(b"\x18h")
-    ok = ok and "Sum field values" in got and "-sumh" not in got
+    # Ctrl-X, a pause a person leaves, then h: vi-insert binds Ctrl-X
+    # itself (self-insert), and an ambiguous prefix waits only
+    # keyseq-timeout before inserting ^X (Ross, 2026-11-03: "you havent
+    # set the ^X combinations in vi-insert mode").
+    def ctrl_x_h():
+        os.write(fd, b"\x18"); time.sleep(0.3)
+        got = fire(b"h")
+        return "Sum field values" in got and "-sumh" not in got
+    # vi: ESC h left insert mode, so this is vi-command; then back into
+    # insert mode with a, where Ctrl-X is the ambiguous one.
+    ok = ok and ctrl_x_h()
+    if vi:
+        os.write(fd, b"a"); time.sleep(0.3); drain()
+        ok = ok and ctrl_x_h()
     os.write(fd, b"\x03\n"); time.sleep(0.2); os.close(fd)
     return ok
 

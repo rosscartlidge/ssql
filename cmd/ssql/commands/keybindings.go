@@ -64,6 +64,14 @@ func KeyBindLines(fn string) string {
 			vi = kb.ViSeq
 			fmt.Fprintf(&b, "bind -m emacs -x '\"%s\": %s'\n", kb.ViSeq, fn)
 		}
+		if strings.HasPrefix(kb.ViSeq, `\C-x`) {
+			// vi-insert binds Ctrl-X itself (self-insert), so Ctrl-X h is
+			// ambiguous there: readline waits only keyseq-timeout for the
+			// h and then inserts ^X (Ross, 2026-11-03). Unbind it while it
+			// is still that plain default — removing it once ssql's keys
+			// hang off it would remove them too.
+			b.WriteString(`bind -m vi-insert -p 2>/dev/null | grep -qxF '"\C-x": self-insert' && bind -m vi-insert -r '\C-x'` + "\n")
+		}
 		if kb.ViSeq != "" {
 			// A shell that sourced an older script holds the ESC key in
 			// the vi maps; re-sourcing this one takes it back.
