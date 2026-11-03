@@ -169,6 +169,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC159 | 2026-10-30 | 2026-11-02 | [ssql for Rust Programmers: Pipelines as DataFusion Programs](./dfc159_ssql_for_rust_programmers.md) |
 | DFC160 | 2026-10-31 | 2026-11-02 | [ssql and DuckDB, Feature by Feature: Where Things Stand (October 2026)](./dfc160_duckdb_feature_comparison_2026_10.md) |
 | DFC161 | 2026-10-31 | 2026-11-03 | [Graph Traversal: `traverse`, a Join Run to a Fixpoint](./dfc161_graph_traversal_join_follow.md) |
+| DFC162 | 2026-11-03 | 2026-11-03 | [UUIDs and IP Addresses: Functions, Types, or Neither](./dfc162_uuid_and_ip_address_types.md) |
 
 <!-- DFC-INDEX-END -->
 

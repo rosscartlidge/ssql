@@ -8,6 +8,20 @@ Last modified: 2026-11-03
 
 Tracked issues and feature gaps discovered during development.
 
+## Bugs found 2026-11-03 (DFC162 §1)
+
+- [ ] **Parquet struct column silently shifts or drops columns.**
+  `readParquetFromReaderWithColumns` (`parquet.go`) hands top-level
+  field indices to `pqarrow`'s `ReadRowGroups`, which wants leaf-column
+  indices. `{x:1,y:'q'} t, 7 n` reads `t` with no `n`, and
+  `7 n, {x,y} t` reads `t = {"x":1}`. Map fields to leaves by
+  `ColumnPath()[0]` as `parquetChunkRanges` does, and test with a
+  struct in the middle of the file. Also check the typed readers.
+- [ ] **Parquet UUID logical type reads as base64.** DuckDB's `UUID` is
+  `FIXED_LEN_BYTE_ARRAY(16)` + UUID. It should read as the canonical
+  `8-4-4-4-12` string.
+- [ ] UUID and IP functions or types: proposal DFC162, awaiting Ross.
+
 ## Multi-file `from` (see multi-file-from.md)
 
 - [x] **Phase 1: Core multi-file support** — `ssql from csv *.csv` with `-merge-schemas` and `-source`. Supports csv, tsv, json, jsonl.
