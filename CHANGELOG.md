@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.137.2] - 2026-11-03
+
 ### Fixed
 
 - **Parquet files with a struct, list or map column read correctly.** The readers gave pqarrow top-level field indices where it takes leaf-column indices. A nested field is several leaves, so every column after the first nested one was read wrong, without an error. A struct lost fields, a later column disappeared, and a map column panicked the reader. Both the record reader and the typed (serial and parallel) readers now map fields to their leaves ([DFC162](doc/research/dfc162_uuid_and_ip_address_types.md) §1).
