@@ -550,6 +550,26 @@ func sqlInt128Type() string {
 	return "HUGEINT"
 }
 
+// sqlInetType is the IP address type (DFC162): DuckDB's INET (its inet
+// extension), Postgres's inet. DataFusion has none: a query with an inet
+// column is refused whole (sqlRefuseInet), so its name is never run there.
+func sqlInetType() string {
+	if sqlDialectCur == dialectPostgres {
+		return "inet"
+	}
+	return "INET"
+}
+
+// sqlInetText renders an inet value as the engines' text: DuckDB's
+// VARCHAR cast prints a full-length prefix bare; Postgres's ::text adds
+// /32 or /128, abbrev() does not (measured 2026-11-04).
+func sqlInetText(x string) string {
+	if sqlDialectCur == dialectPostgres {
+		return "abbrev(" + x + ")"
+	}
+	return "CAST(" + x + " AS VARCHAR)"
+}
+
 // sqlDecimalType is the fixed-point type of the scale per dialect:
 // DECIMAL(38,S) on DuckDB and DataFusion, NUMERIC(38,S) on Postgres
 // (DFC155 E; the Postgres and DataFusion lanes are documented, not gated).
@@ -829,6 +849,8 @@ func pgColumnType(typeName, inferred string) string {
 		return sqlTimestampType()
 	case "string":
 		return "TEXT"
+	case "inet":
+		return "inet"
 	}
 	return inferred
 }

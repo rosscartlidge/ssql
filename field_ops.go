@@ -83,6 +83,9 @@ func sameKind(a, b any) bool {
 	case time.Time:
 		_, ok := b.(time.Time)
 		return ok
+	case Inet:
+		_, ok := b.(Inet)
+		return ok
 	}
 	return false
 }
@@ -97,6 +100,8 @@ func kindName(v any) string {
 		return "bool"
 	case time.Time:
 		return "time"
+	case Inet:
+		return "inet"
 	}
 	return fmt.Sprintf("%T", v)
 }
@@ -147,6 +152,9 @@ func ValueOp(a any, op string, b any) bool {
 func compareTyped(a, b any) (int, bool) {
 	if c, ok := exactNumCmp(a, b); ok {
 		return c, true // integers of either width and decimals, exactly (DFC155 C, E)
+	}
+	if c, ok := inetCmp(a, b); ok {
+		return c, true // addresses in the engines' order, never as text (DFC162)
 	}
 	if af, ok := toFloat(a); ok {
 		bf, ok := toFloat(b)
@@ -245,6 +253,9 @@ func (e *CompareError) Error() string {
 		if kind == "int" || kind == "float" {
 			kind = "number"
 		}
+		if kind == "inet" {
+			return fmt.Sprintf("where: operator %s needs a text field, and %s is an inet (ipin(x, \"10.0.0.0/8\") tests membership; string(x) is its text)", e.Op, where)
+		}
 		return fmt.Sprintf("where: operator %s needs a text field, and %s is a %s", e.Op, where, kind)
 	}
 	switch e.Kind {
@@ -254,6 +265,8 @@ func (e *CompareError) Error() string {
 		return fmt.Sprintf("where: %s is a bool but %q is not true or false (operator %s)", where, e.Value, e.Op)
 	case "time":
 		return fmt.Sprintf("where: %s is a time but %q is not (use a form like 2026-01-31 or 2026-01-31T10:30:00Z)", where, e.Value)
+	case "inet":
+		return fmt.Sprintf("where: %s is an inet but %q is not an IP address or prefix (operator %s)", where, e.Value, e.Op)
 	}
 	return fmt.Sprintf("where: %s is a %s but %q is not", where, e.Kind, e.Value)
 }
@@ -301,6 +314,20 @@ func LiteralOp(v any, op, literal string) (bool, error) {
 			return false, &CompareError{Op: op, Value: literal, Kind: "int128"}
 		}
 		return ValueOp(x.Float64(), op, f), nil
+	case Inet:
+		// An inet field reads its literal as an address or a prefix
+		// (DFC162): `ip lt 10.0.0.0` in the engines' order, never as text.
+		if literal == "" {
+			return false, nil
+		}
+		if isStringOp(op) {
+			return false, &CompareError{Op: op, Value: literal, Kind: "inet"}
+		}
+		p, err := ParseInet(literal)
+		if err != nil {
+			return false, &CompareError{Op: op, Value: literal, Kind: "inet"}
+		}
+		return ValueOp(x, op, p), nil
 	case Decimal:
 		// A decimal field compares with its literal exactly (DFC155 E):
 		// `-if amt gt 0.15` reads 0.15 as a decimal, never as a float.

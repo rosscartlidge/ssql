@@ -285,8 +285,22 @@ func checkedArith(checked func(a, b int64) (int64, error), wide func(a, b Int128
 		if fa, fb, ok := exprWideFloat(a, b); ok {
 			return own(fa, fb), nil
 		}
+		if err := exprInetArith(a, b); err != nil {
+			return nil, err
+		}
 		return own(a, b), nil
 	}
+}
+
+// exprInetArith refuses arithmetic with an inet operand by name, where
+// expr's own error says only "invalid operation" (DFC162).
+func exprInetArith(a, b any) error {
+	for _, v := range []any{a, b} {
+		if x, ok := v.(Inet); ok {
+			return inetNoArithmetic("arithmetic", x)
+		}
+	}
+	return nil
 }
 
 // checkedDivide is `/`: a float result for every numeric pair, as expr's
@@ -303,6 +317,9 @@ func checkedDivide(params ...any) (any, error) {
 	if fa, fb, ok := exprWideFloat(a, b); ok {
 		return runtime.Divide(fa, fb), nil
 	}
+	if err := exprInetArith(a, b); err != nil {
+		return nil, err
+	}
 	return runtime.Divide(a, b), nil
 }
 
@@ -317,6 +334,9 @@ func checkedModulo(params ...any) (any, error) {
 	if x, y, ok := exprDecimalPair(a, b); ok {
 		return x.CheckedRem(y) // at the larger scale, the sign of the dividend
 	}
+	if err := exprInetArith(a, b); err != nil {
+		return nil, err
+	}
 	return runtime.Modulo(a, b), nil
 }
 
@@ -324,6 +344,9 @@ func checkedModulo(params ...any) (any, error) {
 // nearest float64.
 func checkedPower(params ...any) (any, error) {
 	a, b := exprDeref(params[0]), exprDeref(params[1])
+	if err := exprInetArith(a, b); err != nil {
+		return nil, err
+	}
 	if f, ok := exactToFloat(a); ok {
 		a = f
 	}
@@ -341,25 +364,33 @@ func checkedCompare(op string, own func(a, b any) bool) func(...any) (any, error
 	return func(params ...any) (any, error) {
 		a, b := exprDeref(params[0]), exprDeref(params[1])
 		if c, ok := exactNumCmp(a, b); ok {
-			switch op {
-			case "==":
-				return c == 0, nil
-			case "!=":
-				return c != 0, nil
-			case "<":
-				return c < 0, nil
-			case "<=":
-				return c <= 0, nil
-			case ">":
-				return c > 0, nil
-			}
-			return c >= 0, nil
+			return cmpHolds(op, c), nil
+		}
+		if c, ok, err := exprInetCmp(a, b); ok || err != nil {
+			return ok && cmpHolds(op, c), err // an address in the engines' order (DFC162)
 		}
 		if fa, fb, ok := exprWideFloat(a, b); ok {
 			return own(fa, fb), nil
 		}
 		return own(a, b), nil
 	}
+}
+
+// cmpHolds applies a comparison operator to a three-way result.
+func cmpHolds(op string, c int) bool {
+	switch op {
+	case "==":
+		return c == 0
+	case "!=":
+		return c != 0
+	case "<":
+		return c < 0
+	case "<=":
+		return c <= 0
+	case ">":
+		return c > 0
+	}
+	return c >= 0
 }
 
 // exprBuiltinFuncs is expr's own builtins by name, for the patched
@@ -488,6 +519,9 @@ func wideAbs(args []any) (any, bool, error) {
 func wideExtreme(dir int) func(args []any) (any, bool, error) {
 	name := map[int]string{-1: "min", 1: "max"}[dir]
 	return func(args []any) (any, bool, error) {
+		if v, handled, err := inetExtreme(name, dir, args); handled {
+			return v, true, err
+		}
 		hasWide, hasDec := false, false
 		for _, a := range args {
 			switch a.(type) {
@@ -544,6 +578,31 @@ func wideExtreme(dir int) func(args []any) (any, bool, error) {
 		}
 		return best, true, nil
 	}
+}
+
+// inetExtreme is min/max with an inet among the arguments: every one an
+// address (an inet, or text that parses), the extreme by Compare.
+func inetExtreme(name string, dir int, args []any) (any, bool, error) {
+	has := false
+	for _, a := range args {
+		if _, ok := a.(Inet); ok {
+			has = true
+		}
+	}
+	if !has {
+		return nil, false, nil
+	}
+	var best Inet
+	for i, a := range args {
+		x, err := ExprInetArg(name, "argument", a)
+		if err != nil {
+			return nil, true, err
+		}
+		if i == 0 || x.Compare(best) == dir {
+			best = x
+		}
+	}
+	return best, true, nil
 }
 
 // exprWidePair reports an integer pair with an Int128 on at least one

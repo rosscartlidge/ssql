@@ -115,12 +115,10 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				if of.Desc {
 					lhs, rhs = rhs, lhs
 				}
-				switch f.GoType {
-				case "time.Time":
-					fmt.Fprintf(&cmp, "if %s.Before(%s) { return -1 }; if %s.After(%s) { return 1 }; ", lhs, rhs, lhs, rhs)
-				case "ssql.Int128", "ssql.Decimal": // not cmp.Ordered: the comparator form (DFC155 C, E)
-					fmt.Fprintf(&cmp, "if c := %s.Cmp(%s); c != 0 { return c }; ", lhs, rhs)
-				case "string":
+				switch m := goCompareMethod(f.GoType); {
+				case m != "": // not cmp.Ordered: the comparator form (DFC155 C, E; DFC162)
+					fmt.Fprintf(&cmp, "if c := %s.%s(%s); c != 0 { return c }; ", lhs, m, rhs)
+				case f.GoType == "string":
 					// One byte comparison per call: `<` then `>` compared
 					// twice on every "greater" (10 s of the benchmark's sort).
 					fmt.Fprintf(&cmp, "if c := strings.Compare(%s, %s); c != 0 { return c }; ", lhs, rhs)

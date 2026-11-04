@@ -6,7 +6,7 @@ Last modified: 2026-11-04
 
 [Back to Index](./README.md)
 
-Status: **survey, 2026-11-03. The UUID functions are built (2026-11-04, §8); the IP part awaits a decision.**
+Status: **survey, 2026-11-03. Built 2026-11-04: the UUID functions (§8) and the `inet` type with the IP functions (§9).**
 
 ## 0. The prompt
 
@@ -437,6 +437,102 @@ Ross: "lets do uuid 4, 5 and 7". All three, at once, with no type
   VARCHAR)`). Now a literal, a text column or a string-valued function
   on either side makes it `||` (`sqlStringOperand`), with an
   equivalence case of its own (`expr_string_concat`).
+
+## 9. Built, 2026-11-04: the `inet` type (I2) and the IP functions
+
+Ross chose I2, a type from day one (§6 Q3), with the core functions;
+DataFusion refuses (§6 Q4). In plan mode he also decided that `ipint`
+is two's complement (every IPv6 address has a value and maps back, so it
+is not a sort key past 2^127); that `ipkey` has a width per family (19
+characters for IPv4, 67 for IPv6); that `ipnet` returns an inet; and that
+Postgres refuses `ipint`.
+
+### 9.1 The type
+
+- **`ssql.Inet`** (`inet.go`) wraps a `netip.Prefix`. An address is its
+  full-length prefix; a prefix keeps its host bits. It is comparable, so
+  it is a map key and a typed struct field with no key transform.
+- **The order is `netip.Prefix.Compare`,** measured equal to DuckDB's and
+  Postgres's: family, the masked address, the length, the address.
+- **The wrapper exists for `String()`.** netip prints `::1.2.3.4` as
+  `::102:304` and a full-length prefix with its `/32`; both engines print
+  `::1.2.3.4` and the bare address. With the engines' text in `String()`,
+  every `%v` default in the code base prints correctly by construction,
+  and the zero value prints as `""`.
+- **Declared, never inferred,** like `decimal:S`: `-type`, `cast`, a
+  `_schema` header, a sidecar `ssqlType`, `inet(x)`.
+- **No arithmetic,** refused by name in every lane: exec's sums, the VM's
+  operators, typed aggregation, SQL translation.
+- **A string beside an inet is read as an address** (`LiteralOp`, the VM
+  comparison patch, transpiled literals hoisted and validated at
+  generation, SQL `CAST('…' AS INET)`). An unparseable one is an error.
+
+### 9.2 Lane by lane
+
+- **Exec and record:**
+  - comparisons in `inetCmp` (CompareAny, compareTyped, numericLess);
+  - keys by the canonical text or the value;
+  - `aggCompare` for `-min`/`-max`;
+  - the VM's `checkedCompare` and `min`/`max`;
+  - record codegen's `where -if` through `CompareLiteral`.
+- **Typed:**
+  - `goCompareMethod` is the one table of how a non-ordered Go type
+    compares, read by sort, top, window and the group-by extremes;
+  - `exprGoInet` in the transpiler;
+  - decoders and encoders in `typed/io.go`, the fast JSONL reader and
+    Parquet.
+- **SQL:**
+  - The column is INET inside the query and text at the output. On
+    DuckDB the final SELECT is wrapped in a REPLACE that casts each inet
+    column to VARCHAR, because `duckdb -json` prints an INET as a struct
+    that is not JSON. The wrap is a subquery, whose order DuckDB keeps;
+    an outer ORDER BY would bind the text alias and sort as text.
+  - Postgres prints the abbreviated text already; its explicit form is
+    `abbrev()`, since `::text` adds `/32`.
+  - DataFusion refuses any query with an inet column, and `generate
+    rust` with it.
+
+### 9.3 Gotchas, for the next type
+
+- **DuckDB folds `x >= a AND x < b` into BETWEEN,** which INET does not
+  implement ("Invalid type for BETWEEN", 1.5). Inet range comparisons
+  are emitted as `(…) IS TRUE`, which it does not fold.
+- **DuckDB's INET→STRUCT cast is undocumented:** `address` is the value
+  for IPv4 and the value − 2^127 for IPv6. `ipint` and `ipkey` read it,
+  and `TestInetExec/duckdb_inet_struct_cast` pins it.
+- **DuckDB folded `2^127 − 1 + 1` to an overflow** before adding the
+  address, so −2^127 is spelled `(-(2^127 − 1) - 1)`.
+- **`hex()` of a negative HUGEINT** is its 32-digit two's complement;
+  of a positive one, the shortest form, so the result is `lpad`ded.
+- **Python's `ipaddress` prints neither engine form** (`::ffff:102:304`),
+  so the goldens apply the engine text rules themselves.
+- **DuckDB and Postgres accept `010.0.0.1`;** netip refuses it, and so
+  does ssql. This is documented, not gated.
+
+### 9.4 Bugs the census found (none inet-specific; all fixed, each with a test)
+
+The inet build touched every place a scalar type is switched on, and seven
+were already wrong for the types before it:
+
+1. `from jsonl -type` silently dropped a converted decimal or time:
+   `setAny` had no arm for either. `fill` and `unpivot` stringified them
+   the same way. All three now go through `setScalar`, the one
+   set-by-type helper.
+2. `update -set-expr x 'decimal(x)'` retyped the values but not the
+   header, so the next stage read the old type.
+3. Typed `top -field` on a decimal or a time column emitted `typed.TopBy`,
+   which needs `cmp.Ordered`, and did not compile.
+4. Record codegen's native `update` setter table had no int128 or decimal
+   entry, and emitted `mut.(…)`.
+5. Typed `from ssh` gave a time field the default `""`, which did not
+   compile.
+6. `sort -spill` refused int128 and decimal columns.
+7. `generate sql`'s `rename` dropped a column's kind.
+
+Every one is the same shape: a type switch, or a table keyed by Go type
+name, that a newer type was never added to. That shape is the subject of
+the DFC Ross asked for next: a type × operation matrix and a lint for
+partial type switches.
 
 ## 7. Related
 

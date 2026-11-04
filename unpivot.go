@@ -1,7 +1,6 @@
 package ssql
 
 import (
-	"fmt"
 	"iter"
 	"sort"
 )
@@ -77,27 +76,10 @@ func UnpivotRecords(records iter.Seq[Record], cfg UnpivotConfig) iter.Seq[Record
 }
 
 // setAnyField writes v with the builder's typed setter for its dynamic
-// type (canonical scalars int64/float64/string/bool; anything else is
-// formatted).
+// type (setScalar: a time, a decimal or an inet keeps its type; it was
+// formatted as text until 2026-11-04).
 func setAnyField(m MutableRecord, field string, v any) MutableRecord {
-	switch x := v.(type) {
-	case string:
-		return m.String(field, x)
-	case int64:
-		return m.Int(field, x)
-	case int:
-		return m.Int(field, int64(x))
-	case float64:
-		return m.Float(field, x)
-	case bool:
-		return m.Bool(field, x)
-	case Record:
-		return m.Nested(field, x)
-	case JSONString:
-		return m.JSONString(field, x) // a nested value stays json (it was stringified until 2026-10-09)
-	default:
-		return m.String(field, fmt.Sprintf("%v", x))
-	}
+	return setScalar(m, field, v)
 }
 
 // UnpivotFilter is the filter-shaped form for generated code.

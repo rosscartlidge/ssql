@@ -83,7 +83,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		// -invalid missing the typed lane's "missing" is the zero value
 		// (DFC124 §3), which the lenient closures below already produce.
 		if f.GoType == "string" && !invalidMissing {
-			if target, ok := map[string]string{"int64": "ssql.FieldTypeInt", "float64": "ssql.FieldTypeFloat", "bool": "ssql.FieldTypeBool", "ssql.Int128": "ssql.FieldTypeInt128"}[cf.newGoT]; ok {
+			if target, ok := map[string]string{"int64": "ssql.FieldTypeInt", "float64": "ssql.FieldTypeFloat", "bool": "ssql.FieldTypeBool", "ssql.Int128": "ssql.FieldTypeInt128", "ssql.Inet": "ssql.FieldTypeInet"}[cf.newGoT]; ok {
 				timeImports = append(timeImports, "github.com/rosscartlidge/ssql/v4")
 				assigns = append(assigns, fmt.Sprintf("%s: ssql.MustCast[%s](r.%s, %s, %q)", out.GoName, cf.newGoT, f.GoName, target, f.Name))
 				continue
@@ -169,6 +169,8 @@ func castTargetGoType(t ssql.FieldType) (string, error) {
 		return "time.Time", nil
 	case ssql.FieldTypeInt128:
 		return "ssql.Int128", nil
+	case ssql.FieldTypeInet:
+		return "ssql.Inet", nil
 	}
 	if t.IsDecimal() {
 		return "ssql.Decimal", nil // the scale rides on the derived field (DFC155 E)
@@ -181,7 +183,7 @@ func castTargetGoType(t ssql.FieldType) (string, error) {
 func schemaUsesInt128(s *lib.TypedSchema) bool {
 	for _, f := range s.Fields {
 		switch strings.TrimPrefix(f.GoType, "*") {
-		case "ssql.Int128", "ssql.Decimal":
+		case "ssql.Int128", "ssql.Decimal", "ssql.Inet":
 			return true
 		}
 	}
@@ -203,6 +205,13 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		return "", false, fmt.Errorf("a decimal target needs its scale (castExpressionTo)")
 	}
 	switch to {
+	case "ssql.Inet":
+		// Text to an address (DFC162): strict casts go through MustCast
+		// above; this lenient form (-invalid missing) gives the zero value,
+		// the typed lane's missing. Nothing else is an address.
+		if from == "string" {
+			return fmt.Sprintf("func() ssql.Inet { v, _ := ssql.ParseInet(%s); return v }()", expr), false, nil
+		}
 	case "ssql.Int128":
 		// The widening cast (DFC155 C): an integer through Int128From, a
 		// float or a string through MustInt128 (a *CastError, never a wrap;
@@ -227,7 +236,7 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		switch from {
 		case "int64":
 			return fmt.Sprintf("strconv.FormatInt(%s, 10)", expr), true, nil
-		case "ssql.Int128", "ssql.Decimal":
+		case "ssql.Int128", "ssql.Decimal", "ssql.Inet":
 			return fmt.Sprintf("%s.String()", expr), false, nil
 		case "int", "int32":
 			return fmt.Sprintf("strconv.FormatInt(int64(%s), 10)", expr), true, nil

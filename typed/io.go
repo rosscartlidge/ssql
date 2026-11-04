@@ -26,6 +26,10 @@ var int128Type = reflect.TypeOf(ssql.Int128{})
 // the scale is the field tag's option: `ssql:"price,decimal:2"`.
 var decimalType = reflect.TypeOf(ssql.Decimal{})
 
+// inetType is the `inet` column's struct field type (DFC162): an address
+// or a prefix, its text in a cell.
+var inetType = reflect.TypeOf(ssql.Inet{})
+
 // fieldDecoder writes one CSV column into a struct field at a known offset.
 // The closure has zero reflection at call time.
 type fieldDecoder func(p unsafe.Pointer, s string) error
@@ -308,6 +312,19 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 			return nil
 		}, nil
 	}
+	if t == inetType {
+		return func(p unsafe.Pointer, s string) error {
+			if s == "" {
+				return errEmptyCell
+			}
+			v, err := ssql.ParseInet(s)
+			if err != nil {
+				return err
+			}
+			*(*ssql.Inet)(unsafe.Add(p, off)) = v
+			return nil
+		}, nil
+	}
 	if t == int128Type {
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
@@ -554,6 +571,11 @@ func encoderFor(t reflect.Type, off uintptr, timeFormat string) (fieldEncoder, e
 	if t == decimalType {
 		return func(p unsafe.Pointer) string {
 			return (*(*ssql.Decimal)(unsafe.Add(p, off))).String()
+		}, nil
+	}
+	if t == inetType {
+		return func(p unsafe.Pointer) string {
+			return (*(*ssql.Inet)(unsafe.Add(p, off))).String() // "" for no value
 		}, nil
 	}
 	if t == timeType {

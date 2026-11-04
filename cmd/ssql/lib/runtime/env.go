@@ -180,6 +180,20 @@ func MustCoerceInt128(v any, expression string) ssql.Int128 {
 	return ssql.Int128{}
 }
 
+// MustCoerceInet is an inet result, or text that parses as one (DFC162).
+func MustCoerceInet(v any, expression string) ssql.Inet {
+	switch x := v.(type) {
+	case ssql.Inet:
+		return x
+	case string:
+		if p, err := ssql.ParseInet(x); err == nil {
+			return p
+		}
+	}
+	coerceFail(v, "ssql.Inet", expression)
+	return ssql.Inet{}
+}
+
 func MustCoerceString(v any, expression string) string {
 	if x, ok := v.(string); ok {
 		return x

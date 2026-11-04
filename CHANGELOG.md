@@ -10,8 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **UUID functions: `uuid4()`, `uuid5(ns, name)` and `uuid7()`.** `uuid4()` is a random id and `uuid7()` a time-ordered one, whose text sorts by creation to the millisecond. `uuid5(ns, name)` is the name-based UUID: the same inputs give the same id in every lane, on every run, and in Python's `uuid.uuid5`. `ns` is `dns`, `url`, `oid`, `x500` or any UUID. A UUID is its canonical lower-case text: no type is needed, because that text sorts in 128-bit order. All three work in exec and `generate go` (record, typed, parallel). In `generate sql`, `uuid4()` translates in every dialect, and `uuid7()` and `uuid5()` translate on DuckDB; Postgres and DataFusion refuse them ([DFC162](doc/research/dfc162_uuid_and_ip_address_types.md) §8).
+- **An `inet` column type for IP addresses and prefixes.** Declare it with `-type ip inet` on `from csv/tsv/json/jsonl`, `cast -type ip inet`, a `_schema` header, a sidecar, or `inet(x)`; it is never inferred. An inet column sorts, compares, groups, joins and takes min/max as an address, in DuckDB's and Postgres's order (IPv4 before IPv6, then network, prefix length, address), where text put `10.0.0.9` before `9.0.0.1`. `10.0.0.1` and `10.0.0.1/32` are one value, as are `::1` and `0:0:0:0:0:0:0:1`; a prefix keeps its host bits. A literal beside an inet is read as an address (`where -if ip lt 10.0.0.0`). It has no arithmetic: `-sum`, `-avg`, `ip + 1` and a cast to a number are errors. Files hold it as text. Works in exec and `generate go` (record, typed, parallel), and in `generate sql` on DuckDB and Postgres; DataFusion and `generate rust` refuse it ([DFC162](doc/research/dfc162_uuid_and_ip_address_types.md) §9).
+- **IP functions:** `isip(s)`, `ip(x)` (canonical text), `inet(x)`, `ipfamily(x)`, `ipint(x)` (the address as an int128, IPv6 in two's complement), `ipkey(x)` (a text key in inet order), `ipnet(x, bits)` (the network, an inet) and `ipin(x, prefix)`. `ssql functions -category ip` lists them. `ipint` is refused on Postgres.
 
 ### Fixed
+
+- **`from jsonl -type F decimal:S` and `-type F time` left the column as text**, with no error: the converted value was dropped. `fill` and `unpivot` likewise turned a time or a decimal into text. All three now set a value by its own type through one helper.
+- **`update -set-expr x 'decimal(x)'` (or `inet(x)`) retyped the values but not the header,** so the next stage read the column as its old type (an inet column sorted as text). The header now follows the value an expression writes into an existing column.
+- **Typed `top -field` on a decimal or a time column generated Go that did not compile** (`typed.TopBy` needs an ordered type). Sort, top, window and group-by extremes now read one table of how each type compares.
+- **Record codegen for `update -set-expr` with an int128 or decimal result** could emit a call with no setter name, which did not compile; such a result now takes the expression engine's path.
+- **Typed `from ssh` with a time column** generated a field default that did not compile.
+- **`sort -spill` refused int128 and decimal columns**; it now spills them.
+- **`generate sql`: `rename` dropped a column's known kind,** so a renamed int lost DataFusion's checked arithmetic.
 
 - **`generate sql`: `+` on strings is `||`.** `"x" + string(n)` was emitted as a numeric `+`, which DuckDB rejects. A string literal, a text column or a string-valued function on either side now makes it concatenation, in every dialect.
 

@@ -79,6 +79,8 @@ func (o TypeOptions) goTypeFor(column string) (string, bool) {
 		return "bool", true
 	case "time":
 		return "time.Time", true
+	case "inet":
+		return "ssql.Inet", true // DFC162: a comparable netip.Prefix wrapper
 	case "json":
 		// A nested value is its JSON text in the typed lane (as a json
 		// field from a JSONL header); the typed→Record boundary re-wraps
@@ -519,6 +521,8 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 			goType = "string"
 		case "time":
 			goType = "time.Time"
+		case TypeInet:
+			goType = "ssql.Inet" // DFC162: comparable, ordered by Compare
 		case "json":
 			// A nested value is its JSON text in the typed lane (the fast
 			// JSONL decoder takes raw JSON into a string field); the

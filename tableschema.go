@@ -390,6 +390,8 @@ func sidecarFieldType(name, typeName, format string, uts35 bool) (FieldType, str
 		return FieldTypeInt, "", "", nil
 	case "int128", "hugeint":
 		return FieldTypeInt128, "", "", nil
+	case "inet":
+		return FieldTypeInet, "", "", nil // ssqlType "inet" (DFC162); Frictionless says string
 	case "number", "decimal", "double", "float":
 		return FieldTypeFloat, "", "", nil
 	case "boolean", "bool":
@@ -428,7 +430,7 @@ func sidecarFieldType(name, typeName, format string, uts35 bool) (FieldType, str
 // (int128), which the readers prefer when present.
 func sidecarFieldJSON(f TableField) map[string]any {
 	m := map[string]any{"name": f.Name, "type": TableTypeName(f)}
-	if f.Type == FieldTypeInt128 || f.Type.IsDecimal() {
+	if f.Type == FieldTypeInt128 || f.Type.IsDecimal() || f.Type == FieldTypeInet {
 		m["ssqlType"] = f.Type.String()
 	}
 	return m
@@ -453,8 +455,8 @@ func TableTypeName(f TableField) string {
 			return f.Shape
 		}
 		return "any"
-	case FieldTypeString:
-		return "string"
+	case FieldTypeString, FieldTypeInet:
+		return "string" // an inet is text to Frictionless; ssqlType keeps the type
 	}
 	return "any"
 }
@@ -602,6 +604,10 @@ func TableFieldsFromRecords(records iter.Seq[Record], known map[string]FieldType
 		case JSONString:
 			if f.Type == FieldTypeAuto {
 				f.Type, f.Shape = FieldTypeJSON, jsonShape(x)
+			}
+		case Inet:
+			if f.Type == FieldTypeAuto {
+				f.Type = FieldTypeInet
 			}
 		case string:
 			if f.Type == FieldTypeAuto {

@@ -633,6 +633,11 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 		return applyValueToRecord(mut, field, value), false
 	}
 
+	if v, isInet := value.(ssql.Inet); isInet {
+		// inet(x) into a text column declares it (DFC162): the column
+		// retypes, as a decimal result does — never coerced back to text.
+		return mut.Inet(field, v), false
+	}
 	if d, isDec := value.(ssql.Decimal); isDec {
 		if _, colIsDec := existingValue.(ssql.Decimal); !colIsDec {
 			// A decimal result into a column of another type: the column
@@ -704,6 +709,19 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 		// A nested field takes a nested result (or whatever the expression
 		// produced, by its own type); there is no coercion into JSON text.
 		return applyValueToRecord(mut, field, value), false
+
+	case ssql.Inet:
+		// An inet column takes an address: an inet, or text that parses
+		// as one. Anything else is the cast's error, never text silently
+		// written into an address column (DFC162).
+		if v, ok := value.(ssql.Inet); ok {
+			return mut.Inet(field, v), false
+		}
+		out, ok := ssql.CastValue(value, ssql.FieldTypeInet)
+		if !ok {
+			panic(&ssql.CastError{Field: field, Value: value, Target: ssql.FieldTypeInet})
+		}
+		return mut.Inet(field, out.(ssql.Inet)), true
 
 	default:
 		// Unknown existing type, apply with natural type
@@ -858,6 +876,8 @@ func applyValueToRecord(mut ssql.MutableRecord, field string, value any) ssql.Mu
 		return mut.Int128(field, v)
 	case ssql.Decimal:
 		return mut.Decimal(field, v)
+	case ssql.Inet:
+		return mut.Inet(field, v)
 	case float64:
 		return mut.Float(field, v)
 	case bool:

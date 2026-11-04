@@ -145,6 +145,10 @@ func init() {
 	gob.Register(float64(0))
 	gob.Register(false)
 	gob.Register("")
+	// the struct scalars cross through their Text/Binary marshalers
+	gob.Register(Int128{})
+	gob.Register(Decimal{})
+	gob.Register(Inet{})
 }
 
 func writeSpillRun(path string, run []Record) error {
@@ -158,7 +162,7 @@ func writeSpillRun(path string, run []Record) error {
 		sr := spillRecord{Keys: make([]string, 0, r.Len()), Values: make([]any, 0, r.Len())}
 		for k, v := range r.All() {
 			switch v.(type) {
-			case nil, string, int64, float64, bool, time.Time, JSONString, int:
+			case nil, string, int64, float64, bool, time.Time, JSONString, int, Int128, Decimal, Inet:
 			default:
 				f.Close()
 				os.Remove(path)

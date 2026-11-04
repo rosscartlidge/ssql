@@ -166,6 +166,8 @@ func auxTypeString(v any) string {
 		return "bool"
 	case time.Time:
 		return "time"
+	case ssql.Inet:
+		return lib.TypeInet
 	default:
 		return "string"
 	}

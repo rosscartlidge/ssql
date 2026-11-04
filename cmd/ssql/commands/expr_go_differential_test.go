@@ -55,6 +55,8 @@ func TestExprGoDifferential(t *testing.T) {
 		"round(price, 1)", "round(pop, 1)", "isnan(sqrt(pop))", "isinf(1.0 / qty)", "isfinite(ln(price))",
 		"gcd(pop, qty)", "lcm(pop, qty)", "factorial(qty)", "gamma(price)", "lgamma(price)",
 		"hash(pop)", "hash(pop, 7)", "hash(qty, pop)", "hash(pop, -3)", "md5(city)", "sha1(city)", "sha256(city)",
+		"ip(ip)", "ipfamily(ip)", "ipint(ip)", "ipkey(ip)", "ipnet(ip, 8)", `ipin(ip, "10.0.0.0/8")`, "isip(city)", "isip(ip)", // DFC162
+		`ip > "10.0.0.5"`, `ip == "10.0.0.9/32"`, `"::" <= ip`, "string(ip)", `inet("10.0.0.9") == ip`, `ipnet(ip, 16) < ip`,
 		`uuid5("dns", city)`, `uuid5("6BA7B811-9DAD-11D1-80B4-00C04FD430C8", city + "!")`, // DFC162; uuid4/uuid7 are random
 		"-pop",
 		`city + "!"`,
@@ -215,6 +217,7 @@ type Row struct {
 	Date   string // named like the date() builtin
 	When   time.Time
 	Amt    ssql.Decimal // the decimal:2 column (DFC155 E)
+	Ip     ssql.Inet    // the inet column (DFC162)
 }
 
 func mustTime(s string) time.Time {
@@ -229,10 +232,10 @@ func mustTime(s string) time.Time {
 // truncation, abs), ±2.5 (round half away from zero), a zero divisor (+Inf
 // parity), multi-byte runes (len), mixed case and affixes (string ops).
 var rows = []Row{
-	{Pop: 7, Price: 2.5, Qty: 2, City: "Oslo", Active: true, Date: "2026-01-05", When: mustTime("2026-01-04T23:30:00Z"), Amt: ssql.MustParseDecimal("2.50")},
-	{Pop: -3, Price: -2.5, Qty: 3, City: "cairo", Active: false, Date: "2026-02-02", When: mustTime("2026-01-31T12:00:00+11:00"), Amt: ssql.MustParseDecimal("-0.05")},
-	{Pop: 20, Price: 15.5, Qty: 0, City: " héllo ", Active: true, Date: "", When: mustTime("2024-02-29T20:15:30-05:00"), Amt: ssql.MustParseDecimal("1234.56")},
-	{Pop: 0, Price: 0, Qty: 1, City: "Ao", Active: false, Date: "2026-02-28", When: mustTime("2026-04-05T02:30:00+11:00"), Amt: ssql.MustParseDecimal("0.00")},
+	{Pop: 7, Price: 2.5, Qty: 2, City: "Oslo", Active: true, Date: "2026-01-05", When: mustTime("2026-01-04T23:30:00Z"), Amt: ssql.MustParseDecimal("2.50"), Ip: ssql.MustParseInet("10.0.0.9")},
+	{Pop: -3, Price: -2.5, Qty: 3, City: "cairo", Active: false, Date: "2026-02-02", When: mustTime("2026-01-31T12:00:00+11:00"), Amt: ssql.MustParseDecimal("-0.05"), Ip: ssql.MustParseInet("2001:db8::1")},
+	{Pop: 20, Price: 15.5, Qty: 0, City: " héllo ", Active: true, Date: "", When: mustTime("2024-02-29T20:15:30-05:00"), Amt: ssql.MustParseDecimal("1234.56"), Ip: ssql.MustParseInet("10.0.0.1/24")},
+	{Pop: 0, Price: 0, Qty: 1, City: "Ao", Active: false, Date: "2026-02-28", When: mustTime("2026-04-05T02:30:00+11:00"), Amt: ssql.MustParseDecimal("0.00"), Ip: ssql.MustParseInet("fe80::1")},
 }
 
 %s
@@ -275,6 +278,7 @@ func main() {
 			String("date", r.Date).
 			Time("when", r.When).
 			Decimal("amt", r.Amt).
+			Inet("ip", r.Ip).
 			Freeze()
 	}
 	fail := 0

@@ -89,6 +89,8 @@ func aggResult(context string, v any) AggregateResult {
 		return AggResult[bool]{val: x}
 	case time.Time:
 		return AggResult[time.Time]{val: x}
+	case Inet:
+		return AggResult[Inet]{val: x}
 	case JSONString:
 		return AggResult[JSONString]{val: x}
 	}
@@ -107,7 +109,7 @@ func aggValue(context string, v any) any {
 		return x
 	case float64, float32:
 		return toFloat64(v)
-	case string, bool, time.Time:
+	case string, bool, time.Time, Inet:
 		return x
 	}
 	if js, ok := NestedValue(v); ok {
@@ -216,6 +218,12 @@ func aggCompare(name string, a, b any) (int, error) {
 			return -1, nil
 		}
 		return 0, nil
+	case Inet:
+		y, ok := b.(Inet)
+		if !ok {
+			return 0, fmt.Errorf("%s: mixed types %T and %T", name, a, b)
+		}
+		return x.Compare(y), nil
 	}
 	if !isNumeric(a) || !isNumeric(b) {
 		return 0, fmt.Errorf("%s: cannot order %T and %T", name, a, b)

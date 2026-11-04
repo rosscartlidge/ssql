@@ -159,6 +159,15 @@ func equivFollowDuckDBOnly() map[string]string {
 	return map[string]string{"datafusion": why, "postgres": why}
 }
 
+// equivInetPending skips the lanes the inet type (DFC162 §9) does not
+// reach yet; each unit of the build deletes its lanes from here.
+// DataFusion (and the rust lane after it) refuses inet by design.
+func equivInetPending() map[string]string {
+	return map[string]string{
+		"datafusion": "DataFusion has no inet type: generate sql refuses by design",
+	}
+}
+
 // equivCommon is a filtered to the names also in b, keeping a's order.
 func equivCommon(a, b []string) []string {
 	in := make(map[string]bool, len(b))
@@ -3158,6 +3167,302 @@ var equivCases = []EquivCase{
 		Ordered:  true,
 		Golden:   []map[string]any{{"n": 1, "s": "356a192b7913b04c54574d18c28d46e6395428ab"}, {"n": 2, "s": "da4b9237bacccdf19c0760cab7aec4a8359010b0"}},
 		Skip:     map[string]string{"postgres": "Postgres has sha1 only through pgcrypto: generate sql refuses by design"},
+	},
+	{
+		// DFC162: an inet column sorts in the engines' order (family, network,
+		// prefix length, address), never as text: 9.0.0.1 before 10.0.0.0/8,
+		// ::1.2.3.4 between ::1 and ::ffff:1.2.3.4. Golden from Python's
+		// ipaddress with the engines' text rules (scratch inet_golden.py).
+		Name:     "inet_cast_sort",
+		Pipeline: `{{.bin}} from csv {{.data}}/ips.csv | {{.bin}} cast -type ip inet | {{.bin}} sort ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "9.0.0.1", "n": 4},
+			{"ip": "10.0.0.0/8", "n": 10},
+			{"ip": "10.0.0.0/16", "n": 2},
+			{"ip": "10.0.0.1/24", "n": 6},
+			{"ip": "10.0.0.1", "n": 8},
+			{"ip": "10.0.0.1", "n": 14},
+			{"ip": "10.0.0.9", "n": 12},
+			{"ip": "192.168.0.2", "n": 1},
+			{"ip": "::1", "n": 9},
+			{"ip": "::1", "n": 13},
+			{"ip": "::1.2.3.4", "n": 3},
+			{"ip": "::ffff:1.2.3.4", "n": 11},
+			{"ip": "2001:db8::1", "n": 5},
+			{"ip": "fe80::1", "n": 7},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		Name:     "inet_sort_desc",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} sort -desc ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "fe80::1", "n": 7},
+			{"ip": "2001:db8::1", "n": 5},
+			{"ip": "::ffff:1.2.3.4", "n": 11},
+			{"ip": "::1.2.3.4", "n": 3},
+			{"ip": "::1", "n": 13},
+			{"ip": "::1", "n": 9},
+			{"ip": "192.168.0.2", "n": 1},
+			{"ip": "10.0.0.9", "n": 12},
+			{"ip": "10.0.0.1", "n": 14},
+			{"ip": "10.0.0.1", "n": 8},
+			{"ip": "10.0.0.1/24", "n": 6},
+			{"ip": "10.0.0.0/16", "n": 2},
+			{"ip": "10.0.0.0/8", "n": 10},
+			{"ip": "9.0.0.1", "n": 4},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		Name:     "inet_top",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} top 3 -field ip`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "fe80::1", "n": 7},
+			{"ip": "2001:db8::1", "n": 5},
+			{"ip": "::ffff:1.2.3.4", "n": 11},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// The literal is read as an address, in the field's order.
+		Name:     "inet_where_literal_lt",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} where -if ip lt 10.0.0.1 | {{.bin}} sort ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "9.0.0.1", "n": 4},
+			{"ip": "10.0.0.0/8", "n": 10},
+			{"ip": "10.0.0.0/16", "n": 2},
+			{"ip": "10.0.0.1/24", "n": 6},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		Name:     "inet_where_prefix_literal",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} where -if ip ge 10.0.0.0/8 -if ip lt 11.0.0.0 | {{.bin}} sort ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "10.0.0.0/8", "n": 10},
+			{"ip": "10.0.0.0/16", "n": 2},
+			{"ip": "10.0.0.1/24", "n": 6},
+			{"ip": "10.0.0.1", "n": 8},
+			{"ip": "10.0.0.1", "n": 14},
+			{"ip": "10.0.0.9", "n": 12},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// 10.0.0.1 and 10.0.0.1/32 are one key, ::1 and 0:0:0:0:0:0:0:1 one key;
+		// 10.0.0.1/24 is another (host bits are kept).
+		Name:     "inet_groupby_key_spellings",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} group-by ip -count c -min n lo -max n hi | {{.bin}} sort ip`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "9.0.0.1", "c": 1, "lo": 4, "hi": 4},
+			{"ip": "10.0.0.0/8", "c": 1, "lo": 10, "hi": 10},
+			{"ip": "10.0.0.0/16", "c": 1, "lo": 2, "hi": 2},
+			{"ip": "10.0.0.1/24", "c": 1, "lo": 6, "hi": 6},
+			{"ip": "10.0.0.1", "c": 2, "lo": 8, "hi": 14},
+			{"ip": "10.0.0.9", "c": 1, "lo": 12, "hi": 12},
+			{"ip": "192.168.0.2", "c": 1, "lo": 1, "hi": 1},
+			{"ip": "::1", "c": 2, "lo": 9, "hi": 13},
+			{"ip": "::1.2.3.4", "c": 1, "lo": 3, "hi": 3},
+			{"ip": "::ffff:1.2.3.4", "c": 1, "lo": 11, "hi": 11},
+			{"ip": "2001:db8::1", "c": 1, "lo": 5, "hi": 5},
+			{"ip": "fe80::1", "c": 1, "lo": 7, "hi": 7},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		Name:     "inet_extremes",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} group-by -min ip lo -max ip hi -count c`,
+		Golden: []map[string]any{
+			{"lo": "9.0.0.1", "hi": "fe80::1", "c": 14},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		Name:     "inet_distinct_spellings",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} include ip | {{.bin}} distinct | {{.bin}} sort ip`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "9.0.0.1"},
+			{"ip": "10.0.0.0/8"},
+			{"ip": "10.0.0.0/16"},
+			{"ip": "10.0.0.1/24"},
+			{"ip": "10.0.0.1"},
+			{"ip": "10.0.0.9"},
+			{"ip": "192.168.0.2"},
+			{"ip": "::1"},
+			{"ip": "::1.2.3.4"},
+			{"ip": "::ffff:1.2.3.4"},
+			{"ip": "2001:db8::1"},
+			{"ip": "fe80::1"},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// The right side spells the keys differently (10.0.0.9/32, ::0:1).
+		Name:     "inet_join_key_spellings",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} join <({{.bin}} from csv -type ip inet {{.data}}/ips_right.csv) -on ip ip | {{.bin}} sort ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "10.0.0.0/8", "n": 10, "host": "net"},
+			{"ip": "10.0.0.9", "n": 12, "host": "gw"},
+			{"ip": "::1", "n": 9, "host": "lo"},
+			{"ip": "::1", "n": 13, "host": "lo"},
+			{"ip": "2001:db8::1", "n": 5, "host": "web"},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// Back to text: the canonical spelling, sorted as text.
+		Name:     "inet_cast_to_string",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} cast -type ip string | {{.bin}} sort ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "10.0.0.0/16", "n": 2},
+			{"ip": "10.0.0.0/8", "n": 10},
+			{"ip": "10.0.0.1", "n": 8},
+			{"ip": "10.0.0.1", "n": 14},
+			{"ip": "10.0.0.1/24", "n": 6},
+			{"ip": "10.0.0.9", "n": 12},
+			{"ip": "192.168.0.2", "n": 1},
+			{"ip": "2001:db8::1", "n": 5},
+			{"ip": "9.0.0.1", "n": 4},
+			{"ip": "::1", "n": 9},
+			{"ip": "::1", "n": 13},
+			{"ip": "::1.2.3.4", "n": 3},
+			{"ip": "::ffff:1.2.3.4", "n": 11},
+			{"ip": "fe80::1", "n": 7},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// DFC162: the IP functions over text, Golden from Python's ipaddress;
+		// ipint of fe80::1 is negative (two's complement), ipnet an inet.
+		Name:     "expr_ip_functions",
+		Pipeline: `{{.bin}} from csv {{.data}}/ips.csv | {{.bin}} update -set-expr c 'ip(ip)' -set-expr f 'ipfamily(ip)' -set-expr i 'ipint(ip)' -set-expr net 'ipnet(ip, 8)' -set-expr in10 'ipin(ip, "10.0.0.0/8")' | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "192.168.0.2", "n": 1, "c": "192.168.0.2", "f": 4, "i": 3232235522, "net": "192.0.0.0/8", "in10": false},
+			{"ip": "10.0.0.0/16", "n": 2, "c": "10.0.0.0/16", "f": 4, "i": 167772160, "net": "10.0.0.0/8", "in10": true},
+			{"ip": "::1.2.3.4", "n": 3, "c": "::1.2.3.4", "f": 6, "i": 16909060, "net": "::/8", "in10": false},
+			{"ip": "9.0.0.1", "n": 4, "c": "9.0.0.1", "f": 4, "i": 150994945, "net": "9.0.0.0/8", "in10": false},
+			{"ip": "2001:DB8::1", "n": 5, "c": "2001:db8::1", "f": 6, "i": json.Number("42540766411282592856903984951653826561"), "net": "2000::/8", "in10": false},
+			{"ip": "10.0.0.1/24", "n": 6, "c": "10.0.0.1/24", "f": 4, "i": 167772161, "net": "10.0.0.0/8", "in10": true},
+			{"ip": "fe80::1", "n": 7, "c": "fe80::1", "f": 6, "i": json.Number("-1993841993677373809355710590420516863"), "net": "fe00::/8", "in10": false},
+			{"ip": "10.0.0.1", "n": 8, "c": "10.0.0.1", "f": 4, "i": 167772161, "net": "10.0.0.0/8", "in10": true},
+			{"ip": "0:0:0:0:0:0:0:1", "n": 9, "c": "::1", "f": 6, "i": 1, "net": "::/8", "in10": false},
+			{"ip": "10.0.0.0/8", "n": 10, "c": "10.0.0.0/8", "f": 4, "i": 167772160, "net": "10.0.0.0/8", "in10": true},
+			{"ip": "::ffff:1.2.3.4", "n": 11, "c": "::ffff:1.2.3.4", "f": 6, "i": 281470698652420, "net": "::/8", "in10": false},
+			{"ip": "10.0.0.9", "n": 12, "c": "10.0.0.9", "f": 4, "i": 167772169, "net": "10.0.0.0/8", "in10": true},
+			{"ip": "::1", "n": 13, "c": "::1", "f": 6, "i": 1, "net": "::/8", "in10": false},
+			{"ip": "10.0.0.1/32", "n": 14, "c": "10.0.0.1", "f": 4, "i": 167772161, "net": "10.0.0.0/8", "in10": true},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// ipkey's text order is inet's order.
+		Name:     "expr_ipkey_sorts_like_inet",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} update -set-expr k 'ipkey(ip)' | {{.bin}} sort k n | {{.bin}} include ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "9.0.0.1", "n": 4},
+			{"ip": "10.0.0.0/8", "n": 10},
+			{"ip": "10.0.0.0/16", "n": 2},
+			{"ip": "10.0.0.1/24", "n": 6},
+			{"ip": "10.0.0.1", "n": 8},
+			{"ip": "10.0.0.1", "n": 14},
+			{"ip": "10.0.0.9", "n": 12},
+			{"ip": "192.168.0.2", "n": 1},
+			{"ip": "::1", "n": 9},
+			{"ip": "::1", "n": 13},
+			{"ip": "::1.2.3.4", "n": 3},
+			{"ip": "::ffff:1.2.3.4", "n": 11},
+			{"ip": "2001:db8::1", "n": 5},
+			{"ip": "fe80::1", "n": 7},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		Name:     "expr_ipnet_groupby",
+		Pipeline: `{{.bin}} from csv {{.data}}/ips.csv | {{.bin}} update -set-expr net 'ipnet(ip, 8)' | {{.bin}} group-by net -count c | {{.bin}} sort net`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"net": "9.0.0.0/8", "c": 1},
+			{"net": "10.0.0.0/8", "c": 6},
+			{"net": "192.0.0.0/8", "c": 1},
+			{"net": "::/8", "c": 4},
+			{"net": "2000::/8", "c": 1},
+			{"net": "fe00::/8", "c": 1},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		Name:     "expr_ipin_where",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} where -if-expr 'ipin(ip, "10.0.0.0/8") and ip != "10.0.0.0/8"' | {{.bin}} sort ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "10.0.0.0/16", "n": 2},
+			{"ip": "10.0.0.1/24", "n": 6},
+			{"ip": "10.0.0.1", "n": 8},
+			{"ip": "10.0.0.1", "n": 14},
+			{"ip": "10.0.0.9", "n": 12},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		Name:     "expr_isip_guard",
+		Pipeline: `{{.bin}} from csv {{.data}}/ips.csv | {{.bin}} update -set-expr a 'isip(string(n) + ".0.0.1")' -set-expr b 'isip("x" + string(n))' | {{.bin}} group-by a b -count c`,
+		Golden: []map[string]any{
+			{"a": true, "b": false, "c": 14},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// inet(x) retypes the column, so the next stage sorts addresses, not text
+		// (the header said string until 2026-11-04).
+		Name:     "expr_inet_ctor_sorts",
+		Pipeline: `{{.bin}} from csv {{.data}}/ips.csv | {{.bin}} update -set-expr ip 'inet(ip)' | {{.bin}} sort ip n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "9.0.0.1", "n": 4},
+			{"ip": "10.0.0.0/8", "n": 10},
+			{"ip": "10.0.0.0/16", "n": 2},
+			{"ip": "10.0.0.1/24", "n": 6},
+			{"ip": "10.0.0.1", "n": 8},
+			{"ip": "10.0.0.1", "n": 14},
+			{"ip": "10.0.0.9", "n": 12},
+			{"ip": "192.168.0.2", "n": 1},
+			{"ip": "::1", "n": 9},
+			{"ip": "::1", "n": 13},
+			{"ip": "::1.2.3.4", "n": 3},
+			{"ip": "::ffff:1.2.3.4", "n": 11},
+			{"ip": "2001:db8::1", "n": 5},
+			{"ip": "fe80::1", "n": 7},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// top on a type that is not cmp.Ordered: typed codegen emitted
+		// typed.TopBy for a decimal or a time column, which did not
+		// compile, until goCompareMethod (2026-11-04, found by DFC162's
+		// inet work).
+		Name:     "top_decimal_field",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} top 2 -field amt`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"k": "b", "amt": json.Number("12.35")}, {"k": "a", "amt": json.Number("0.3")}},
+		Decimals: []string{"amt"},
+	},
+	{
+		Name:     "top_time_field",
+		Pipeline: `{{.bin}} from csv {{.data}}/mixed_times.csv -type ts time | {{.bin}} top 2 -field ts`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "ts": "2026-03-01T00:00:00Z"}, {"id": 3, "ts": "2026-02-01T00:00:00Z"}},
 	},
 	{
 		// + on strings is concatenation, || in SQL: a literal, a cast and

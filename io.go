@@ -69,6 +69,7 @@ const (
 	FieldTypeTime                    // Parse as time.Time (ParseTime's forms); the `time` wire type (DFC128 D1)
 	FieldTypeJSON                    // A nested value (array or object) held as its JSON text, a JSONString; the `json` wire type (DFC144 Level 0)
 	FieldTypeInt128                  // Parse as Int128: the `int128` wire type, DuckDB's HUGEINT (DFC155 C)
+	FieldTypeInet                    // Parse as Inet: the `inet` wire type, an IP address or prefix (DFC162 §4 I2)
 
 	// FieldTypeDecimal is the flag bit of a `decimal:S` type: the scale
 	// rides in the low bits (DecimalType, Scale), so a FieldType in flight
@@ -155,8 +156,10 @@ func ParseFieldType(s string) (FieldType, error) {
 		return FieldTypeJSON, nil
 	case "int128", "hugeint":
 		return FieldTypeInt128, nil
+	case "inet":
+		return FieldTypeInet, nil
 	default:
-		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, int128, decimal:S, float, bool, time, json)", s)
+		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, int128, decimal:S, float, bool, time, json, inet)", s)
 	}
 }
 
@@ -180,6 +183,8 @@ func (ft FieldType) String() string {
 		return "json"
 	case FieldTypeInt128:
 		return "int128"
+	case FieldTypeInet:
+		return "inet"
 	default:
 		return "auto"
 	}
@@ -514,6 +519,8 @@ func inferJSONFieldType(value any) FieldType {
 		return FieldTypeInt128 // a literal past int64: exact, never a double
 	case Decimal:
 		return DecimalType(x.Scale())
+	case Inet:
+		return FieldTypeInet
 	case bool:
 		return FieldTypeBool
 	case string:
@@ -540,6 +547,11 @@ func coerceToType(value any, targetType FieldType) any {
 		}
 	}
 	switch targetType {
+	case FieldTypeInet:
+		if out, ok := CastValue(value, targetType); ok {
+			return out
+		}
+		return value // unparsable input keeps its value, as a time does
 	case FieldTypeTime:
 		// Unparsable input keeps its value: a header that says `time`
 		// must not turn a string it cannot read into a zero time.
@@ -1202,6 +1214,8 @@ func inferJSONType(v any) string {
 		return "json"
 	case time.Time:
 		return "time" // the wire type (DFC128 D1); was "string" until DFC147
+	case Inet:
+		return "inet"
 	default:
 		return "string"
 	}
@@ -1589,6 +1603,8 @@ func formatValueIn(value any, timeFormat string) string {
 	case Int128:
 		return v.String()
 	case Decimal:
+		return v.String()
+	case Inet:
 		return v.String()
 	case float32:
 		return strconv.FormatFloat(float64(v), 'g', -1, 32)
@@ -2817,7 +2833,7 @@ func convertRecordValueForJSON(v any) any {
 			result[k] = convertRecordValueForJSON(subv)
 		}
 		return result
-	case int64, float64, bool, string, nil, Int128, Decimal:
+	case int64, float64, bool, string, nil, Int128, Decimal, Inet:
 		return val
 	default:
 		return fmt.Sprintf("%v", v)

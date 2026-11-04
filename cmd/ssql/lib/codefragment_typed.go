@@ -913,5 +913,8 @@ func typedFieldAsRecordValue(f TypedSchemaField) string {
 	if f.JSON {
 		return "ssql.JSONOrNull(v." + f.GoName + ")"
 	}
+	if f.GoType == "ssql.Inet" {
+		return "ssql.InetOrNull(v." + f.GoName + ")" // the zero inet (an empty cell) is no value, as in exec
+	}
 	return "v." + f.GoName
 }

@@ -1403,19 +1403,7 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 			for _, rvStr := range rowOrder {
 				mut := MakeMutableRecord()
 				// Set row field preserving original type
-				rowVal := rowOriginal[rvStr]
-				switch v := rowVal.(type) {
-				case string:
-					mut = mut.String(rowField, v)
-				case int64:
-					mut = mut.Int(rowField, v)
-				case Int128:
-					mut = mut.Int128(rowField, v)
-				case float64:
-					mut = mut.Float(rowField, v)
-				default:
-					mut = mut.String(rowField, fmt.Sprintf("%v", v))
-				}
+				mut = setScalar(mut, rowField, rowOriginal[rvStr])
 
 				for _, cv := range colOrder {
 					ck := cellKey{rvStr, cv}
@@ -1798,6 +1786,8 @@ func (s *numericSum) add(value any) {
 			s.isDec = true
 			s.dec = v.Add(MustDecimalFromInt128(s.ints, v.Scale()))
 		}
+	case Inet:
+		panic(inetNoArithmetic("sum", v))
 	default:
 		f, ok := convertTo[float64](value) // float64, and the smart conversions Get[float64] made
 		if !ok {
@@ -1844,6 +1834,9 @@ func (s *numericSum) value() any {
 // width, decimals) exactly, any other pair as float64.
 func numericLess(a, b any) bool {
 	if c, ok := exactNumCmp(a, b); ok {
+		return c < 0
+	}
+	if c, ok := inetCmp(a, b); ok {
 		return c < 0
 	}
 	fa, _ := convertTo[float64](a)
@@ -2214,6 +2207,11 @@ func CompareAny(a, b any) int {
 	// exactly (a float64 detour rounds past 2^53; DFC155 C, E), any other
 	// numeric pair as float64.
 	if c, ok := exactNumCmp(a, b); ok {
+		return c
+	}
+	// Addresses in the engines' order (DFC162), never their text: 9.0.0.1
+	// sorts before 10.0.0.0/8.
+	if c, ok := inetCmp(a, b); ok {
 		return c
 	}
 	af, aOk := toFloat(a)
@@ -2824,6 +2822,8 @@ func slidingNumeric(v any) (i Int128, d Decimal, f float64, kind slidingKind, ok
 		return x, Decimal{}, 0, slidingInt, true
 	case Decimal:
 		return Int128{}, x, 0, slidingDec, true
+	case Inet:
+		panic(inetNoArithmetic("sum", x))
 	case nil:
 		return Int128{}, Decimal{}, 0, slidingFloat, false
 	}

@@ -234,7 +234,7 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 		// typed.SortByDesc. Multi-field path: build a comparator
 		// closure and use typed.SortByFunc.
 		var code, serialCode string
-		if len(fields) == 1 && fields[0].f.GoType != "ssql.Int128" && fields[0].f.GoType != "ssql.Decimal" { // neither is cmp.Ordered: the comparator path
+		if len(fields) == 1 && (goCompareMethod(fields[0].f.GoType) == "" || fields[0].f.GoType == "time.Time") { // the others are not cmp.Ordered: the comparator path
 			fn := "typed.SortBy"
 			if fields[0].desc {
 				fn = "typed.SortByDesc"
@@ -259,12 +259,8 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 				if i > 0 {
 					cmpBody.WriteString("\n\t\t")
 				}
-				if sf.f.GoType == "time.Time" {
-					cmpBody.WriteString(fmt.Sprintf(`if c := %s.Compare(%s); c != 0 { return c }`, lhs, rhs))
-					continue
-				}
-				if sf.f.GoType == "ssql.Int128" || sf.f.GoType == "ssql.Decimal" {
-					cmpBody.WriteString(fmt.Sprintf(`if c := %s.Cmp(%s); c != 0 { return c }`, lhs, rhs))
+				if m := goCompareMethod(sf.f.GoType); m != "" {
+					cmpBody.WriteString(fmt.Sprintf(`if c := %s.%s(%s); c != 0 { return c }`, lhs, m, rhs))
 					continue
 				}
 				cmpBody.WriteString(fmt.Sprintf(`if %s < %s { return -1 }; if %s > %s { return 1 }`, lhs, rhs, lhs, rhs))
@@ -307,10 +303,26 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 // SortByFunc that takes a cmp closure.
 func isSortableGoType(t string) bool {
 	switch t {
-	case "string", "int", "int32", "int64", "uint64", "float32", "float64", "time.Time", "ssql.Int128", "ssql.Decimal":
+	case "string", "int", "int32", "int64", "uint64", "float32", "float64", "time.Time", "ssql.Int128", "ssql.Decimal", "ssql.Inet":
 		return true
 	}
 	return false
+}
+
+// goCompareMethod is the method a typed field of goType is ordered by when
+// the type is not cmp.Ordered — Compare for a time or an inet, Cmp for the
+// exact numbers — and "" for the ordered kinds, which `<` compares. The
+// one table sort, top, window and the group-by extremes read, where each
+// had its own list and `top` on a decimal or a time emitted typed.TopBy,
+// which does not compile for a type that is not cmp.Ordered.
+func goCompareMethod(goType string) string {
+	switch goType {
+	case "time.Time", "ssql.Inet":
+		return "Compare"
+	case "ssql.Int128", "ssql.Decimal":
+		return "Cmp"
+	}
+	return ""
 }
 
 // orderFieldNames lists the fields of a sort order, for the runtime check.

@@ -1581,7 +1581,10 @@ func jsonObjectKeyOrder(text string) ([]string, error) {
 	return keys, nil
 }
 
-// setScalar puts a parsed JSON scalar into a record with its own type.
+// setScalar puts a value into a record with its own type: the one "set
+// by the value's type" helper (setAny, unpivot's cells and the JSON
+// readers go through it), so a new scalar type gets one arm here rather
+// than one in each — setAny had none for a decimal or a time.
 func setScalar(mut MutableRecord, field string, v any) MutableRecord {
 	switch x := v.(type) {
 	case int64:
@@ -1598,8 +1601,37 @@ func setScalar(mut MutableRecord, field string, v any) MutableRecord {
 		return mut.String(field, x)
 	case time.Time:
 		return mut.Time(field, x)
+	case Inet:
+		return mut.Inet(field, x)
+	case int:
+		return mut.Int(field, int64(x))
+	case Record:
+		return mut.Nested(field, x)
+	case JSONString:
+		return mut.JSONString(field, x)
 	}
 	return mut.String(field, fmt.Sprintf("%v", v))
+}
+
+// SetValue puts an expression's result into a record by its own type: a
+// nil result is a field without a value, a list or map a nested value
+// (JSON text, DFC144 Level 1), anything else setScalar's. It is the write
+// generated record code makes for `update -set-expr`, one call where the
+// program carried a type switch that needed an arm per scalar type (a
+// missing arm stored an int128, a time or an inet as text; DFC155 §7.6).
+func SetValue(mut MutableRecord, field string, v any) MutableRecord {
+	switch x := v.(type) {
+	case nil:
+		return mut.Null(field)
+	case float32:
+		return mut.Float(field, float64(x))
+	case int64, Int128, Decimal, float64, bool, string, int, time.Time, Inet, Record, JSONString:
+		return setScalar(mut, field, v)
+	}
+	if js, ok := NestedValue(v); ok {
+		return mut.JSONString(field, js)
+	}
+	return setScalar(mut, field, v)
 }
 
 // describeValue names a value's kind for an error message.

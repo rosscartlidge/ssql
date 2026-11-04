@@ -21,6 +21,7 @@ func exprGoTestSchema() *lib.TypedSchema {
 			{Name: "when", GoName: "When", GoType: "time.Time"},
 			{Name: "date", GoName: "Date", GoType: "string"}, // named like the date() builtin
 			{Name: "amt", GoName: "Amt", GoType: "ssql.Decimal", Scale: 2}, // the decimal:2 column (DFC155 E)
+			{Name: "ip", GoName: "Ip", GoType: "ssql.Inet"},                // the inet column (DFC162), named like ip()
 		},
 	}
 }
@@ -136,6 +137,11 @@ func TestExprToGo(t *testing.T) {
 		{"hash", "hash(pop)", "exprfn.Hash(r.Pop, 0)", exprGoInt, exprfnImport},
 		{"hash with a seed", "hash(pop, 7)", "exprfn.Hash(r.Pop, 7)", exprGoInt, exprfnImport},
 		{"md5", "md5(city)", "exprfn.MD5(r.City)", exprGoString, exprfnImport},
+		{"ip of an inet", "ip(ip)", "r.Ip.String()", exprGoString, ""},
+		{"ipint", "ipint(ip)", "r.Ip.Int128()", exprGoInt128, ""},
+		{"ipnet", "ipnet(ip, 8)", "r.Ip.MustNetwork(8)", exprGoInet, ""},
+		{"inet compare", `ip >= city`, "(r.Ip.Compare(ssql.MustParseInet(r.City)) >= 0)", exprGoBool, ssqlImport},
+		{"isip of text", "isip(city)", "ssql.IsInetText(r.City)", exprGoBool, ssqlImport},
 		{"uuid4", "uuid4()", "exprfn.UUID4()", exprGoString, exprfnImport},
 		{"uuid7", "uuid7()", "exprfn.UUID7()", exprGoString, exprfnImport},
 		{"uuid5", `uuid5("dns", city)`, `exprfn.UUID5("dns", r.City)`, exprGoString, exprfnImport},

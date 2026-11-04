@@ -509,6 +509,7 @@ func assembleSQL(input io.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	sqlInetOutput(q)
 	return renderSQL(q), nil
 }
 
@@ -594,7 +595,9 @@ func assembleQuery(input io.Reader) (*sqlQuery, error) {
 			funcFrags = nil
 		}
 	}
-
+	if err := sqlRefuseInet(); err != nil {
+		return nil, err
+	}
 	return q, nil
 }
 
@@ -1282,6 +1285,9 @@ func translateCondition(field, op, value string) string {
 	if op == "regex" {
 		return sqlRegexMatch(quoteIdent(field), "'"+escapeSQL(value)+"'")
 	}
+	if sqlColumnKinds[field] == "inet" {
+		return sqlInetRange(fmt.Sprintf("%s %s %s", quoteIdent(field), sqlOp, sqlLiteralFor(field, value)), sqlOp)
+	}
 	return fmt.Sprintf("%s %s %s", quoteIdent(field), sqlOp, sqlLiteralFor(field, value))
 }
 
@@ -1295,6 +1301,10 @@ func translateCondition(field, op, value string) string {
 func sqlLiteralFor(field, value string) string {
 	if sqlColumnKinds[field] == "string" {
 		return "'" + escapeSQL(value) + "'"
+	}
+	if sqlColumnKinds[field] == "inet" {
+		// An address literal, compared as one (DFC162): never text order.
+		return "CAST('" + escapeSQL(value) + "' AS " + sqlInetType() + ")"
 	}
 	return sqlLiteral(value)
 }
@@ -2825,6 +2835,14 @@ func translateRename(q *sqlQuery, args []string) error {
 			i += 2
 		}
 	}
+	for _, r := range renames {
+		// A column's kind follows its name: a renamed inet column still
+		// needs its output cast, a renamed int its checked arithmetic.
+		if k, ok := sqlColumnKinds[r.col]; ok {
+			sqlColumnKinds[r.val] = k
+			delete(sqlColumnKinds, r.col)
+		}
+	}
 	if len(renames) > 0 {
 		sel, err := starProjection(q.columns, nil, nil, renames, "rename")
 		if err != nil {
@@ -2896,6 +2914,17 @@ func translateCast(q *sqlQuery, args []string) error {
 				// int, where a detour through DOUBLE would corrupt values
 				// past 2^53 (DFC133: found re-testing cast).
 				expr = fmt.Sprintf("%s(trunc(%s(%s AS %s)) AS %s)", castFn, castFn, quoteIdent(field), sqlFloatType(), sqlType)
+			}
+			if kindBefore == "inet" {
+				// An inet casts to its text (abbrev on Postgres, whose ::text
+				// adds /32) and to nothing else (DFC162).
+				switch ft, _ := ssql.ParseFieldType(typeName); ft {
+				case ssql.FieldTypeString:
+					expr = sqlInetText(quoteIdent(field))
+				case ssql.FieldTypeInet:
+				default:
+					return fmt.Errorf("cast %s to %s: an inet has no number or truth value (ipint(x) in -set-expr is its address as an integer)", field, typeName)
+				}
 			}
 			replacements = append(replacements, sqlPair{field, expr})
 			i += 2
@@ -3183,16 +3212,23 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			sb.WriteString(" ELSE " + elseSQL + " END")
 			exprSQL = sb.String()
 		}
-		// The column is an int when every value it can take is one the
-		// translator sees as an int: each assignment's, and its own where
-		// a row keeps it. Only "int" is decided: it selects DataFusion's
-		// checked arithmetic (sqlCheckedIntArith).
-		kind := "int"
-		if elseSQL == quoteIdent(field) && sqlColumnKinds[field] != "int" {
-			kind = ""
+		// The column has a kind when every value it can take shares it:
+		// each assignment's, and its own where a row keeps it. "int"
+		// selects DataFusion's checked arithmetic (sqlCheckedIntArith);
+		// "inet" the output cast and the refusals (DFC162).
+		var values []string
+		if elseSQL == quoteIdent(field) {
+			values = append(values, sqlColumnKinds[field])
 		}
 		for _, c := range cases {
-			if c.kind != "int" {
+			values = append(values, c.kind)
+		}
+		kind := ""
+		if len(values) > 0 {
+			kind = values[0]
+		}
+		for _, k := range values[1:] {
+			if k != kind {
 				kind = ""
 			}
 		}
@@ -3220,10 +3256,10 @@ func translateUpdate(q *sqlQuery, args []string) error {
 	q.selectExprs = append(q.selectExprs, additions...)
 	for field, kind := range resultKinds {
 		switch {
-		case kind == "int":
-			sqlColumnKinds[field] = "int"
-		case sqlColumnKinds[field] == "int":
-			delete(sqlColumnKinds, field) // overwritten with a value the translator cannot type: the int claim is stale
+		case kind == "int", kind == "inet":
+			sqlColumnKinds[field] = kind
+		case sqlColumnKinds[field] == "int", sqlColumnKinds[field] == "inet":
+			delete(sqlColumnKinds, field) // overwritten with a value the translator cannot type: the claim is stale
 		}
 	}
 	return nil
@@ -3248,6 +3284,8 @@ func mapTypeToSQL(typeName string) string {
 		return sqlTimestampType()
 	case "date":
 		return "DATE"
+	case "inet":
+		return sqlInetType()
 	default:
 		return strings.ToUpper(typeName)
 	}
@@ -3765,6 +3803,8 @@ func duckColumnType(typeName string) string {
 		return "BOOLEAN"
 	case "time":
 		return sqlTimestampType()
+	case "inet":
+		return "INET" // read_csv parses the text (DFC162)
 	}
 	return "VARCHAR"
 }

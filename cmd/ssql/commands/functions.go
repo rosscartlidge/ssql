@@ -27,7 +27,7 @@ func RegisterFunctions(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 		Flag("-category", "-c").
 			String().
-			Completer(&cf.StaticCompleter{Options: []string{"string", "math", "array", "type", "date", "map", "bitwise", "hash", "operators", "helpers"}}).
+			Completer(&cf.StaticCompleter{Options: functionCategoryNames()}).
 			Global().
 			Default("").
 			Help("Show detailed help for a category").
@@ -126,6 +126,9 @@ Hash & UUID Functions (7):
   hash(n), hash(n, seed), sha256(str), sha1(str), md5(str),
   uuid4(), uuid5(ns, name), uuid7()
 
+IP Functions (8):
+  isip(s), ip(x), inet(x), ipfamily(x), ipint(x), ipkey(x), ipnet(x, bits), ipin(x, prefix)
+
 Helpers (2):
   has(field), getOr(field, default)
 
@@ -143,44 +146,39 @@ func printAllCategories(ctx *cf.Context) error {
 	return nil
 }
 
-func printCategory(ctx *cf.Context, category string) error {
-	switch strings.ToLower(category) {
-	case "string":
-		writeStringFunctions(ctx.Stdout())
-		return nil
-	case "math":
-		writeMathFunctions(ctx.Stdout())
-		return nil
-	case "array":
-		writeArrayFunctions(ctx.Stdout())
-		return nil
-	case "type":
-		writeTypeFunctions(ctx.Stdout())
-		return nil
-	case "date":
-		writeDateFunctions(ctx.Stdout())
-		return nil
-	case "map":
-		writeMapFunctions(ctx.Stdout())
-		return nil
-	case "bitwise":
-		writeBitwiseFunctions(ctx.Stdout())
-		return nil
-	case "hash":
-		writeHashFunctions(ctx.Stdout())
-		return nil
-	case "operators":
-		writeOperators(ctx.Stdout())
-		return nil
-	case "helpers":
-		writeHelpers(ctx.Stdout())
-		return nil
-	default:
-		fmt.Fprintf(ctx.Stdout(), "Unknown category: %s\n", category)
-		fmt.Fprintln(ctx.Stdout())
-		fmt.Fprintln(ctx.Stdout(), "Available categories: string, math, array, date, type, map, bitwise, hash, operators, helpers")
-		return nil
+// functionCategories is the catalog's categories in order: the -category
+// names, their writers, and the order the full catalog is printed in —
+// one table, where four lists drifted (a new category's entries were
+// missing from the catalog Alt-h and the drift test read).
+var functionCategories = []struct {
+	name  string
+	write func(io.Writer)
+}{
+	{"string", writeStringFunctions}, {"math", writeMathFunctions}, {"array", writeArrayFunctions},
+	{"date", writeDateFunctions}, {"type", writeTypeFunctions}, {"map", writeMapFunctions},
+	{"bitwise", writeBitwiseFunctions}, {"hash", writeHashFunctions}, {"ip", writeIPFunctions},
+	{"operators", writeOperators}, {"helpers", writeHelpers},
+}
+
+func functionCategoryNames() []string {
+	names := make([]string, len(functionCategories))
+	for i, c := range functionCategories {
+		names[i] = c.name
 	}
+	return names
+}
+
+func printCategory(ctx *cf.Context, category string) error {
+	for _, c := range functionCategories {
+		if strings.EqualFold(category, c.name) {
+			c.write(ctx.Stdout())
+			return nil
+		}
+	}
+	fmt.Fprintf(ctx.Stdout(), "Unknown category: %s\n", category)
+	fmt.Fprintln(ctx.Stdout())
+	fmt.Fprintln(ctx.Stdout(), "Available categories: "+strings.Join(functionCategoryNames(), ", "))
+	return nil
 }
 
 func writeStringFunctions(w io.Writer) {
@@ -626,6 +624,45 @@ func writeHashFunctions(w io.Writer) {
 	fmt.Fprintln(w, "      no file when `from range` and hash() make its keys. Prefer sha256 over md5/sha1.")
 }
 
+func writeIPFunctions(w io.Writer) {
+	p := func(s string) { fmt.Fprintln(w, s) }
+	p("IP FUNCTIONS:")
+	p("")
+	p("  Each takes an inet value or text that parses as an address or prefix (DFC162).")
+	p("")
+	p("  isip(s)        Whether s is an IPv4 or IPv6 address or prefix (never an error)")
+	p("    Example: isip(\"10.0.0.1\") → true")
+	p("")
+	p("  ip(x)          The canonical text: lower case, the shortest IPv6 form, no /32 or /128")
+	p("    Example: ip(\"2001:DB8:0::1\") → \"2001:db8::1\"")
+	p("")
+	p("  inet(x)        The inet value: sorts, compares and groups as an address, not as text")
+	p("    Example: inet(\"10.0.0.0/8\") < inet(\"9.0.0.1\") → false")
+	p("")
+	p("  ipfamily(x)    4 or 6 (a v4-mapped address such as ::ffff:1.2.3.4 is 6)")
+	p("    Example: ipfamily(\"::1\") → 6")
+	p("")
+	p("  ipint(x)       The address as an int128: IPv4 its 32-bit value, IPv6 its 128 bits in")
+	p("                 two's complement (fe80::1 is negative), so not a sort key for IPv6")
+	p("    Example: ipint(\"10.0.0.1\") → 167772161")
+	p("")
+	p("  ipkey(x)       A text key that sorts and compares exactly as inet does")
+	p("    Example: ipkey(\"10.0.0.1\") → \"40a000001200a000001\"")
+	p("")
+	p("  ipnet(x, bits) The network of that length containing x, host bits cleared (an inet)")
+	p("    Example: ipnet(\"10.1.2.3\", 16) → 10.1.0.0/16")
+	p("")
+	p("  ipin(x, p)     Whether x lies within prefix p, or equals it")
+	p("    Example: ipin(\"10.1.2.3\", \"10.0.0.0/8\") → true")
+	p("")
+	p("Common Usage:")
+	p("  ssql from csv -type src inet log.csv | ssql sort src")
+	p("  ssql where -if-expr 'ipin(src, \"10.0.0.0/8\")'")
+	p("  ssql group-by -expr net 'ipnet(src, 24)' -count n")
+	p("")
+	p("generate sql: DuckDB and Postgres (ipint on DuckDB only); DataFusion has no inet type.")
+}
+
 func writeOperators(w io.Writer) {
 	fmt.Fprintln(w, "OPERATORS:")
 	fmt.Fprintln(w)
@@ -728,12 +765,8 @@ func printExamples(ctx *cf.Context) error {
 // text `ssql functions -category CAT` prints — as one string.
 func functionCatalog() string {
 	var b strings.Builder
-	for _, write := range []func(io.Writer){
-		writeStringFunctions, writeMathFunctions, writeArrayFunctions, writeDateFunctions,
-		writeTypeFunctions, writeMapFunctions, writeBitwiseFunctions, writeHashFunctions,
-		writeOperators, writeHelpers,
-	} {
-		write(&b)
+	for _, c := range functionCategories {
+		c.write(&b)
 		b.WriteString("\n")
 	}
 	return b.String()

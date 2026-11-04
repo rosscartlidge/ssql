@@ -157,6 +157,8 @@ func goFieldType(goType string, isJSON bool, scale int) ssql.FieldType {
 		return ssql.FieldTypeBool
 	case "time.Time":
 		return ssql.FieldTypeTime
+	case "ssql.Inet":
+		return ssql.FieldTypeInet
 	case "string":
 		if isJSON {
 			return ssql.FieldTypeJSON

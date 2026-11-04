@@ -473,5 +473,6 @@ func ExprStandardOptions() []expr.Option {
 	opts := append([]expr.Option{ExprFieldShadowing(), ExprDate()}, ExprTimeFunctions()...)
 	opts = append(opts, ExprMathFunctions()...)
 	opts = append(opts, ExprUUIDFunctions()...)        // DFC162
+	opts = append(opts, ExprInetFunctions()...)        // DFC162
 	return append(opts, ExprCheckedIntArithmetic()...) // DFC155 B: int64 overflow is an error
 }

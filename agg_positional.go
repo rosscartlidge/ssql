@@ -81,8 +81,8 @@ func DistinctKey(v any) any { return distinctKey(v) }
 // everything else by its formatted text.
 func distinctKey(v any) any {
 	switch x := v.(type) {
-	case string, bool:
-		return x
+	case string, bool, Inet:
+		return x // an Inet is comparable: ::1 and 0::1 are one value
 	case time.Time:
 		return x.UnixNano()
 	case Int128:
@@ -128,6 +128,8 @@ func AggValueString(v any) string {
 	case int64:
 		return strconv.FormatInt(x, 10)
 	case Int128:
+		return x.String()
+	case Inet:
 		return x.String()
 	case int:
 		return strconv.FormatInt(int64(x), 10)

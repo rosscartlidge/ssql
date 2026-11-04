@@ -780,8 +780,8 @@ func typedAggAccepts(fn, field, goType string) error {
 			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires a numeric type, got %s", fn, field, goType)
 		}
 	case "min", "max":
-		if !isNumericGoType(goType) && goType != "string" && goType != "time.Time" {
-			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires an ordered type (number, string or time), got %s", fn, field, goType)
+		if !isNumericGoType(goType) && goType != "string" && goType != "time.Time" && goType != "ssql.Inet" {
+			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires an ordered type (number, string, time or inet), got %s", fn, field, goType)
 		}
 	case "count-distinct", "string-agg":
 		// A nullable (*T) column has no value to hash or format.
@@ -806,11 +806,8 @@ func typedAggAccepts(fn, field, goType string) error {
 // orderedLess emits the Go expression "a < b" for the field's type —
 // time.Time has no < operator, so it becomes a.Before(b).
 func orderedLess(goType, a, b string) string {
-	switch goType {
-	case "time.Time":
-		return fmt.Sprintf("%s.Before(%s)", a, b)
-	case "ssql.Int128", "ssql.Decimal":
-		return fmt.Sprintf("%s.Cmp(%s) < 0", a, b)
+	if m := goCompareMethod(goType); m != "" {
+		return fmt.Sprintf("%s.%s(%s) < 0", a, m, b)
 	}
 	return fmt.Sprintf("%s < %s", a, b)
 }
@@ -980,7 +977,7 @@ func aggValueStringCode(goType, v string) string {
 		return fmt.Sprintf("strconv.FormatInt(int64(%s), 10)", v)
 	case "uint64":
 		return fmt.Sprintf("strconv.FormatUint(%s, 10)", v)
-	case "ssql.Int128", "ssql.Decimal":
+	case "ssql.Int128", "ssql.Decimal", "ssql.Inet":
 		return v + ".String()"
 	case "float64":
 		return fmt.Sprintf("strconv.FormatFloat(%s, 'g', -1, 64)", v)

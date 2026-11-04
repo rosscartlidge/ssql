@@ -22,6 +22,7 @@ const (
 	TypeJSON   = "json"   // arrays, nested objects
 	TypeTime   = "time"   // time.Time, RFC 3339 on the wire (DFC128 D1)
 	TypeInt128 = "int128" // ssql.Int128, a bare number on the wire; DuckDB's HUGEINT (DFC155 C)
+	TypeInet   = "inet"   // ssql.Inet, its text on the wire; DuckDB's INET, Postgres's inet (DFC162)
 
 	// TypeDecimal is the BASE of the `decimal:S` wire type — ssql.Decimal,
 	// a bare number with S digits after the point; DECIMAL(38,S) (DFC155
@@ -392,6 +393,8 @@ func InferTypeString(v any) string {
 		return TypeString
 	case time.Time:
 		return TypeTime
+	case ssql.Inet:
+		return TypeInet
 	case ssql.JSONString, []any, ssql.Record, map[string]any:
 		return TypeJSON
 	default:
@@ -419,6 +422,8 @@ func FieldTypeToSchemaType(ft ssql.FieldType) string {
 		return TypeJSON
 	case ssql.FieldTypeInt128:
 		return TypeInt128
+	case ssql.FieldTypeInet:
+		return TypeInet
 	default:
 		return TypeString
 	}
@@ -444,6 +449,8 @@ func SchemaTypeToFieldType(typ string) ssql.FieldType {
 		return ssql.FieldTypeJSON
 	case TypeInt128:
 		return ssql.FieldTypeInt128
+	case TypeInet:
+		return ssql.FieldTypeInet
 	default:
 		return ssql.FieldTypeString
 	}

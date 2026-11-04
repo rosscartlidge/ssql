@@ -448,6 +448,9 @@ func parquetDecoderFor(arrowT arrow.DataType, uuid bool, structT reflect.Type) (
 	}
 	switch arrowT.ID() {
 	case arrow.STRING, arrow.LARGE_STRING:
+		if structT == inetType {
+			return decodeParquetInet, nil // the text an inet is written as (DFC162)
+		}
 		if structT.Kind() != reflect.String {
 			return nil, fmt.Errorf("Parquet column is string, struct field is %v", structT)
 		}
@@ -540,6 +543,25 @@ func decodeParquetString(p unsafe.Pointer, arr arrow.Array, idx int) {
 	case *array.LargeString:
 		*(*string)(p) = a.Value(idx)
 	}
+}
+
+// decodeParquetInet parses a string column into an ssql.Inet field: no
+// columnar file keeps an IP address type exactly (DuckDB's own Parquet
+// form rounds IPv6, DFC162 §2), so ssql writes inet as its text. A
+// value that does not parse panics with the parse error.
+func decodeParquetInet(p unsafe.Pointer, arr arrow.Array, idx int) {
+	var s string
+	switch a := arr.(type) {
+	case *array.String:
+		s = a.Value(idx)
+	case *array.LargeString:
+		s = a.Value(idx)
+	}
+	if s == "" {
+		*(*ssql.Inet)(p) = ssql.Inet{}
+		return
+	}
+	*(*ssql.Inet)(p) = ssql.MustParseInet(s)
 }
 
 func decodeParquetUUID(p unsafe.Pointer, arr arrow.Array, idx int) {
@@ -984,6 +1006,13 @@ func parquetEncoderFor(t reflect.Type) (arrow.DataType, func(unsafe.Pointer, arr
 		return &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}, func(p unsafe.Pointer, b array.Builder) {
 			tt := *(*time.Time)(p)
 			b.(*array.TimestampBuilder).Append(arrow.Timestamp(tt.UnixMicro()))
+		}, nil
+	}
+	if t == inetType {
+		// Its text: no columnar file keeps an IP address type exactly
+		// (DFC162 §2); the zero inet is an empty string.
+		return arrow.BinaryTypes.String, func(p unsafe.Pointer, b array.Builder) {
+			b.(*array.StringBuilder).Append((*(*ssql.Inet)(p)).String())
 		}, nil
 	}
 	if t == int128Type {

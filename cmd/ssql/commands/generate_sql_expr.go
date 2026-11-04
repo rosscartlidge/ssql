@@ -76,8 +76,11 @@ func exprToSQLKind(expression string, params map[string]ExprParam) (string, stri
 		return "", "", fmt.Errorf("expression %q: %w — rewrite with SQL-translatable constructs, or use -if", expression, err)
 	}
 	kind := ""
-	if sqlIntOperand(tree.Node) {
+	switch {
+	case sqlIntOperand(tree.Node):
 		kind = "int"
+	case sqlInetOperand(tree.Node):
+		kind = "inet" // inet(x), ipnet(x, n), an inet column: its output is cast to text (DFC162)
 	}
 	return sql, kind, nil
 }
@@ -324,6 +327,7 @@ func sqlStringOperand(node ast.Node) bool {
 var sqlStringFuncs = map[string]bool{
 	"string": true, "upper": true, "lower": true, "trim": true, "trimPrefix": true, "trimSuffix": true,
 	"md5": true, "sha1": true, "sha256": true, "uuid4": true, "uuid5": true, "uuid7": true, "strftime": true,
+	"ip": true, "ipkey": true,
 }
 
 func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
@@ -349,6 +353,28 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 				return "(" + operand + " IS NULL)", nil
 			}
 			return "(" + operand + " IS NOT NULL)", nil
+		}
+	}
+	if sqlInetOperand(n.Left) || sqlInetOperand(n.Right) {
+		// An inet beside a string reads the string as an address, in the
+		// engines' order (DFC162); arithmetic has no meaning on it.
+		switch n.Operator {
+		case "==", "!=", "<", "<=", ">", ">=":
+			l, err := sqlAsInet(n.Left)
+			if err != nil {
+				return "", err
+			}
+			r, err := sqlAsInet(n.Right)
+			if err != nil {
+				return "", err
+			}
+			op := exprBinaryOps[n.Operator]
+			if op == "" {
+				op = n.Operator
+			}
+			return sqlInetRange("("+l+" "+op+" "+r+")", n.Operator), nil
+		case "+", "-", "*", "/", "%", "**", "^":
+			return "", fmt.Errorf("an inet has no arithmetic (operator %s): ipint(x) is its address as an integer", n.Operator)
 		}
 	}
 	left, err := exprNodeToSQL(n.Left)
@@ -509,6 +535,9 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 		return sql, err
 	}
 	if sql, ok, err := uuidFuncToSQL(name, args); ok { // DFC162
+		return sql, err
+	}
+	if sql, ok, err := inetFuncToSQL(name, args); ok { // DFC162
 		return sql, err
 	}
 	if sqlFunc, ok := exprListFuncs[name]; ok {

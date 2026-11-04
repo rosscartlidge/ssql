@@ -578,6 +578,8 @@ func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, erro
 		lhs = exprGo{Src: field, Type: exprGoString, field: f.Name}
 	case "bool":
 		lhs = exprGo{Src: field, Type: exprGoBool, field: f.Name}
+	case "ssql.Inet":
+		lhs = exprGo{Src: field, Type: exprGoInet, field: f.Name}
 	case "time.Time":
 		// The same comparisons exec's compareEqual/Greater/Less make for a
 		// `time` field (DFC128 D1): Equal/After/Before against the operand
@@ -859,7 +861,9 @@ func generateCondition(field, op, value, goType string, seen map[string]int) (st
 	// shared primitive reads it per row and reports a literal not of that
 	// kind, exactly as exec does (guessing the kind from the literal's
 	// spelling compared a number's text when the guess was wrong).
-	if goType == "" {
+	if goType == "" || goType == "ssql.Inet" {
+		// (An inet field reads its literal as an address, in the field's
+		// order, through the same primitive: DFC162.)
 		src := fmt.Sprintf("ssql.CompareLiteral(r, %q, %q, *%s)", field, op, varName)
 		return src, nil, param, nil
 	}

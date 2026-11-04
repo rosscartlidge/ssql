@@ -25,6 +25,11 @@ func (e *CastError) Error() string {
 		hint = ` (accepted: RFC 3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", Unix seconds; use date(value, layout) in -set-expr for another layout)`
 	case FieldTypeBool:
 		hint = " (accepted: true/false, 1/0, yes/no, y/n, on/off)"
+	case FieldTypeInet:
+		hint = " (accepted: an IPv4 or IPv6 address, or a prefix such as 10.0.0.0/8; no zone, no leading zeros)"
+	}
+	if _, isInet := e.Value.(Inet); isInet {
+		hint = " (an inet has no number or truth value; ipint(x) in -set-expr is its address as an integer)"
 	}
 	return fmt.Sprintf("cast: field %q value %v is not %s%s — fix the data, or use `-invalid missing` to leave such values without a value",
 		e.Field, formatCastValue(e.Value), castTypeNoun(e.Target), hint)
@@ -52,6 +57,8 @@ func castTypeNoun(t FieldType) string {
 		return "a bool"
 	case FieldTypeTime:
 		return "a time"
+	case FieldTypeInet:
+		return "an inet"
 	}
 	return "a " + t.String()
 }
@@ -101,6 +108,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return strconv.FormatBool(x), true
 		case time.Time:
 			return x.Format(time.RFC3339Nano), true
+		case Inet:
+			return x.String(), true
 		}
 		return fmt.Sprintf("%v", v), true
 	case FieldTypeInt128:
@@ -201,6 +210,12 @@ func CastValue(v any, target FieldType) (any, bool) {
 		if t, ok := ParseTime(v); ok {
 			return t, true
 		}
+	case FieldTypeInet:
+		// An address or prefix (DFC162): text that parses, an inet as it
+		// is; nothing else is one — a number is not an address.
+		if x, ok := asInet(v); ok {
+			return x, true
+		}
 	}
 	return nil, false
 }
@@ -300,25 +315,7 @@ func CastField(mut MutableRecord, src Record, field string, target FieldType, in
 		}
 		return mut.Null(field)
 	}
-	switch x := out.(type) {
-	case JSONString:
-		return mut.JSONString(field, x)
-	case string:
-		return mut.String(field, x)
-	case int64:
-		return mut.Int(field, x)
-	case Int128:
-		return mut.Int128(field, x)
-	case Decimal:
-		return mut.Decimal(field, x)
-	case float64:
-		return mut.Float(field, x)
-	case bool:
-		return mut.Bool(field, x)
-	case time.Time:
-		return mut.Time(field, x)
-	}
-	return mut
+	return setScalar(mut, field, out)
 }
 
 // MustCast is CastValue for typed generated code: the converted value, or

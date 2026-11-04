@@ -205,6 +205,22 @@ func TestScaleBudgets(t *testing.T) {
 		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
 			bin+" from parquet big.parquet | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 90*time.Second)
 	})
+	t.Run("inet", func(t *testing.T) {
+		// DFC162: 3M distinct addresses built by inet() from the id, keyed,
+		// ranked and sorted by Inet.Compare. Measured 2026-11-04: exec
+		// group-by 28 s and top 20 s (the string key: 26 s and 19 s), typed
+		// sort 2.7 s and group-by 4.6 s with the build cached. A compare
+		// through text, or a key that allocates per row, blows these.
+		ip := `inet(string(id % 251) + "." + string(id % 241) + "." + string(id % 239) + ".7")`
+		budget(t, dir, bin+" from csv big.csv | "+bin+" update -set-expr ip '"+ip+"' | "+bin+" group-by ip -count n | "+bin+" count | grep -qx 3000000", 90*time.Second)
+		budget(t, dir, bin+" from csv big.csv | "+bin+" update -set-expr ip '"+ip+"' | "+bin+" top 5 -field ip | "+bin+" to csv | grep -q 250.240.219.7", 60*time.Second)
+		repo, _ := filepath.Abs("../..")
+		q := `'\''` // a quote inside the single-quoted -pipeline
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from csv big.csv | "+bin+" update -set-expr ip "+q+ip+q+" | "+bin+" sort ip | "+bin+" count' | grep -qx 3000000", 90*time.Second)
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from csv big.csv | "+bin+" update -set-expr ip "+q+ip+q+" | "+bin+" group-by ip -count n | "+bin+" count' | grep -qx 3000000", 90*time.Second)
+	})
 	t.Run("window-running-frame-exec", func(t *testing.T) {
 		// A running sum and a dense rank over six partitions of 500 k rows.
 		// Before 2026-10-27 the per-row frame scan was O(n²) per partition:

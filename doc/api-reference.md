@@ -163,6 +163,7 @@ func (m MutableRecord) String(field, value string) MutableRecord
 func (m MutableRecord) Int(field string, value int64) MutableRecord
 func (m MutableRecord) Int128(field string, value Int128) MutableRecord   // the int128 column (DFC155 C)
 func (m MutableRecord) Decimal(field string, value Decimal) MutableRecord // the decimal:S column (DFC155 E)
+func (m MutableRecord) Inet(field string, value Inet) MutableRecord       // the inet column (DFC162)
 func (m MutableRecord) Float(field string, value float64) MutableRecord
 func (m MutableRecord) Bool(field string, value bool) MutableRecord
 func (m MutableRecord) Time(field string, value time.Time) MutableRecord
@@ -213,7 +214,7 @@ do. A schema per record is several times slower on large files.
 
 ```go
 type Value interface {
-    ~int64 | ~float64 | Int128 |
+    ~int64 | ~float64 | Int128 | Decimal | Inet |
     ~bool | string | time.Time |
     JSONString | Record |
     []any |
@@ -225,7 +226,8 @@ type OrderedValue interface { ~int64 | ~float64 | string }
 ```
 
 `Value` is the constraint on what a Record holds and what `Set`, `Field`
-and `SetImmutable` accept: canonical scalars (`int64`, `float64`, `Int128`), the
+and `SetImmutable` accept: canonical scalars (`int64`, `float64`, `Int128`,
+`Decimal`, `Inet`), the
 listed sequence types, `[]any` for `Collect` results and `iter.Seq[any]`
 for `CollectSeq`. `OrderedValue` is the constraint for `Min[T]` /
 `Max[T]`.
@@ -350,6 +352,49 @@ type DecimalOverflowError struct{ Op string; A, B Decimal; Scale int }   // "dec
 func (e *DecimalOverflowError) Error() string
 ```
 
+### Inet
+
+An IP address or prefix: the `inet` column (DFC162), DuckDB's `INET` and
+Postgres's `inet`. One type holds both; an address is its full-length
+prefix, and a prefix keeps its host bits (`10.0.0.1/24` is not
+`10.0.0.0/24`). The order is DuckDB's and Postgres's exactly: IPv4 before
+IPv6, then the network, the prefix length, the address. A column is inet
+only by declaration (`cast -type F inet`, `-type F inet`, a `_schema`
+header, `inet(x)`), never inferred. It has no arithmetic. The zero value is
+no value: `""` as text, `null` in JSON.
+
+```go
+type Inet struct{ /* p netip.Prefix */ }            // comparable, no allocation; a group-by or join key, a typed struct field
+func ParseInet(s string) (Inet, error)               // an address or a prefix, around spaces; no zone, no leading zeros (an *InetError)
+func MustParseInet(s string) Inet                    // for a validated literal (generated code); panics with the *InetError
+func InetFromPrefix(p netip.Prefix) Inet
+func InetFromAddr(a netip.Addr) Inet                 // an address as its /32 or /128
+func InetOrNull(v Inet) any                          // v, or nil for the zero value (the typed lane's empty cell at the Record boundary)
+func IsInetText(s string) bool                       // isip(s)
+
+func (x Inet) Prefix() netip.Prefix
+func (x Inet) Addr() netip.Addr
+func (x Inet) IsValid() bool
+func (x Inet) Bits() int                             // the prefix length: 32 or 128 for an address
+func (x Inet) Family() int64                         // 4 or 6 (a v4-mapped address is 6); ipfamily(x)
+func (x Inet) Compare(y Inet) int                    // DuckDB's and Postgres's order
+func (x Inet) String() string                        // the engines' text: a full-length prefix bare, ::1.2.3.4 dotted; "" for the zero value
+func (x Inet) Network(bits int64) (Inet, error)      // the network of that length containing x, host bits cleared; ipnet(x, bits)
+func (x Inet) MustNetwork(bits int64) Inet           // Network for generated code; panics with the error
+func (x Inet) Within(p Inet) bool                    // x lies in p or equals it, the engines' <<=; ipin(x, p)
+func (x Inet) Int128() Int128                        // the address as an integer, IPv6 in two's complement (not a sort key there); ipint(x)
+func (x Inet) Key() string                           // a text key that sorts and equals exactly as Compare; ipkey(x)
+func (x Inet) MarshalJSON() ([]byte, error)          // the quoted text, or null
+func (x *Inet) UnmarshalJSON(b []byte) error
+func (x Inet) MarshalText() ([]byte, error)
+func (x *Inet) UnmarshalText(b []byte) error
+func (x Inet) MarshalBinary() ([]byte, error)        // netip's form, for gob (sort -spill)
+func (x *Inet) UnmarshalBinary(b []byte) error
+
+type InetError struct{ Value, Why string }           // `inet: "x" is not an IP address or prefix (why)`
+func (e *InetError) Error() string
+```
+
 
 ### JSONString
 
@@ -440,11 +485,13 @@ func ExprFieldShadowing() expr.Option   // expr.Compile option: a field named li
 func ExprDate() expr.Option             // expr.Compile option: ssql's date() in place of expr-lang's
 func ExprTimeFunctions() []expr.Option  // the calendar functions below as expression functions (year(ts) … tz, now)
 func ExprMathFunctions() []expr.Option  // the numeric functions (DFC153): sqrt, ln, log(b, x), the trig set, round(x, n), gcd …, and hash(n[, seed]) (exprfn.Hash, the reproducible integer mix every lane shares); NaN/±Inf results are absent once written
+func ExprInetFunctions() []expr.Option  // isip, ip, inet, ipfamily, ipint, ipkey, ipnet, ipin (DFC162): each takes an Inet or text that parses as one
+func ExprInetArg(fn, what string, v any) (Inet, error) // an IP function's argument: an Inet, or text that parses (the error names fn)
 func ExprUUIDFunctions() []expr.Option  // uuid4(), uuid7() (random) and uuid5(ns, name) (name-based, as Python's uuid.uuid5), each the canonical lower-case text (DFC162 §8)
 func ExprCheckedIntArithmetic() []expr.Option // int64 + - * overflow is an error, not a wrap (DFC155 B): an AST patch routes the operators through exprfn.CheckedAdd/Sub/Mul; every other operand pair keeps expr's own semantics
 func ExprCheckedArithFunction(name string) bool // the patch's call names (add, sub, mul, neg, sum), for walkers that tell a field from a function
 func ExprCheckedSumPredicate(n ast.Node) (ast.Node, bool) // the group-level sum(_records, f) in either spelling (before or after the overflow patch), for the typed lowering
-func ExprStandardOptions() []expr.Option // shadowing + date() + the calendar, numeric and UUID functions + checked int arithmetic: what every ssql compile site passes
+func ExprStandardOptions() []expr.Option // shadowing + date() + the calendar, numeric, UUID and IP functions + checked int arithmetic: what every ssql compile site passes
 ```
 
 A time renders as RFC 3339 wherever it becomes text: JSONL, CSV/TSV,
@@ -550,6 +597,7 @@ func Get[T any](record Record, key string) (T, bool)        // typed read with n
 func GetOr[T any](record Record, key string, defaultValue T) T
 func Set[V Value](m MutableRecord, field string, value V) MutableRecord   // type-checked set, in place
 func SetImmutable[V Value](r Record, field string, value V) Record        // a new Record with the field set
+func SetValue(mut MutableRecord, field string, v any) MutableRecord      // a dynamically typed value by its own type: nil no value, a list or map nested JSON (generated update -set-expr)
 func Field[V Value](key string, value V) Record                           // a one-field Record
 func ValidateRecord(r Record) error                                       // every value is a Value
 ```

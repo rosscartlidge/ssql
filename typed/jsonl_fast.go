@@ -110,6 +110,9 @@ func jsonKindFor(t reflect.Type) (jsonKind, error) {
 	if t == int128Type || t == decimalType {
 		return jkNumber, nil // the bare digits; decoderFor parses them
 	}
+	if t == inetType {
+		return jkString, nil // its text; decoderFor parses it
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return jkString, nil

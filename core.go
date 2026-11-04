@@ -354,7 +354,7 @@ func NewJSONString(value any) (JSONString, error) {
 // Hybrid approach: Canonical scalars (int64/float64), flexible sequences (any numeric type)
 type Value interface {
 	// Canonical scalar types only
-	~int64 | ~float64 | Int128 | Decimal |
+	~int64 | ~float64 | Int128 | Decimal | Inet |
 
 		// Other basic types
 		~bool | string | time.Time |
@@ -996,6 +996,11 @@ func (m MutableRecord) Int128(field string, value Int128) MutableRecord {
 	return Set(m, field, value)
 }
 
+// Inet adds an IP address or prefix field (mutates in place; DFC162)
+func (m MutableRecord) Inet(field string, value Inet) MutableRecord {
+	return Set(m, field, value)
+}
+
 // Decimal adds a fixed-point field (mutates in place; DFC155 E)
 func (m MutableRecord) Decimal(field string, value Decimal) MutableRecord {
 	return Set(m, field, value)
@@ -1232,6 +1237,11 @@ func convertTo[T any](val any) (T, bool) {
 		return zero, false
 	case Int128:
 		if converted, ok := convertToInt128(val); ok {
+			return any(converted).(T), true
+		}
+		return zero, false
+	case Inet:
+		if converted, ok := asInet(val); ok { // an Inet, or a string that parses as one
 			return any(converted).(T), true
 		}
 		return zero, false
@@ -1499,6 +1509,11 @@ func appendJSONValue(buf []byte, v any) []byte {
 		return append(buf, val.String()...) // a bare number, as DuckDB writes a HUGEINT
 	case Decimal:
 		return append(buf, val.String()...) // a bare number with the scale's digits, as DuckDB writes a DECIMAL
+	case Inet:
+		if !val.IsValid() {
+			return append(buf, "null"...)
+		}
+		return appendJSONString(buf, val.String())
 	case float64:
 		if math.IsNaN(val) || math.IsInf(val, 0) {
 			// JSON has no NaN or Infinity. strconv wrote the bare words,
@@ -1851,6 +1866,15 @@ func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType
 					value = float64(i)
 				}
 			}
+			if idx < len(types) && types[idx] == FieldTypeInet {
+				// An inet column is its text on the wire; a value that
+				// does not parse keeps its own type, as a time does.
+				if s, ok := value.(string); ok {
+					if v, err := ParseInet(s); err == nil {
+						value = v
+					}
+				}
+			}
 			if idx < len(types) && types[idx] == FieldTypeInt128 {
 				// An int128 column's small values are int64 literals on
 				// the wire; the header keeps the column one type.
@@ -2188,7 +2212,7 @@ func ValidateRecord(r Record) error {
 func isValueType(value any) bool {
 	switch value.(type) {
 	// Canonical scalar types only
-	case int64, float64, Int128, Decimal:
+	case int64, float64, Int128, Decimal, Inet:
 		return true
 	// Other basic types
 	case bool, string:
@@ -2506,6 +2530,8 @@ func stableKeyAppend(buf []byte, value any) string {
 		return string(append(buf, v.String()...))
 	case Decimal:
 		return string(append(buf, v.Normalized().String()...)) // 5.00 keys with 5 and 5.000
+	case Inet:
+		return stableKeyAppend(buf, v.String()) // the canonical text: ::1 keys with 0::1
 	case float64:
 		return string(strconv.AppendFloat(buf, v, 'g', -1, 64))
 	case string:
@@ -2904,7 +2930,7 @@ func isSimpleValue(value any) bool {
 	}
 	switch value.(type) {
 	// Canonical scalar types only
-	case int64, float64, Int128, Decimal:
+	case int64, float64, Int128, Decimal, Inet:
 		return true
 	// Other basic types
 	case bool, string, time.Time:

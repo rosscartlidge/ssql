@@ -431,17 +431,24 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// refine them from the first record's actual computed value
 			// before the header goes out (a static "string" label lied
 			// for numeric expressions; found by the DFC108 cut-point
-			// equivalence gate). Pull-peek keeps streaming intact.
+			// equivalence gate). An existing field an expression writes
+			// is refined too: inet(ip) or decimal(n) retypes its column,
+			// and a header still saying string or int made the next stage
+			// read it as the old type (sort ip sorted as text; DFC162).
+			// Pull-peek keeps streaming intact.
 			if outputSchema != nil {
 				var exprFields []string
 				for _, clause := range clauses {
 					for _, upd := range clause.updates {
-						if upd.isExpr && !schemaAndRecords.Schema.HasField(upd.field) {
+						if upd.isExpr {
 							exprFields = append(exprFields, upd.field)
 						}
 					}
 				}
 				if len(exprFields) > 0 {
+					if outputSchema == schemaAndRecords.Schema {
+						outputSchema = outputSchema.Clone()
+					}
 					next, stop := iter.Pull(updated)
 					first, ok := next()
 					if ok {
@@ -795,10 +802,14 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 					if err != nil && exprIsLoud(err) && !isUnknownField(err) {
 						return lib.WriteErrorAndExit(getCommandString(), err) // parameter/field collision
 					}
-					if err == nil && len(res.Hoisted) == 0 {
-						setter := map[exprGoType]string{
-							exprGoInt: "Int", exprGoFloat: "Float", exprGoString: "String", exprGoBool: "Bool", exprGoTime: "Time",
-						}[res.Type]
+					// The typed setter for the result; a type without one takes
+					// the VM path below (an int128, decimal or inet result had
+					// no entry and emitted `mut.(…)`, which does not compile).
+					setter := map[exprGoType]string{
+						exprGoInt: "Int", exprGoFloat: "Float", exprGoString: "String", exprGoBool: "Bool", exprGoTime: "Time",
+						exprGoInt128: "Int128", exprGoDecimal: "Decimal", exprGoInet: "Inet",
+					}[res.Type]
+					if err == nil && len(res.Hoisted) == 0 && setter != "" {
 						stmt = fmt.Sprintf("%smut = mut.%s(%q, %s)", indent, setter, upd.field, res.Src)
 						extraImports = append(extraImports, res.Imports...)
 						planNotes = append(planNotes, fmt.Sprintf("expr %q: native (record, advisory types)", upd.value))
@@ -829,43 +840,11 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				// (Previously the generated code silently set the field to "".)
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\tpanic(fmt.Errorf(\"update -set-expr %s: %%w\", err))\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t} else {\n")
-				stmtBuilder.WriteString(indent + "\t\tswitch v := result.(type) {\n")
-				// A nil result (date() of a null) is an absent value, as in
-				// exec; the catch-all wrote the text "<nil>".
-				stmtBuilder.WriteString(indent + "\t\tcase nil:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Null(%q)\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\tcase int64:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Int(%q, v)\n", indent, upd.field))
-				// An int128 result (DFC155 C) keeps its type; the catch-all
-				// below would store its digits as text.
-				stmtBuilder.WriteString(indent + "\t\tcase ssql.Int128:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Int128(%q, v)\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\tcase ssql.Decimal:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Decimal(%q, v)\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\tcase float64:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Float(%q, v)\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\tcase bool:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Bool(%q, v)\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\tcase string:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.String(%q, v)\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\tcase int:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Int(%q, int64(v))\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\tcase float32:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Float(%q, float64(v))\n", indent, upd.field))
-				// A time result (date(), now(), bucket() over a time column)
-				// stays a time, as in exec; the catch-all below would store
-				// Go's Time.String(), which nothing parses back (DFC128 D1).
-				stmtBuilder.WriteString(indent + "\t\tcase time.Time:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Time(%q, v)\n", indent, upd.field))
-				needsTime = true
-				stmtBuilder.WriteString(indent + "\t\tdefault:\n")
-				// A list or map result is a nested value: JSON text (DFC144 L1).
-				stmtBuilder.WriteString(indent + "\t\t\tif js, ok := ssql.NestedValue(v); ok {\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\t\tmut = mut.JSONString(%q, js)\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\t\t} else {\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\t\tmut = mut.String(%q, fmt.Sprintf(\"%%v\", v))\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\t\t}\n")
-				stmtBuilder.WriteString(indent + "\t\t}\n")
+				// The result by its own type, nil as no value, a list or map as
+				// a nested value: one library call (ssql.SetValue), where a
+				// switch emitted here needed an arm per scalar type and
+				// stored a missing one's value as text (DFC155 §7.6).
+				stmtBuilder.WriteString(fmt.Sprintf("%s\t\tmut = ssql.SetValue(mut, %q, result)\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t}\n")
 				stmtBuilder.WriteString(indent + "}")
 				stmt = stmtBuilder.String()
@@ -960,9 +939,10 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 // decls (literal-regex compiled vars) go to the caller's preCompileVars —
 // previously the pattern was recompiled PER ROW.
 func generateConditionCode(field, op, value, goType string) (string, []string, []string, error) {
-	if goType == "" {
+	if goType == "" || goType == "ssql.Inet" {
 		// The field's kind is a runtime fact here: the shared primitive
-		// reads it per row and reports a literal not of that kind.
+		// reads it per row and reports a literal not of that kind (an
+		// inet field reads its literal as an address: DFC162).
 		return fmt.Sprintf("ssql.CompareLiteral(frozen, %q, %q, %q)", field, op, value), nil, nil, nil
 	}
 	lhs := recordCondLHS("frozen", field, op, value, goType)

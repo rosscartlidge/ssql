@@ -128,6 +128,8 @@ func convertRecordValue(v any) any {
 			return nil
 		}
 		return val
+	case ssql.Inet:
+		return val.String() // its text, as `to jsonl` writes it (DFC162)
 	case int64, bool, string, nil, ssql.Int128, ssql.Decimal:
 		// Canonical types pass through (an Int128 or a Decimal marshals as its bare number)
 		return val

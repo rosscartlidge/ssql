@@ -619,6 +619,8 @@ func advisoryToSchemaType(goType string) string {
 		return lib.TypeFloat
 	case "time.Time":
 		return lib.TypeTime
+	case "ssql.Inet":
+		return lib.TypeInet
 	case "":
 		return ""
 	}

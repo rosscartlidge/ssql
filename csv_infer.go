@@ -140,6 +140,18 @@ func parseTimeCell(s string) (any, error) {
 	return nil, errCellType
 }
 
+// parseInetCell reads a cell declared inet (DFC162): an address or a
+// prefix; anything else is a cell error naming the column.
+func parseInetCell(s string) (any, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil // missing, as an empty cell is (DFC124)
+	}
+	if v, err := ParseInet(s); err == nil {
+		return v, nil
+	}
+	return nil, errCellType
+}
+
 // parseTimeCellPattern parses a time column whose cells follow a pattern
 // (strftime or a Go layout — TimeLayout). The layout is converted once; a
 // pattern that cannot be parsed makes every cell an error naming it.
@@ -161,8 +173,8 @@ func parseTimeCellPattern(pattern string) cellParser {
 // zero value — 0, 0.0, false — instead of missing: `from csv -empty
 // zero`, the user's explicit choice where the data means a blank as
 // nothing-to-add (a sales sheet with blank cells). The default stays
-// DFC124's absent cell. A string column is "" either way; a time or
-// json column keeps the empty cell missing (a zero time is not a
+// DFC124's absent cell. A string column is "" either way; a time, json
+// or inet column keeps the empty cell missing (a zero time is not a
 // value anyone wrote).
 func zeroForEmpty(ft FieldType, p cellParser) cellParser {
 	var zero any
@@ -213,6 +225,8 @@ func parserForType(ft FieldType) cellParser {
 		return parseTimeCell
 	case FieldTypeJSON:
 		return parseJSONCell
+	case FieldTypeInet:
+		return parseInetCell
 	default:
 		return parseStringCell
 	}

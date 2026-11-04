@@ -398,6 +398,27 @@ lines` wrote two documents.
 `limit 1`; `ssql from views.csv | ssql where … | ssql to table` shows
 what matched.
 
+### Issue 19: IP addresses sort in the wrong order, or `010.0.0.1` "is not an IP address"
+
+**Symptoms:** `sort ip` puts `10.0.0.9` before `9.0.0.1`; `where -if ip lt
+10.0.0.0` keeps the wrong rows; `::1` and `0:0:0:0:0:0:0:1` group apart.
+Or, once declared, a value fails with `inet: "010.0.0.1" is not an IP
+address or prefix`.
+
+**Cause:** An address read from a file is text, and text sorts by
+character. It becomes an address only when you declare it (ssql never
+guesses). Declared, the parser refuses an octet with a leading zero and an
+IPv6 zone (`%eth0`): DuckDB and Postgres read `010.0.0.1` as `10.0.0.1`,
+but other tools read a leading zero as octal, so ssql does not guess
+which one the data meant.
+
+**Solution:** Declare the column: `ssql from csv -type ip inet FILE` or
+`ssql cast -type ip inet`. Then sort, `where`, group-by, joins and min/max
+treat it as an address in every lane ([EXPRESSIONS.md](EXPRESSIONS.md#ip-functions-and-the-inet-type)).
+Clean a leading-zero column first, or keep it as text and guard with
+`where -if-expr 'isip(ip)'`. To sort mixed IPv4 and IPv6 in a tool with no
+IP type, export `ipkey(ip)`.
+
 ## Getting More Help
 
 ### Built-in help

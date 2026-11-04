@@ -128,6 +128,16 @@ func condRHS(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 		return exprGo{Src: value, Type: exprGoFloat, lit: true}, nil
 	case exprGoString:
 		return exprGo{Src: condStringRHS(value, rhsParam), Type: exprGoString}, nil
+	case exprGoInet:
+		// An inet field reads its literal as an address or prefix (DFC162),
+		// validated here; a lifted flag is parsed at run time.
+		if _, err := ssql.ParseInet(value); err != nil {
+			return exprGo{}, &ssql.CompareError{Field: lhs.field, Op: op, Value: value, Kind: "inet"}
+		}
+		if rhsParam != "" {
+			return exprGo{Src: "ssql.MustParseInet(*" + rhsParam + ")", Type: exprGoInet, Imports: []string{ssqlImport}}, nil
+		}
+		return asInetGo(exprGo{Src: strconv.Quote(value), Type: exprGoString})
 	case exprGoBool:
 		if op != "eq" && op != "ne" {
 			return exprGo{}, fmt.Errorf("operator %q is not defined for bool fields", op)
@@ -267,6 +277,8 @@ func condKindName(t exprGoType) string {
 		return "float"
 	case exprGoBool:
 		return "bool"
+	case exprGoInet:
+		return "inet"
 	}
 	return string(t)
 }

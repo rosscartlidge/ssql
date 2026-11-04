@@ -271,6 +271,11 @@ func corpusData(t *testing.T) string {
 			"dec.csv":   "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
 			"big.csv":   "k,amt\nx,90071992547409.92\nx,0.01\nx,0.01\n",
 			"ids.csv":   "id,n\n1,one\n5,five\n",
+			// DFC162: addresses whose text order is not their inet order,
+			// shuffled, with spellings of one value (10.0.0.1 and /32; ::1
+			// and 0:0:0:0:0:0:0:1), an IPv4-compatible and a v4-mapped one.
+			"ips.csv":       "ip,n\n192.168.0.2,1\n10.0.0.0/16,2\n::1.2.3.4,3\n9.0.0.1,4\n2001:DB8::1,5\n10.0.0.1/24,6\nfe80::1,7\n10.0.0.1,8\n0:0:0:0:0:0:0:1,9\n10.0.0.0/8,10\n::ffff:1.2.3.4,11\n10.0.0.9,12\n::1,13\n10.0.0.1/32,14\n",
+			"ips_right.csv": "ip,host\n10.0.0.9/32,gw\n::0:1,lo\n2001:db8:0::1,web\n10.0.0.0/8,net\n1.1.1.1,none\n",
 		}
 		for name, content := range files {
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
@@ -488,6 +493,29 @@ func TestPipelineCorpus(t *testing.T) {
 			Pipeline: `{{.bin}} from csv {{.data}}/dec.csv -type id decimal:2 | {{.bin}} join {{.data}}/ids.csv -on id id | {{.bin}} sort id | {{.bin}} to csv`,
 			Contains: []string{"1.00,x,one", "5.00,y,five"},
 			Excludes: []string{"2.50"},
+		},
+		{
+			// DFC162: an inet column sorts as addresses in every mode (9.0.0.1
+			// before 10.0.0.0/8, ::1 before 2001:db8::1), and a cast back to
+			// text is the canonical spelling.
+			Name:     "inet_cast_sort_every_mode",
+			Pipeline: `{{.bin}} from csv {{.data}}/ips.csv | {{.bin}} cast -type ip inet | {{.bin}} sort ip n | {{.bin}} limit 3 | {{.bin}} to csv`,
+			Contains: []string{"ip,n", "9.0.0.1,4", "10.0.0.0/8,10", "10.0.0.0/16,2"},
+			Excludes: []string{"192.168", "::"},
+		},
+		{
+			// A declared inet key groups its spellings; min/max and the
+			// functions in every mode.
+			Name:     "inet_groupby_functions_every_mode",
+			Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} where -if-expr 'ipin(ip, "10.0.0.0/8") or ipfamily(ip) == 6' | {{.bin}} update -set-expr net 'ipnet(ip, 8)' | {{.bin}} group-by net -count c -min ip lo -max ip hi | {{.bin}} sort net | {{.bin}} to csv`,
+			Contains: []string{"net,c,lo,hi", "10.0.0.0/8,6,10.0.0.0/8,10.0.0.9", "::/8,4,::1,::ffff:1.2.3.4"},
+		},
+		{
+			// An inet join key matches across spellings in every mode.
+			Name:     "inet_join_every_mode",
+			Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} join <({{.bin}} from csv -type ip inet {{.data}}/ips_right.csv) -on ip ip | {{.bin}} sort ip n | {{.bin}} to csv`,
+			Contains: []string{"10.0.0.0/8,10,net", "10.0.0.9,12,gw", "::1,9,lo", "::1,13,lo", "2001:db8::1,5,web"},
+			Excludes: []string{"none"},
 		},
 		{
 			// An int64 window sum widens past 2^63 instead of stopping.

@@ -47,6 +47,9 @@ const (
 	// beside it is a decimal, a float beside it a float; the scale rides
 	// in exprGo.Scale, since a Go type name cannot hold one.
 	exprGoDecimal exprGoType = "ssql.Decimal"
+	// exprGoInet is the inet column (DFC162): no arithmetic; ordered by
+	// Compare; a string beside it is read as an address (asInetGo).
+	exprGoInet exprGoType = "ssql.Inet"
 )
 
 // ssqlImport is the root package, for the calendar helpers transpiled
@@ -373,6 +376,8 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, false)", e.recv, f.Name), Type: exprGoBool}, nil
 		case "time.Time":
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, time.Time{})", e.recv, f.Name), Type: exprGoTime, Imports: []string{"time"}}, nil
+		case "ssql.Inet":
+			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, ssql.Inet{})", e.recv, f.Name), Type: exprGoInet}, nil
 		}
 		return exprGo{}, fmt.Errorf("field %q has advisory type %s, which has no native Go emission", name, f.GoType)
 	}
@@ -405,8 +410,31 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoBool}, nil
 	case "time.Time":
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoTime}, nil
+	case "ssql.Inet":
+		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoInet}, nil
 	}
 	return exprGo{}, fmt.Errorf("field %q has type %s, which has no native Go emission", name, f.GoType)
+}
+
+// asInetGo renders v as an inet: an inet as it is, a string literal parsed
+// at generation (a bad one an error here, hoisted as a package var), any
+// other string through ssql.MustParseInet per row (its error the VM's).
+func asInetGo(v exprGo) (exprGo, error) {
+	switch v.Type {
+	case exprGoInet:
+		return v, nil
+	case exprGoString:
+		if lit, err := strconv.Unquote(v.Src); err == nil && strings.HasPrefix(v.Src, "\"") {
+			if _, err := ssql.ParseInet(lit); err != nil {
+				return exprGo{}, err
+			}
+			varName := "exprInet" + exprGoHash(lit)
+			decl := fmt.Sprintf("var %s = ssql.MustParseInet(%s)", varName, v.Src)
+			return exprGo{Src: varName, Type: exprGoInet, Imports: []string{ssqlImport}, Hoisted: []string{decl}}, nil
+		}
+		return mergeMeta(exprGo{Src: "ssql.MustParseInet(" + v.Src + ")", Type: exprGoInet, Imports: []string{ssqlImport}}, v), nil
+	}
+	return exprGo{}, fmt.Errorf("an inet compares only with an address or prefix, not a %s", v.Type)
 }
 
 // mergeMeta combines child imports/hoisted decls into a parent result.
@@ -710,6 +738,20 @@ func (e *exprGoEnv) compare(op string, left, right exprGo, equality bool) (exprG
 // walker and the flag-condition lowering (condOpToExprGo), so `-if pop gt X`
 // and `pop > X` cannot drift.
 func exprCompare(op string, left, right exprGo, equality bool) (exprGo, error) {
+	if left.Type == exprGoInet || right.Type == exprGoInet {
+		// Addresses in the engines' order through Compare, a string side
+		// read as an address — a literal at generation, as the VM reads it
+		// per row (DFC162).
+		l, err := asInetGo(left)
+		if err != nil {
+			return exprGo{}, err
+		}
+		r, err := asInetGo(right)
+		if err != nil {
+			return exprGo{}, err
+		}
+		return mergeMeta(exprGo{Src: "(" + l.Src + ".Compare(" + r.Src + ") " + op + " 0)", Type: exprGoBool}, l, r), nil
+	}
 	switch {
 	case left.Type.numeric() && right.Type.numeric():
 		if (left.Type == exprGoDecimal || right.Type == exprGoDecimal) && left.Type.exact() && right.Type.exact() {
@@ -1305,7 +1347,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		case exprGoInt:
 			res := exprGo{Src: "strconv.FormatInt(" + arg.Src + ", 10)", Type: exprGoString, Imports: []string{"strconv"}}
 			return mergeMeta(res, arg), nil
-		case exprGoInt128, exprGoDecimal:
+		case exprGoInt128, exprGoDecimal, exprGoInet:
 			return mergeMeta(exprGo{Src: arg.Src + ".String()", Type: exprGoString}, arg), nil
 		case exprGoFloat:
 			res := exprGo{Src: "strconv.FormatFloat(" + arg.Src + ", 'g', -1, 64)", Type: exprGoString, Imports: []string{"strconv"}}
@@ -1334,6 +1376,8 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		fn := map[string]string{"md5": "exprfn.MD5", "sha1": "exprfn.SHA1", "sha256": "exprfn.SHA256"}[name]
 		res := exprGo{Src: fn + "(" + arg.Src + ")", Type: exprGoString, Imports: []string{exprfnImport}}
 		return mergeMeta(res, arg), nil
+	case "isip", "ip", "inet", "ipfamily", "ipint", "ipkey", "ipnet", "ipin":
+		return e.inetFunc(name, args)
 	case "uuid4", "uuid7":
 		// DFC162: random ids, a new one per call.
 		if len(args) != 0 {
@@ -1702,6 +1746,65 @@ func exprCoerceFunc(f lib.TypedSchemaField) (string, bool) {
 		return "exprvm.MustCoerceBool", true
 	case "time.Time":
 		return "exprvm.MustCoerceTime", true
+	case "ssql.Inet":
+		return "exprvm.MustCoerceInet", true
 	}
 	return "", false
+}
+
+// inetFunc transpiles the IP functions (DFC162) to ssql.Inet's methods,
+// the one implementation the VM binds: each argument an inet or a string
+// read as one (asInetGo), isip of anything but a string false, as the VM.
+func (e *exprGoEnv) inetFunc(name string, args []ast.Node) (exprGo, error) {
+	want := map[string]int{"ipnet": 2, "ipin": 2}[name]
+	if want == 0 {
+		want = 1
+	}
+	if len(args) != want {
+		return exprGo{}, fmt.Errorf("%s() takes %d argument(s)", name, want)
+	}
+	x, err := e.node(args[0])
+	if err != nil {
+		return exprGo{}, err
+	}
+	if name == "isip" {
+		switch x.Type {
+		case exprGoInet:
+			return mergeMeta(exprGo{Src: x.Src + ".IsValid()", Type: exprGoBool}, x), nil
+		case exprGoString:
+			return mergeMeta(exprGo{Src: "ssql.IsInetText(" + x.Src + ")", Type: exprGoBool, Imports: []string{ssqlImport}}, x), nil
+		}
+		return exprGo{Src: "false", Type: exprGoBool}, nil
+	}
+	v, err := asInetGo(x)
+	if err != nil {
+		return exprGo{}, fmt.Errorf("%s(): %w", name, err)
+	}
+	switch name {
+	case "ip":
+		return mergeMeta(exprGo{Src: v.Src + ".String()", Type: exprGoString}, v), nil
+	case "inet":
+		return v, nil
+	case "ipfamily":
+		return mergeMeta(exprGo{Src: v.Src + ".Family()", Type: exprGoInt}, v), nil
+	case "ipint":
+		return mergeMeta(exprGo{Src: v.Src + ".Int128()", Type: exprGoInt128}, v), nil
+	case "ipkey":
+		return mergeMeta(exprGo{Src: v.Src + ".Key()", Type: exprGoString}, v), nil
+	}
+	y, err := e.node(args[1])
+	if err != nil {
+		return exprGo{}, err
+	}
+	if name == "ipnet" {
+		if y.Type != exprGoInt {
+			return exprGo{}, fmt.Errorf("ipnet() needs an integer number of bits, got %s", y.Type)
+		}
+		return mergeMeta(exprGo{Src: v.Src + ".MustNetwork(" + y.Src + ")", Type: exprGoInet}, v, y), nil
+	}
+	p, err := asInetGo(y)
+	if err != nil {
+		return exprGo{}, fmt.Errorf("ipin(): %w", err)
+	}
+	return mergeMeta(exprGo{Src: v.Src + ".Within(" + p.Src + ")", Type: exprGoBool}, v, p), nil
 }

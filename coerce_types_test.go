@@ -53,6 +53,29 @@ func TestCoerceFieldTypes(t *testing.T) {
 	}
 }
 
+// TestCoerceFieldTypesStructTypes: a declared decimal, time or inet from
+// text keeps its type. setAny had no arm for a decimal or a time, so the
+// converted value was dropped and the record kept the string: `from jsonl
+// -type amt decimal:2` silently stayed text until 2026-11-04.
+func TestCoerceFieldTypesStructTypes(t *testing.T) {
+	in := recordsOf(map[string]any{"amt": "1.5", "ts": "2026-01-02", "ip": "10.0.0.1/32"})
+	got := slices.Collect(CoerceFieldTypes(slices.Values(in), map[string]FieldType{
+		"amt": DecimalType(2), "ts": FieldTypeTime, "ip": FieldTypeInet,
+	}))
+	if v, _ := Get[any](got[0], "amt"); fmt.Sprint(v) != "1.50" {
+		t.Errorf("amt: %#v, want the decimal 1.50", v)
+	}
+	if _, ok := GetOr[any](got[0], "amt", nil).(Decimal); !ok {
+		t.Errorf("amt is %T, want a Decimal", GetOr[any](got[0], "amt", nil))
+	}
+	if _, ok := GetOr[any](got[0], "ts", nil).(interface{ Year() int }); !ok {
+		t.Errorf("ts is %T, want a time", GetOr[any](got[0], "ts", nil))
+	}
+	if v, ok := GetOr[any](got[0], "ip", nil).(Inet); !ok || v.String() != "10.0.0.1" {
+		t.Errorf("ip is %#v, want the inet 10.0.0.1", GetOr[any](got[0], "ip", nil))
+	}
+}
+
 // Strict: a fraction into int, a number into bool, a bool into a
 // number, an unparsable string — each is a *CellError naming the record.
 func TestCoerceFieldTypesIsStrict(t *testing.T) {

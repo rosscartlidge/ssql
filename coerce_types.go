@@ -137,6 +137,10 @@ func coerceValue(v any, ft FieldType) (any, error) {
 		if t, ok := ParseTime(v); ok {
 			return t, nil
 		}
+	case FieldTypeInet:
+		if x, ok := v.(Inet); ok {
+			return x, nil
+		}
 	}
 	return nil, errCellType
 }
@@ -144,19 +148,8 @@ func coerceValue(v any, ft FieldType) (any, error) {
 // setAny stores a parsed cell value (string/int64/float64/bool, or nil
 // for absent) into a field.
 func setAny(m MutableRecord, field string, v any) MutableRecord {
-	switch x := v.(type) {
-	case nil:
+	if v == nil {
 		return m.Delete(field)
-	case string:
-		return m.String(field, x)
-	case int64:
-		return m.Int(field, x)
-	case Int128:
-		return m.Int128(field, x)
-	case float64:
-		return m.Float(field, x)
-	case bool:
-		return m.Bool(field, x)
 	}
-	return m
+	return setScalar(m, field, v) // a decimal or a time was dropped here until 2026-11-04
 }

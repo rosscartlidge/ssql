@@ -331,3 +331,53 @@ func TestExprDecimalSemantics(t *testing.T) {
 		}
 	}
 }
+
+// TestExprInetSemantics: the IP functions and an inet in the VM's
+// comparisons and min/max (DFC162). A column named ip calls ip() on
+// itself (the alias binding); a string beside an inet is read as an
+// address; arithmetic and an unparseable comparand are errors.
+func TestExprInetSemantics(t *testing.T) {
+	env := map[string]any{"ip": MustParseInet("10.0.0.9"), "s": "2001:DB8::1", "net": MustParseInet("10.0.0.0/8"), "n": int64(16)}
+	show := func(v any) string {
+		switch x := v.(type) {
+		case Inet:
+			return "inet:" + x.String()
+		case Int128:
+			return "i128:" + x.String()
+		}
+		return fmt.Sprintf("%T:%v", v, v)
+	}
+	for _, c := range []struct{ src, want string }{
+		{"ip(ip)", "string:10.0.0.9"}, {"ip(s)", "string:2001:db8::1"}, {"inet(s)", "inet:2001:db8::1"},
+		{"isip(s)", "bool:true"}, {"isip(\"10.0.0\")", "bool:false"}, {"isip(n)", "bool:false"},
+		{"ipfamily(ip)", "int64:4"}, {"ipfamily(\"::ffff:1.2.3.4\")", "int64:6"},
+		{"ipint(ip)", "i128:167772169"}, {"ipint(\"fe80::1\")", "i128:-1993841993677373809355710590420516863"},
+		{"ipkey(ip)", "string:40a000009200a000009"},
+		{"ipnet(ip, 16)", "inet:10.0.0.0/16"}, {"ipnet(s, n)", "inet:2001::/16"},
+		{"ipin(ip, net)", "bool:true"}, {"ipin(ip, \"11.0.0.0/8\")", "bool:false"}, {"ipin(net, ip)", "bool:false"},
+		{"ip > \"9.255.255.255\"", "bool:true"}, {"ip < net", "bool:false"}, {"ip == \"10.0.0.9/32\"", "bool:true"},
+		{"net <= ip", "bool:true"}, {"ip != \"10.0.0.9\"", "bool:false"},
+		{"min(ip, \"9.0.0.1\")", "inet:9.0.0.1"}, {"max(ip, net, \"::1\")", "inet:::1"},
+		{"string(net)", "string:10.0.0.0/8"},
+	} {
+		got, err := expr.Run(compileStd(t, c.src), env)
+		if err != nil {
+			t.Errorf("%s: %v", c.src, err)
+			continue
+		}
+		if show(got) != c.want {
+			t.Errorf("%s: got %s, want %s", c.src, show(got), c.want)
+		}
+	}
+	for _, c := range []struct{ src, want string }{
+		{"ip + 1", "has no arithmetic"}, {"ip * 2", "has no arithmetic"}, {"ip / 2", "has no arithmetic"},
+		{"ip < \"nope\"", "is not one"}, {"ip == 3", "is not one"},
+		{"ip(\"010.0.0.1\")", "is not an IP address"}, {"ipnet(ip, 33)", "outside 0..32"},
+		{"min(ip, 3)", "must be an IP address"},
+	} {
+		_, err := expr.Run(compileStd(t, c.src), env)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want error %q, got %v", c.src, c.want, err)
+		}
+	}
+}

@@ -94,6 +94,8 @@ func renderRecordConverter(schema *lib.TypedSchema) string {
 			def = "float64(0)"
 		case "bool":
 			def = "false"
+		case "time.Time", "ssql.Inet":
+			def = f.GoType + "{}" // a struct's zero: "" gave GetOr a string and the field did not compile
 		default:
 			def = `""`
 		}

@@ -607,6 +607,63 @@ ssql from orders.csv | ssql update -set-expr id 'uuid4()'
 ssql from pages.csv | ssql update -set-expr page_id 'uuid5("url", url)'
 ```
 
+### IP Functions and the inet Type
+
+An IP address held as text sorts as text: `10.0.0.9` before `9.0.0.1`,
+and `::1` never equals `0:0:0:0:0:0:0:1`. Declare the column `inet` and it
+sorts, compares, groups and joins as an address, in every lane:
+
+```bash
+ssql from csv -type src inet log.csv | ssql sort src           # or: ssql cast -type src inet
+ssql from csv -type src inet log.csv | ssql where -if src lt 10.0.0.0
+```
+
+One type holds addresses and prefixes, as DuckDB's `INET` does: an
+address is its full-length prefix (`10.0.0.1` and `10.0.0.1/32` are one
+value), and a prefix keeps its host bits (`10.0.0.1/24` is not
+`10.0.0.0/24`). The order is DuckDB's and Postgres's: IPv4 before IPv6,
+then the network, the prefix length, the address
+(`9.0.0.1 < 10.0.0.0/8 < 10.0.0.0/16 < 10.0.0.1/24 < 10.0.0.1 < ::1`). A
+v4-mapped address (`::ffff:1.2.3.4`) is IPv6. A column is inet only when
+you declare it: text that looks like an address stays text. An inet has no
+arithmetic, so `-sum`, `-avg` and `ip + 1` are errors. A string beside an
+inet is read as an address, so `ip < "10.0.0.1"` and `-if ip lt 10.0.0.1`
+compare addresses, and a string that is not one is an error.
+
+| Function | Result | Example |
+|----------|--------|---------|
+| `isip(s)` | Whether `s` is an address or prefix; never an error | `isip("10.0.0")` → `false` |
+| `ip(x)` | The canonical text | `ip("2001:DB8:0::1")` → `"2001:db8::1"` |
+| `inet(x)` | The inet value (declares the column) | `inet("10.0.0.0/8")` |
+| `ipfamily(x)` | 4 or 6 | `ipfamily("::1")` → `6` |
+| `ipint(x)` | The address as an int128: IPv4 its value, IPv6 its 128 bits in two's complement | `ipint("10.0.0.1")` → `167772161`; `ipint("fe80::1")` is negative |
+| `ipkey(x)` | A text key that sorts and compares exactly as inet does | `ipkey("10.0.0.1")` → `"40a000001200a000001"` |
+| `ipnet(x, bits)` | The network of that length containing `x`, an inet | `ipnet("10.1.2.3", 16)` → `10.1.0.0/16` |
+| `ipin(x, p)` | Whether `x` lies within prefix `p`, or equals it | `ipin("10.1.2.3", "10.0.0.0/8")` → `true` |
+
+Each takes an inet or text that parses as one. `ipint` gives every
+address a number that maps back to it, but for IPv6 the numbers past 2^127
+are negative, so it is not a sort key there: sort the inet itself, or
+`ipkey` when the key must be text (for a tool with no IP type).
+
+Files: CSV, JSON and Parquet hold an inet as its text (no columnar format
+keeps an IP type exactly), so a column read back is text until it is
+declared again. Addresses with leading zeros (`010.0.0.1`) and zones
+(`fe80::1%eth0`) are refused; DuckDB and Postgres read the first as
+`10.0.0.1`.
+
+`generate sql`: DuckDB (its `inet` extension) and Postgres translate the
+type and the functions (`ipint` is DuckDB only); DataFusion has no IP type,
+so a pipeline with an inet column is refused there, and in `generate rust`.
+
+```bash
+# Traffic per /24 network, networks in address order
+ssql from csv -type src inet flows.csv | ssql update -set-expr net 'ipnet(src, 24)' | ssql group-by net -sum bytes total | ssql sort net
+
+# Only the private 10/8 range
+ssql from csv flows.csv | ssql where -if-expr 'ipin(src, "10.0.0.0/8")'
+```
+
 ## Helper Functions (ssql-specific)
 
 ssql provides additional helper functions for safe field access:
