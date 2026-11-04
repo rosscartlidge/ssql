@@ -440,10 +440,11 @@ func ExprFieldShadowing() expr.Option   // expr.Compile option: a field named li
 func ExprDate() expr.Option             // expr.Compile option: ssql's date() in place of expr-lang's
 func ExprTimeFunctions() []expr.Option  // the calendar functions below as expression functions (year(ts) … tz, now)
 func ExprMathFunctions() []expr.Option  // the numeric functions (DFC153): sqrt, ln, log(b, x), the trig set, round(x, n), gcd …, and hash(n[, seed]) (exprfn.Hash, the reproducible integer mix every lane shares); NaN/±Inf results are absent once written
+func ExprUUIDFunctions() []expr.Option  // uuid4(), uuid7() (random) and uuid5(ns, name) (name-based, as Python's uuid.uuid5), each the canonical lower-case text (DFC162 §8)
 func ExprCheckedIntArithmetic() []expr.Option // int64 + - * overflow is an error, not a wrap (DFC155 B): an AST patch routes the operators through exprfn.CheckedAdd/Sub/Mul; every other operand pair keeps expr's own semantics
 func ExprCheckedArithFunction(name string) bool // the patch's call names (add, sub, mul, neg, sum), for walkers that tell a field from a function
 func ExprCheckedSumPredicate(n ast.Node) (ast.Node, bool) // the group-level sum(_records, f) in either spelling (before or after the overflow patch), for the typed lowering
-func ExprStandardOptions() []expr.Option // shadowing + date() + the calendar and numeric functions + checked int arithmetic: what every ssql compile site passes
+func ExprStandardOptions() []expr.Option // shadowing + date() + the calendar, numeric and UUID functions + checked int arithmetic: what every ssql compile site passes
 ```
 
 A time renders as RFC 3339 wherever it becomes text: JSONL, CSV/TSV,

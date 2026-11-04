@@ -15,6 +15,7 @@ import (
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
+	"github.com/rosscartlidge/ssql/v4/exprfn"
 )
 
 // exprToGo transpiles an ssql expression (expr-lang, as used by -if-expr and
@@ -1333,6 +1334,38 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		fn := map[string]string{"md5": "exprfn.MD5", "sha1": "exprfn.SHA1", "sha256": "exprfn.SHA256"}[name]
 		res := exprGo{Src: fn + "(" + arg.Src + ")", Type: exprGoString, Imports: []string{exprfnImport}}
 		return mergeMeta(res, arg), nil
+	case "uuid4", "uuid7":
+		// DFC162: random ids, a new one per call.
+		if len(args) != 0 {
+			return exprGo{}, fmt.Errorf("%s() takes no arguments", name)
+		}
+		fn := map[string]string{"uuid4": "exprfn.UUID4", "uuid7": "exprfn.UUID7"}[name]
+		return exprGo{Src: fn + "()", Type: exprGoString, Imports: []string{exprfnImport}}, nil
+	case "uuid5":
+		// A bad namespace panics with the VM's error (exprfn.UUID5).
+		if len(args) != 2 {
+			return exprGo{}, fmt.Errorf("uuid5(namespace, name) takes two arguments")
+		}
+		var parts []string
+		var kids []exprGo
+		for _, a := range args {
+			v, err := e.node(a)
+			if err != nil {
+				return exprGo{}, err
+			}
+			if v.Type != exprGoString {
+				return exprGo{}, fmt.Errorf("uuid5() needs string arguments, got %s", v.Type)
+			}
+			parts = append(parts, v.Src)
+			kids = append(kids, v)
+		}
+		if lit, ok := args[0].(*ast.StringNode); ok {
+			if _, err := exprfn.ParseUUIDNamespace(lit.Value); err != nil {
+				return exprGo{}, err
+			}
+		}
+		res := exprGo{Src: "exprfn.UUID5(" + strings.Join(parts, ", ") + ")", Type: exprGoString, Imports: []string{exprfnImport}}
+		return mergeMeta(res, kids...), nil
 	case "hasPrefix", "hasSuffix":
 		if len(args) != 2 {
 			return exprGo{}, fmt.Errorf("%s() takes exactly two arguments", name)

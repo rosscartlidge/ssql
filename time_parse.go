@@ -124,6 +124,9 @@ var ExprCompiledFunctions = func() map[string]bool {
 	for _, n := range ExprMathFunctionNames { // DFC153
 		m[n] = true
 	}
+	for _, n := range ExprUUIDFunctionNames { // DFC162
+		m[n] = true
+	}
 	return m
 }()
 

@@ -2,11 +2,11 @@
 
 Reference: DFC162
 Created: 2026-11-03
-Last modified: 2026-11-03
+Last modified: 2026-11-04
 
 [Back to Index](./README.md)
 
-Status: **survey, 2026-11-03.** Nothing is built.
+Status: **survey, 2026-11-03. The UUID functions are built (2026-11-04, §8); the IP part awaits a decision.**
 
 ## 0. The prompt
 
@@ -386,6 +386,57 @@ was found by it.
 4. DataFusion: refuse the IP functions, or translate v4 and fail at run
    time on v6?
 5. Fix the Parquet struct and UUID read bugs now, as a patch release?
+
+## 8. Decision and build, 2026-11-04: uuid4, uuid5 and uuid7
+
+Ross: "lets do uuid 4, 5 and 7". All three, at once, with no type
+(§3 U4 stands).
+
+- **Names.** `uuid4()`, `uuid5(ns, name)`, `uuid7()`: the version in
+  the name, so a reader does not have to know that `uuid()` means
+  random. There is no bare `uuid()`.
+- **The namespace is required** (§6 Q2), as in Python: `dns`, `url`,
+  `oid`, `x500` in either case, or a UUID with or without hyphens.
+  Inventing an ssql namespace would make a key nobody else can
+  reproduce, which is the opposite of what v5 is for.
+- **One implementation**: `exprfn/uuid.go`. The VM binds it in
+  `expr_uuid.go` (with the alias, so a column named `uuid4` does not
+  shadow the call), and transpiled code calls it. `crypto/rand` for
+  the random bits. A bad namespace is an error in the VM, a panic with
+  the same error in generated code (as `exprfn.Add`), and a
+  translation-time error when it is a literal.
+- **uuid7** is the RFC's plain form: 48 bits of Unix milliseconds,
+  then random. There is no per-millisecond counter: a counter is a
+  shared state per generator, a lock on every row in the parallel
+  lanes, and it would still not order across shards. Ids sort by
+  time to the millisecond, as DuckDB's `uuidv7()` does.
+- **SQL** (`generate_sql_uuid.go`):
+  - `uuid4()`: `CAST(uuid() AS VARCHAR)` on DuckDB,
+    `gen_random_uuid()::text` on Postgres, `uuid()` on DataFusion.
+  - `uuid7()`: `CAST(uuidv7() AS VARCHAR)` on DuckDB; refused on
+    Postgres (18 only) and DataFusion.
+  - `uuid5()`: the §3 U1 sha1 form on DuckDB, a column namespace
+    through a `CASE` that maps the four names; refused on Postgres
+    (`uuid-ossp`) and DataFusion (no sha1).
+- **The read-twice hazard** (§3 U2) did not appear. The `update`
+  chain translates to nested subqueries, which every engine evaluates
+  once. The two translations that read a CTE twice, fold and
+  traverse, are DuckDB-only, or carry no input column through the
+  second read. The equivalence case copies the id, filters on it and
+  compares the copy, so an engine that evaluated the call per reading
+  would fail it.
+- **Testing a random function** needed no harness hook. The pipeline
+  checks its own shape: a regex on the version and variant nibbles,
+  `count-distinct` equal to the row count, the copy equal to the id,
+  and for v7 the leading 48 bits a millisecond between 2022 and 2039.
+  It reduces to one deterministic row, `{ok: true, n: 50, ids: 50}`,
+  which is a Golden for every lane. uuid5 has a Golden from Python's
+  `uuid.uuid5`.
+- **Found on the way:** `+` on strings had no SQL translation. It was
+  emitted as a numeric `+`, which DuckDB rejects (`'x' + CAST(n AS
+  VARCHAR)`). Now a literal, a text column or a string-valued function
+  on either side makes it `||` (`sqlStringOperand`), with an
+  equivalence case of its own (`expr_string_concat`).
 
 ## 7. Related
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **UUID functions: `uuid4()`, `uuid5(ns, name)` and `uuid7()`.** `uuid4()` is a random id and `uuid7()` a time-ordered one, whose text sorts by creation to the millisecond. `uuid5(ns, name)` is the name-based UUID: the same inputs give the same id in every lane, on every run, and in Python's `uuid.uuid5`. `ns` is `dns`, `url`, `oid`, `x500` or any UUID. A UUID is its canonical lower-case text: no type is needed, because that text sorts in 128-bit order. All three work in exec and `generate go` (record, typed, parallel). In `generate sql`, `uuid4()` translates in every dialect, and `uuid7()` and `uuid5()` translate on DuckDB; Postgres and DataFusion refuse them ([DFC162](doc/research/dfc162_uuid_and_ip_address_types.md) §8).
+
+### Fixed
+
+- **`generate sql`: `+` on strings is `||`.** `"x" + string(n)` was emitted as a numeric `+`, which DuckDB rejects. A string literal, a text column or a string-valued function on either side now makes it concatenation, in every dialect.
+
 ## [4.137.2] - 2026-11-03
 
 ### Fixed

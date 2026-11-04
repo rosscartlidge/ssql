@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-10-28 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-10-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-11-03 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-11-04 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -169,7 +169,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC159 | 2026-10-30 | 2026-11-02 | [ssql for Rust Programmers: Pipelines as DataFusion Programs](./dfc159_ssql_for_rust_programmers.md) |
 | DFC160 | 2026-10-31 | 2026-11-02 | [ssql and DuckDB, Feature by Feature: Where Things Stand (October 2026)](./dfc160_duckdb_feature_comparison_2026_10.md) |
 | DFC161 | 2026-10-31 | 2026-11-03 | [Graph Traversal: `traverse`, a Join Run to a Fixpoint](./dfc161_graph_traversal_join_follow.md) |
-| DFC162 | 2026-11-03 | 2026-11-03 | [UUIDs and IP Addresses: Functions, Types, or Neither](./dfc162_uuid_and_ip_address_types.md) |
+| DFC162 | 2026-11-03 | 2026-11-04 | [UUIDs and IP Addresses: Functions, Types, or Neither](./dfc162_uuid_and_ip_address_types.md) |
 
 <!-- DFC-INDEX-END -->
 

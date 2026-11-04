@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-03
+Last modified: 2026-11-04
 
 [Back to Index](./README.md)
 
@@ -22,7 +22,11 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Parquet UUID logical type reads as base64.** FIXED 2026-11-03. DuckDB's `UUID` is
   `FIXED_LEN_BYTE_ARRAY(16)` + UUID. It should read as the canonical
   `8-4-4-4-12` string.
-- [ ] UUID and IP functions or types: proposal DFC162, awaiting Ross.
+- [x] **UUID functions** (DFC162 §8): `uuid4()`, `uuid5(ns, name)`, `uuid7()`, DONE 2026-11-04.
+  Follow-ups, not done: `to parquet` writing a column whose every value is a
+  canonical UUID with the UUID logical type (§3 U4); `uuid5` on Postgres when
+  `uuid-ossp` is installed (an opt-in, since the extension may be missing).
+- [ ] IP functions or an `inet` type: DFC162 §4, awaiting Ross (§6 Q3, Q4).
 
 ## Multi-file `from` (see multi-file-from.md)
 

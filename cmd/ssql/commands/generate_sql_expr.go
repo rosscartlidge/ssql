@@ -295,6 +295,37 @@ func sqlIntOperand(node ast.Node) bool {
 	return false
 }
 
+// sqlStringOperand reports whether node is known to be a string: a
+// literal, a column the sample saw as text, or a call that returns text.
+// expr-lang's + with a string on either side is concatenation (a string
+// beside anything else is a compile error), which SQL spells ||; a bare
+// + there is numeric, and DuckDB rejected `'x' + CAST(n AS VARCHAR)`.
+func sqlStringOperand(node ast.Node) bool {
+	switch n := node.(type) {
+	case *ast.StringNode:
+		return true
+	case *ast.IdentifierNode:
+		if _, ok := sqlExprParams[n.Value]; ok || sqlIdentResolver != nil {
+			return false
+		}
+		return sqlColumnKinds[n.Value] == "string"
+	case *ast.CallNode:
+		ident, ok := n.Callee.(*ast.IdentifierNode)
+		return ok && sqlStringFuncs[ident.Value]
+	case *ast.BuiltinNode:
+		return sqlStringFuncs[n.Name]
+	case *ast.BinaryNode:
+		return n.Operator == "+" && (sqlStringOperand(n.Left) || sqlStringOperand(n.Right))
+	}
+	return false
+}
+
+// sqlStringFuncs are the functions whose result is always a string.
+var sqlStringFuncs = map[string]bool{
+	"string": true, "upper": true, "lower": true, "trim": true, "trimPrefix": true, "trimSuffix": true,
+	"md5": true, "sha1": true, "sha256": true, "uuid4": true, "uuid5": true, "uuid7": true, "strftime": true,
+}
+
 func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 	// `x == nil` / `x != nil`: SQL's `x = NULL` is never true (NULL, not
 	// a boolean), so an absent-field test lowered that way selected no
@@ -358,6 +389,9 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 	}
 	if (n.Operator == "+" || n.Operator == "-" || n.Operator == "*") && sqlCheckedIntArith() && sqlIntOperand(n.Left) && sqlIntOperand(n.Right) {
 		return sqlCheckedInt("(" + sqlAsDecimal0(left) + " " + n.Operator + " " + sqlAsDecimal0(right) + ")"), nil
+	}
+	if n.Operator == "+" && (sqlStringOperand(n.Left) || sqlStringOperand(n.Right)) {
+		return "(" + left + " || " + right + ")", nil
 	}
 	if op, ok := exprBinaryOps[n.Operator]; ok {
 		return "(" + left + " " + op + " " + right + ")", nil
@@ -472,6 +506,9 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 		return sql, err
 	}
 	if sql, ok, err := hashFuncToSQL(name, args); ok { // hash(), the digests
+		return sql, err
+	}
+	if sql, ok, err := uuidFuncToSQL(name, args); ok { // DFC162
 		return sql, err
 	}
 	if sqlFunc, ok := exprListFuncs[name]; ok {

@@ -3160,6 +3160,60 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"postgres": "Postgres has sha1 only through pgcrypto: generate sql refuses by design"},
 	},
 	{
+		// + on strings is concatenation, || in SQL: a literal, a cast and
+		// a string function each make the other side text. The SQL
+		// translator emitted a numeric + until 2026-11-04 (DFC162 found it).
+		Name:     "expr_string_concat",
+		Pipeline: `{{.bin}} from range 3 | {{.bin}} update -set-expr s '"n" + string(n)' | {{.bin}} update -set-expr t 's + "!"' -set-expr u 'upper(s) + "-" + lower("X")' | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"n": 1, "s": "n1", "t": "n1!", "u": "N1-x"},
+			{"n": 2, "s": "n2", "t": "n2!", "u": "N2-x"},
+			{"n": 3, "s": "n3", "t": "n3!", "u": "N3-x"},
+		},
+	},
+	{
+		// uuid5 (DFC162): the name-based UUID, Golden from Python's
+		// uuid.uuid5; the namespace a literal name and a column (which
+		// DuckDB maps through a CASE). DuckDB builds it from sha1.
+		Name:     "expr_uuid5",
+		Pipeline: `{{.bin}} from range 3 | {{.bin}} update -set-expr ns '"URL"' | {{.bin}} update -set-expr d 'uuid5("dns", string(n))' -set-expr u 'uuid5(ns, "x" + string(n))' | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"n": 1, "ns": "URL", "d": "b04965e6-a9bb-591f-8f8a-1adcb2c8dc39", "u": "d8da569c-6249-5269-8919-d08aa5f9088b"},
+			{"n": 2, "ns": "URL", "d": "4b166dbe-d99d-5091-abdd-95b83330ed3a", "u": "a18c247f-de11-579b-9060-5ed873649256"},
+			{"n": 3, "ns": "URL", "d": "98123fde-012f-5ff3-8b50-881449dac91a", "u": "6b316009-58f7-5a09-b446-4ea0b2caef89"},
+		},
+		Skip: map[string]string{
+			"postgres":   "Postgres has uuid5 only through uuid-ossp: generate sql refuses by design",
+			"datafusion": "DataFusion has no sha1: generate sql refuses by design",
+		},
+	},
+	{
+		// uuid4 is random, so the pipeline checks the shape itself: every
+		// id a version 4 UUID, all distinct, and the same value wherever
+		// the column is read (a copy, a filter: an engine that evaluated
+		// the call once per reading would differ).
+		Name: "expr_uuid4_shape",
+		Pipeline: `{{.bin}} from range 50 | {{.bin}} update -set-expr id 'uuid4()' | {{.bin}} update -set-expr copy 'id' | {{.bin}} where -if-expr 'id != ""' ` +
+			`| {{.bin}} update -set-expr ok 'id matches "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" and copy == id' ` +
+			`| {{.bin}} group-by ok -count n -count-distinct id ids`,
+		Golden: []map[string]any{{"ok": true, "n": 50, "ids": 50}},
+	},
+	{
+		// uuid7: version 7, distinct, and the leading 48 bits a Unix
+		// millisecond between 2022 (0x018…) and 2039 (0x020…).
+		Name: "expr_uuid7_shape",
+		Pipeline: `{{.bin}} from range 50 | {{.bin}} update -set-expr id 'uuid7()' ` +
+			`| {{.bin}} update -set-expr ok 'id matches "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" and id > "018" and id < "020"' ` +
+			`| {{.bin}} group-by ok -count n -count-distinct id ids`,
+		Golden: []map[string]any{{"ok": true, "n": 50, "ids": 50}},
+		Skip: map[string]string{
+			"postgres":   "Postgres has uuidv7() only from 18: generate sql refuses by design",
+			"datafusion": "DataFusion has only the random uuid(): generate sql refuses by design",
+		},
+	},
+	{
 		// extract -skip: named groups → string fields, source field
 		// dropped, non-matching line gone — every lane incl. DuckDB's
 		// regexp_extract + regexp_matches.

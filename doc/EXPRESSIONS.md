@@ -568,6 +568,45 @@ ssql from range 100000 | ssql update -set-expr key 'hash(n) % 10' -set-expr amou
 ssql update -set-expr id 'sha256(name + ":" + email)'
 ```
 
+### UUID Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `uuid4()` | A random UUID (version 4), a new one per call | `"0c3e5b0e-7d0a-4b8e-9d3d-01014ee3b83d"` |
+| `uuid7()` | A time-ordered UUID (version 7): the Unix milliseconds, then random bits | `"01a1a41d-1665-7d20-964f-26121a1cac10"` |
+| `uuid5(ns, name)` | The name-based UUID (version 5, SHA-1) of `name` in namespace `ns` | `uuid5("dns", "python.org")` → `"886313e1-3b8a-5372-9b90-0c9aee199e5d"` |
+
+A UUID is a string here, in the canonical lower-case 8-4-4-4-12 form.
+It needs no type: that form is fixed-width, so sorting the text sorts
+the 128-bit values (DuckDB's `UUID` type sorts the same way), and two
+UUIDs are equal when their text is. A Parquet `UUID` column reads as
+the same text (DFC162).
+
+- `uuid4()` is the id to give each row. It is random, so it differs on
+  every run and in every lane.
+- `uuid7()` puts the creation time first, so ids sort by when they were
+  made, to the millisecond; within a millisecond the order is random.
+- `uuid5(ns, name)` is deterministic: the same namespace and name give
+  the same UUID in every lane, on every run, and in Python's
+  `uuid.uuid5`, Postgres's `uuid_generate_v5` and Go's `google/uuid`.
+  Use it for a key derived from data that has to join or dedupe across
+  systems. `ns` is `dns`, `url`, `oid` or `x500` (RFC 9562's namespaces,
+  in either case) or any UUID; there is no default, as in Python. The
+  name is hashed as UTF-8.
+
+`generate sql` translates `uuid4()` in every dialect. `uuid7()` and
+`uuid5()` translate on DuckDB only: Postgres has `uuidv7()` from version
+18 and `uuid_generate_v5` only through the `uuid-ossp` extension, and
+DataFusion has neither (nor `sha1`), so those dialects refuse.
+
+```bash
+# An id for every row
+ssql from orders.csv | ssql update -set-expr id 'uuid4()'
+
+# A key that matches Python's uuid.uuid5(uuid.NAMESPACE_URL, url)
+ssql from pages.csv | ssql update -set-expr page_id 'uuid5("url", url)'
+```
+
 ## Helper Functions (ssql-specific)
 
 ssql provides additional helper functions for safe field access:

@@ -55,6 +55,7 @@ func TestExprGoDifferential(t *testing.T) {
 		"round(price, 1)", "round(pop, 1)", "isnan(sqrt(pop))", "isinf(1.0 / qty)", "isfinite(ln(price))",
 		"gcd(pop, qty)", "lcm(pop, qty)", "factorial(qty)", "gamma(price)", "lgamma(price)",
 		"hash(pop)", "hash(pop, 7)", "hash(qty, pop)", "hash(pop, -3)", "md5(city)", "sha1(city)", "sha256(city)",
+		`uuid5("dns", city)`, `uuid5("6BA7B811-9DAD-11D1-80B4-00C04FD430C8", city + "!")`, // DFC162; uuid4/uuid7 are random
 		"-pop",
 		`city + "!"`,
 		// DFC155 E: a decimal beside an exact number stays a decimal (the

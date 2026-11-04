@@ -122,8 +122,9 @@ Bitwise Functions (8):
   bitand(a, b), bitor(a, b), bitxor(a, b), bitnand(a, b),
   bitnot(a), bitshl(a, n), bitshr(a, n), bitushr(a, n)
 
-Hash Functions (4):
-  hash(n), hash(n, seed), sha256(str), sha1(str), md5(str)
+Hash & UUID Functions (7):
+  hash(n), hash(n, seed), sha256(str), sha1(str), md5(str),
+  uuid4(), uuid5(ns, name), uuid7()
 
 Helpers (2):
   has(field), getOr(field, default)
@@ -601,11 +602,25 @@ func writeHashFunctions(w io.Writer) {
 	fmt.Fprintln(w, "  md5(str)       MD5 hash (32 hex characters)")
 	fmt.Fprintln(w, "    Example: md5(\"hello\") → \"5d41402abc4b2a76b9719d911017c592\"")
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  uuid4()        A random UUID (version 4), a new one per call")
+	fmt.Fprintln(w, "    Example: uuid4() → \"0c3e5b0e-7d0a-4b8e-9d3d-01014ee3b83d\"")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  uuid7()        A time-ordered UUID (version 7): the Unix milliseconds, then random bits,")
+	fmt.Fprintln(w, "                 so ids sort by creation to the millisecond (DuckDB only in generate sql)")
+	fmt.Fprintln(w, "    Example: uuid7() → \"01a1a41d-1665-7d20-964f-26121a1cac10\"")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  uuid5(ns, name) The name-based UUID (version 5, SHA-1): the same inputs give the same id")
+	fmt.Fprintln(w, "                 here and in Python's uuid.uuid5. ns is dns, url, oid, x500 or a UUID")
+	fmt.Fprintln(w, "                 (DuckDB only in generate sql)")
+	fmt.Fprintln(w, "    Example: uuid5(\"dns\", \"python.org\") → \"886313e1-3b8a-5372-9b90-0c9aee199e5d\"")
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Common Usage:")
 	fmt.Fprintln(w, "  ssql from range 1000 | ssql update -set-expr key 'hash(n) % 100' -set-expr amount 'hash(n, 1) % 500'")
 	fmt.Fprintln(w, "  ssql update -set-expr email_hash 'sha256(email)'")
 	fmt.Fprintln(w, "  ssql update -set-expr id 'sha256(name + \":\" + email)'")
 	fmt.Fprintln(w, "  ssql update -set-expr checksum 'md5(content)'")
+	fmt.Fprintln(w, "  ssql update -set-expr id 'uuid4()'")
+	fmt.Fprintln(w, "  ssql update -set-expr key 'uuid5(\"url\", site + path)'")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Note: hash() is for spread, not security — a fixture, a demo or a benchmark needs")
 	fmt.Fprintln(w, "      no file when `from range` and hash() make its keys. Prefer sha256 over md5/sha1.")
