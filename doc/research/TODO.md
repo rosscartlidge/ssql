@@ -26,7 +26,20 @@ Tracked issues and feature gaps discovered during development.
   Follow-ups, not done: `to parquet` writing a column whose every value is a
   canonical UUID with the UUID logical type (§3 U4); `uuid5` on Postgres when
   `uuid-ossp` is installed (an opt-in, since the extension may be missing).
-- [ ] IP functions or an `inet` type: DFC162 §4, awaiting Ross (§6 Q3, Q4).
+- [x] **IP addresses: the `inet` type and the IP functions** (DFC162 §9), DONE 2026-11-04.
+  Follow-ups, not done:
+  - `in` with an inet (`ip in ["10.0.0.1"]`) compares with expr's own
+    equality and is false; int128 and decimal have the same gap.
+  - Parquet/Arrow metadata `ssql.type=inet`, so a file written by ssql
+    reads back as inet without a cast.
+  - `-param p inet V` (no struct type has a `-param` form yet).
+  - A codelab paragraph on declaring an address column.
+  - `from json` (the array reader) has no `-type` flag; `from jsonl` does.
+- [ ] **Type × operation matrix and a domain lint for type switches**:
+  proposal [DFC163](./dfc163_type_operation_matrix_and_domain_lint.md),
+  awaiting Ross (§4: order, annotation form, gate placement). The inet
+  build found seven bugs of one shape (a type switch or Go-type table
+  missing a newer type).
 
 ## Multi-file `from` (see multi-file-from.md)
 

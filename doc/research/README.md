@@ -170,6 +170,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC160 | 2026-10-31 | 2026-11-02 | [ssql and DuckDB, Feature by Feature: Where Things Stand (October 2026)](./dfc160_duckdb_feature_comparison_2026_10.md) |
 | DFC161 | 2026-10-31 | 2026-11-03 | [Graph Traversal: `traverse`, a Join Run to a Fixpoint](./dfc161_graph_traversal_join_follow.md) |
 | DFC162 | 2026-11-03 | 2026-11-04 | [UUIDs and IP Addresses: Functions, Types, or Neither](./dfc162_uuid_and_ip_address_types.md) |
+| DFC163 | 2026-11-04 | 2026-11-04 | [Finding Type Gaps Before Users Do: a Type × Operation Matrix and a Domain Lint](./dfc163_type_operation_matrix_and_domain_lint.md) |
 
 <!-- DFC-INDEX-END -->
 
