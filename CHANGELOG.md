@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.139.0] - 2026-11-05
+
 ### Added
 
 - **A domain lint for type switches (`make vet`).** A switch over record values that names a time, int128, decimal or inet declares the types it handles with `// ssql:domain D` (`scalar`, `ordered`, `numeric`, `exact`, `wide`, a union, or `fixed: reason`), and `internal/lint/typedomain` fails one that is missing an annotation or an arm. A new scalar type starts in the lint's domain table, and `make vet` then lists every switch that must handle it. Every type since `time` shipped bugs of this shape; annotating the 194 existing sites found the twelve below ([DFC163](doc/research/dfc163_type_operation_matrix_and_domain_lint.md) §6).
