@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.140.0] - 2026-11-06
+
 ### Added
 
 - **A type × operation matrix** (`SSQL_MATRIX=1 go test ./cmd/ssql -run TestTypeOperationMatrix`, a pre-tag gate). It runs every declarable type × every argument that takes a field (read from `ssql -spec-json`) × every lane. It checks four things: a cell works or every lane refuses it loudly, the lanes agree, an input column keeps its type, and the lanes' refusals agree. Gaps it found and that are not fixed yet are listed by name and in TODO ([DFC163](doc/research/dfc163_type_operation_matrix_and_domain_lint.md) §7).
