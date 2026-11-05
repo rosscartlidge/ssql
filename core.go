@@ -854,6 +854,15 @@ func JSONOrNull(text string) any {
 	return JSONString(text)
 }
 
+// JSONPtrOrNull is JSONOrNull for a nullable json field (a window lag or
+// mode over a json column): nil is no value.
+func JSONPtrOrNull(text *string) any {
+	if text == nil {
+		return nil
+	}
+	return JSONOrNull(*text)
+}
+
 // jsonRawToValue turns one raw JSON value into a record value: an array
 // or object is a JSONString (compacted), anything else decodes as
 // encoding/json does (numbers as float64).

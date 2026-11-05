@@ -150,6 +150,10 @@ func generateTopCode(n int, field string, asc bool) error {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'top' references unknown field %q", field))
 		}
+		if f.JSON {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'top' on field %q: a json value has no order (eq and ne compare it)", field))
+		}
 		if !isSortableGoType(f.GoType) {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'top' on field %q (type %s) not supported (need int/float/string)", field, f.GoType))
@@ -167,18 +171,19 @@ func generateTopCode(n int, field string, asc bool) error {
 			serialFn, parallelFn = "typed.BottomBy", "typed.BottomByParallel"
 		}
 		keyFn := fmt.Sprintf("func(r %s) %s { return r.%s }", prevSchema.TypeName, f.GoType, f.GoName)
-		if m := goCompareMethod(f.GoType); m != "" {
-			// Not cmp.Ordered (an int128, a decimal, a time, an inet): the
-			// comparator forms, as sort uses SortByFunc (DFC155 C, DFC162).
+		if src, ok := goCompareSrc(f.GoType, "a."+f.GoName, "b."+f.GoName); ok {
+			// Not cmp.Ordered (an int128, a decimal, a time, an inet, a
+			// bool): the comparator forms, as sort uses SortByFunc (DFC155
+			// C, DFC162, DFC163).
 			serialFn, parallelFn = "typed.TopByFunc", "typed.TopByFuncParallel"
 			if asc {
 				serialFn, parallelFn = "typed.BottomByFunc", "typed.BottomByFuncParallel"
 			}
-			keyFn = fmt.Sprintf("func(a, b %s) int { return a.%s.%s(b.%s) }", prevSchema.TypeName, f.GoName, m, f.GoName)
+			keyFn = fmt.Sprintf("func(a, b %s) int { return %s }", prevSchema.TypeName, src)
 		}
 		parallelCode := fmt.Sprintf("%s := %s(%s, *flagTop, %s)", outputVar, parallelFn, inputVar, keyFn)
 		serialCode := fmt.Sprintf("%s := %s(*flagTop, %s)(%s)", outputVar, serialFn, keyFn, inputVar)
-		imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+		imports := append([]string{"github.com/rosscartlidge/ssql/v4/typed"}, goCompareImports(f.GoType)...)
 
 		frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
 		frag.Params = params

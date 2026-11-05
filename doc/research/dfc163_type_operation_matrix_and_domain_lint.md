@@ -6,7 +6,7 @@ Last modified: 2026-11-05
 
 [Back to Index](./README.md)
 
-Status: **lint built 2026-11-05 (§6).** The matrix (§2.1) and the declared-types generator (§2.3) are not built yet.
+Status: **lint built 2026-11-05 (§6); matrix built 2026-11-05 (§7).** The declared-types generator (§2.3) is not built yet.
 
 ## 0. The prompt
 
@@ -357,7 +357,154 @@ named and 81 `fixed:`, including the lint's own three tables.
   `-type age float` happened to print the same numbers. It is now
   refused by design.
 
-## 7. Related
+## 7. Built: the matrix (2026-11-05)
+
+### 7.1 Ross's answers to the design questions
+
+Asked in plan mode, all eight as recommended:
+1. **Arguments are filled** from `-spec-json`, plus an override table.
+   An unfillable cell is counted as "not covered".
+2. **Fixture:** one wide CSV with a column per type, declared with
+   `-type`.
+3. **Two-field flags** take the same type in both positions.
+4. **Type survives:** a generic rule plus exceptions.
+5. **Literals:** a type table with one row per type, checked against the
+   lint's members.
+6. **Lanes:** exec, record, typed, parallel and DuckDB always;
+   Postgres, DataFusion and rust when their environment is set.
+7. **Acceptance:** `SSQL_MATRIX_BIN` runs it against an older release,
+   once, by hand.
+8. **Output:** failures plus a report grid.
+
+### 7.2 What was built
+
+**`cmd/ssql/matrix_test.go`**, `TestTypeOperationMatrix`, opt-in with
+`SSQL_MATRIX=1` and a pre-tag gate.
+- **Cells:** every flag argument whose completer is `fields` × nine
+  types (int, int128, decimal:2, float, string, bool, time, inet,
+  json), run over two fixtures.
+  - `matrix.csv` runs in every lane.
+  - `matrix_empties.csv` adds a row empty in every typed column, and
+    runs in exec and the SQL lanes only. The typed reader refuses an
+    empty cell in a non-string field by design (DFC124 §3).
+  - That makes 1,476 cells, plus 135 not covered (traverse, merge,
+    macros, parameters, and two source/pattern flags).
+- **Run time:** about 7½ minutes on 24 cores. That is within budget, so
+  the Go lanes are not batched.
+- **The oracles:**
+  - loud or working: a runtime error, generated Go that does not
+    compile, or an error without an `Error:` line is a failure;
+  - the lanes agree (`runEquivCase`);
+  - the types survive, read from exec's `_schema` header;
+  - refusals agree: exec refuses, and every Go lane and DuckDB refuse
+    too.
+- **Known gaps** (`matrixKnown`): a cell-name pattern with a reason.
+  Such a cell is skipped and counted, so the gate is green and a new
+  failure is red. `SSQL_MATRIX_KNOWN=1` runs the known cells, to find
+  stale entries.
+- **The report** (`SSQL_MATRIX_REPORT`) is a command × type grid giving
+  pass, pass without SQL, refused, known, not covered and fail.
+
+**Three harness lessons, each a silent gap until noticed:**
+- **A declared json column has no SQL translation.** Every cell
+  declared one, so the first run had no SQL lane at all, and nothing
+  said so. Only json cells declare it now, and the report counts
+  "pass, no SQL".
+- **An empty text cell is `""` in ssql and NULL in SQL**, by design
+  (DFC124 §2). So the empties row's text columns hold values.
+- **The decimal column passes through every cell,** so the harness's
+  exact-decimal comparison applies to it everywhere.
+
+### 7.3 Ross's decisions on what it found
+
+Asked as each surfaced:
+- **A sum or average of a string, bool, time or json value refuses in
+  every lane.** Exec gave a silent 0.
+- **Bools are ordered, false < true, everywhere.**
+  - Exec's `group-by -min/-max/-arg-*` refused them.
+  - Typed refused `sort` and `lt`.
+  - Typed `window -order b` did not compile.
+- **A json value compares only with `eq`/`ne`,** canonically. Every
+  ordering refuses.
+- **int128 and decimal are supported in resample,** as values and as
+  the axis, **and in `bucket()`.**
+- **Land now, with a known-gap list.**
+- **Lag/lead `-default` fills only past the partition's edge**, as SQL
+  does.
+- **`-first`/`-last` skip a missing value.**
+- **Float aggregates adopt the engines' formulas;** the comparison
+  stays byte-exact.
+
+### 7.4 Fixed, each pinned and watched fail
+
+| Bug | Lanes | Test |
+|---|---|---|
+| An empty cell in a column declared `time` was an error (every other type: missing) | exec, record | `empties_declared_time` |
+| Times sorted by `%v` text, so 09:00+11:00 sorted after 23:30Z. This bug shipped in v4.139.0 | exec, record | `sort_time_mixed_zones` |
+| Sum or average of a string, bool, time or json was a silent 0 | exec, record | the matrix's refusal cells |
+| Bools could not be ordered by `group-by` extremes; typed `sort`, `top`, `lt` and `window -order` refused or did not compile | exec, typed | the matrix |
+| json ordered by text in window extremes; `-if-field j eq j` refused; typed ordered json | exec, typed | the matrix |
+| Typed json results (`-first`, `-lag`, `-mode`, `unpivot`, `-set-field`) were written as strings; typed `cast -type j string` stayed nested | typed | the matrix |
+| `update -set j [1]` stored the text `"[1]"` in a json column | exec | the matrix |
+
+The two equivalence cases above were each watched to fail without
+their fix. Every matrix-only fix is pinned by its cell, which fails
+without it.
+
+### 7.5 The known gaps
+
+Each is a `matrixKnown` entry and a TODO item ("Matrix known gaps").
+Ross's §7.3 decisions are to build. The rest are bugs:
+- **SQL:**
+  - inet results of `-mode`, `-arg-*`, `unpivot` and `update -set`
+    print DuckDB's INET struct;
+  - `string-agg` and `-collect` of a time, inet or decimal use the
+    engine's text;
+  - a float `-set` literal is written as text;
+  - `describe` calls a decimal "float".
+- **`describe`:** an int128's max is wrong in every lane.
+- **Missing values** sort first in exec and last in SQL.
+- **`window -min`** over a running frame is missing at a row whose own
+  value is missing.
+- **Record codegen** ignores a column's declared type for an
+  `update -set` literal.
+- **`extract`'s error** lacks the `Error:` prefix.
+- **Typed codegen:**
+  - `extract` refuses a non-string field, and `update -set` refuses a
+    decimal or inet column;
+  - `resample -time i` does not compile.
+- **`generate rust`:** a declared time is read as text, by design, so
+  it sorts by its spelling. The equivalence case's lanes run found this
+  (`sort_time_mixed_zones` skips the rust lane, named).
+
+### 7.6 The acceptance run against v4.137.2, and its honest result
+
+The test was rerun with `SSQL_MATRIX_BIN` set to a v4.137.2 build and
+`SSQL_MATRIX_SKIP_TYPES=ip`, since that release has no inet; it also
+needed a harness option that skips a type.
+
+- **Red there and green on HEAD:**
+  - §1's bug 3: typed `top` on a decimal or a time does not compile
+    (`top_field_d`, `top_field_t`);
+  - the empty declared time this matrix found (§7.4).
+- **Not reached:**
+  - **Bugs 2, 4 and 7 need more than a single stage.** The `update
+    -retype` header needs `-set-expr x 'decimal(x)'` (bug 2). The
+    record setter needs an expression *result* of int128 or decimal
+    type, such as `w + 1` (bug 4). DataFusion's checked arithmetic
+    needs a renamed int to meet arithmetic downstream (bug 7). Each
+    cell is one stage, and its `-set-expr` is the identity.
+  - **Bugs 1, 5 and 6 are outside the cells:** `from jsonl -type`,
+    `from ssh` and `sort -spill`.
+
+So the matrix catches **one of §1's seven**. DFC163 §2.1 predicted all
+seven. Its reach is the next work (TODO):
+- a per-type value-changing expression for `-set-expr` cells;
+- two-stage cells (operation, then a consumer of the result);
+- source cells over every reader with `-type`;
+- the flags the spec marks as modes (`-spill`).
+
+## 8. Related
 
 - DFC133: the four instruments for unknown bugs; this is a fifth and a
   sixth.

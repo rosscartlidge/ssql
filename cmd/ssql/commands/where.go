@@ -564,6 +564,19 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 // imports ("strings"/"regexp") and hoisted decls the emission needs.
 func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, error) {
 	field := "r." + f.GoName
+	if f.JSON {
+		// A json value compares only for equality, by its canonical text,
+		// as exec's LiteralOp does (DFC163 §7).
+		switch op {
+		case "eq", "ne":
+			src := fmt.Sprintf("ssql.JSONEqual(%s, %q)", field, value)
+			if op == "ne" {
+				src = "!" + src
+			}
+			return exprGo{Src: src, Type: exprGoBool, Imports: []string{ssqlImport}}, nil
+		}
+		return exprGo{}, fmt.Errorf("ssql generate go -typed: where %s %s: a json value has no order (eq and ne compare it)", f.Name, op)
+	}
 	var lhs exprGo
 	// ssql:domain scalar
 	switch f.GoType {

@@ -655,14 +655,20 @@ func TestSumMixedTypes(t *testing.T) {
 	records := []Record{
 		NewRecord(map[string]any{"value": int64(10)}),
 		NewRecord(map[string]any{"value": 20.5}),
-		NewRecord(map[string]any{"value": "30"}), // Should convert
 	}
 
 	sumFn := Sum("value")
 	result := sumFn(records).getValue()
 
-	if result != float64(60.5) {
-		t.Errorf("Sum should handle mixed types and return 60.5, got %v", result)
+	if result != float64(30.5) {
+		t.Errorf("Sum should handle an int and a float and return 30.5, got %v", result)
+	}
+
+	// A string is no number, even "30": refused, as typed code and SQL do
+	// (DFC163 §7.3; it was converted until then).
+	withText := append(records, NewRecord(map[string]any{"value": "30"}))
+	if err := Run(func() error { Sum("value")(withText); return nil }); err == nil {
+		t.Error("Sum over a string value should refuse")
 	}
 }
 

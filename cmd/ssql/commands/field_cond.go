@@ -139,6 +139,23 @@ func fieldCondTypedGo(schema *lib.TypedSchema, c Condition) (exprGo, bool, error
 		}
 		return exprGo{}, false, fmt.Errorf("ssql generate go -typed: '-if-field' references unknown field %q (schema has %s)", missing, fieldNamesList(schema))
 	}
+	if l.JSON || r.JSON {
+		// json against json compares only for equality, canonically, as
+		// exec's FieldOpValues does; json against anything else is a
+		// mixed-kind refusal there too (DFC163 §7).
+		if !(l.JSON && r.JSON) {
+			return exprGo{}, false, nil
+		}
+		switch c.Operator {
+		case "eq", "ne":
+			src := fmt.Sprintf("ssql.JSONEqual(r.%s, r.%s)", l.GoName, r.GoName)
+			if c.Operator == "ne" {
+				src = "!" + src
+			}
+			return exprGo{Src: src, Type: exprGoBool, Imports: []string{ssqlImport}}, true, nil
+		}
+		return exprGo{}, false, fmt.Errorf("ssql generate go -typed: '-if-field' %s %s %s: a json value has no order (eq and ne compare it)", c.Field, c.Operator, c.Value)
+	}
 	lhs, lok := typedOperand(l)
 	rhs, rok := typedOperand(r)
 	if !lok || !rok {

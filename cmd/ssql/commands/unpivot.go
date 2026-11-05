@@ -321,6 +321,19 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 			allNumeric = false
 		}
 	}
+	// A json value column is json only when every value field is: json
+	// beside text has no one typed column (the record-shaped stage holds
+	// both), and the typed lane wrote json values as text until DFC163.
+	nJSON := 0
+	for _, f := range valFields {
+		if f.JSON {
+			nJSON++
+		}
+	}
+	if nJSON > 0 && nJSON < len(valFields) {
+		return nil, false
+	}
+	valJSON := nJSON > 0
 	valType := common
 	valScale := 0
 	if common == "ssql.Decimal" {
@@ -382,7 +395,7 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 	}
 	outSchema.Fields = append(outSchema.Fields,
 		lib.TypedSchemaField{Name: cfg.NameField, GoName: nameGo, GoType: "string"},
-		lib.TypedSchemaField{Name: cfg.ValueField, GoName: valueGo, GoType: valType, Scale: valScale})
+		lib.TypedSchemaField{Name: cfg.ValueField, GoName: valueGo, GoType: valType, Scale: valScale, JSON: valJSON})
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, body.String(), nil, getCommandString())
 	frag.StructDefs = []string{def.String()}

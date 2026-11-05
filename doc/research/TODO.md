@@ -40,13 +40,58 @@ Tracked issues and feature gaps discovered during development.
   `// ssql:domain D` on every switch over record values, checked by
   `internal/lint/typedomain` in `make vet`; 194 sites annotated; twelve
   bugs fixed (§6.4).
-- [ ] **Type × operation matrix** (DFC163 §2.1; Ross: pre-tag gate only,
-  `SSQL_MATRIX=1`): every declarable type × every field-taking argument
-  from `ssql -spec-json` × every lane, with the four oracles (loud or
-  working, the type survives, the lanes agree, refusals agree). Batch
-  the Go lanes as one program per lane with `generate go -func`, as the
-  rust lane batches into one crate. Acceptance: red for DFC163 §1's
-  seven bugs against v4.137.2, green on HEAD.
+- [x] **Type × operation matrix — built 2026-11-05** (DFC163 §7):
+  `SSQL_MATRIX=1 go test ./cmd/ssql -run TestTypeOperationMatrix`, a
+  pre-tag gate. Its known-gap list (`matrixKnown` in
+  `cmd/ssql/matrix_test.go`) is the open work below; delete an entry with
+  its fix (`SSQL_MATRIX_KNOWN=1` runs the known cells).
+- [ ] **Matrix known gaps — decided, to build** (Ross, 2026-11-05,
+  DFC163 §7.3):
+  - lag/lead `-default` fills only past the partition's edge (SQL's);
+    exec fills a missing neighbour today.
+  - `-first`/`-last` skip a missing value (exec's); the SQL lanes take
+    the row's NULL today (`IGNORE NULLS` / `FILTER`).
+  - variance, stddev and percentile interpolation: adopt the engines'
+    formulas in exec and typed; the last digit differs today.
+  - resample and `bucket()` over int128 and decimal, as values and as
+    the axis.
+  - the SQL lanes refuse a sum or average of a bool or time, and a
+    median or percentile of a non-number, as exec does.
+- [ ] **Matrix known gaps — bugs, to fix** (DFC163 §7.3):
+  - SQL: an inet result of `-mode`, `-arg-*`, `unpivot` or
+    `update -set` prints DuckDB's INET struct (record its kind, as the
+    window value functions now do).
+  - SQL: `string-agg` of a time uses the engine's text; `-collect` of a
+    time, inet or decimal lists the engine's forms.
+  - SQL: `update -set` of a literal into a float column writes text.
+  - `describe`: an int128's max is wrong in every lane; SQL calls a
+    decimal "float".
+  - Missing values sort first in exec and last in SQL (`sort`,
+    `window -order`): emit `NULLS FIRST`.
+  - `window -min` over a running frame is missing at a row whose own
+    value is missing.
+  - `update -set` literal: record codegen ignores the column's declared
+    type (a float into a decimal column, a string into a json one); typed
+    refuses a decimal or inet column. Move exec's literal-into-column
+    rule into the library and call it from both.
+  - `extract`: the error lacks the `Error:` prefix; typed refuses a
+    non-string field that exec reads as text.
+  - typed `resample -time i` does not compile (a field redeclared).
+  - `generate rust` reads a declared time column as text
+    (`rustSourceSchema`, by design: ssql's time rules — zones, `-tz`, its
+    formats — are not DataFusion's), so a sort or comparison on it orders
+    the spelling: `sort_time_mixed_zones` skips the rust lane. Cast with
+    ssql's rules (normalise to RFC 3339 UTC in the pipeline zone first).
+- [ ] **Matrix reach** (DFC163 §7.6: it caught one of §1's seven bugs
+  against v4.137.2): a per-type value-changing `-set-expr` (`w + 1`,
+  `decimal(x)`); two-stage cells (operation → arithmetic or a join on
+  the result); source cells over every reader's `-type` (`from jsonl`,
+  `from json`); mode flags (`sort -spill`).
+- [ ] **Matrix harness follow-ups**: the type-survives oracle reads only
+  exec's header (the Go lanes' output carries none through `to jsonl`);
+  `top` over tied values is arbitrary (the b and s cells are known);
+  json cells have no SQL lane (a declared json column has no SQL
+  translation yet).
 - [ ] **Declared types in DFC133's random differential** (DFC163 §2.3):
   the generator declares `-type col decimal:2|int128|time|inet` per
   column, with one typed program per run over a sample.

@@ -44,10 +44,10 @@ func TestArgMaxArgMin(t *testing.T) {
 	t.Run("unorderable BY is loud", func(t *testing.T) {
 		defer func() {
 			r := recover()
-			if r == nil || !strings.Contains(r.(error).Error(), "cannot order") {
-				t.Fatalf("expected a cannot-order panic, got %v", r)
+			if r == nil || !strings.Contains(r.(error).Error(), "has no order") {
+				t.Fatalf("expected a no-order panic, got %v", r)
 			}
 		}()
-		ArgMax("v", "b")([]Record{NewRecord(map[string]any{"b": true, "v": 1})})
+		ArgMax("v", "j")([]Record{NewRecord(map[string]any{"j": JSONString("[1]"), "v": 1}), NewRecord(map[string]any{"j": JSONString("[2]"), "v": 2})})
 	})
 }

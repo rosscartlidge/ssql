@@ -22,7 +22,9 @@ func TestWindowRunningMatchesPerRow(t *testing.T) {
 		case 1:
 			fields["v"] = rng.Float64()*100 - 50
 		case 2:
-			fields["v"] = fmt.Sprintf("s%02d", rng.Intn(30))
+			// a decimal beside the ints and floats (a string here until
+			// DFC163 §7.3 made a sum of a string an error)
+			fields["v"] = MustParseDecimalScale(fmt.Sprintf("%d.25", rng.Intn(50)-25), 2)
 		case 3:
 			// missing v
 		}

@@ -17,6 +17,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		f      lib.TypedSchemaField
 		newGoT string // Go type after the cast (e.g. "int64")
 		scale  int    // a decimal target's scale (DFC155 E)
+		json   bool   // the target is json (a string field holding JSON text)
 	}
 	resolvedCasts := make(map[string]castField, len(casts))
 	for name, target := range casts {
@@ -30,7 +31,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'cast' on field %q: %w", name, err))
 		}
-		resolvedCasts[strings.ToLower(name)] = castField{f: f, newGoT: newGoT, scale: target.Scale()}
+		resolvedCasts[strings.ToLower(name)] = castField{f: f, newGoT: newGoT, scale: target.Scale(), json: target == ssql.FieldTypeJSON}
 	}
 
 	// Build derived schema: same fields, with cast Go types replaced.
@@ -41,6 +42,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		if cf, ok := resolvedCasts[strings.ToLower(f.Name)]; ok {
 			out.GoType = cf.newGoT
 			out.Scale = cf.scale
+			out.JSON = cf.json // a json column cast to string is text (it stayed nested until DFC163's matrix)
 		}
 		derived.Fields[i] = out
 	}

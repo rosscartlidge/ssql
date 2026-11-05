@@ -707,8 +707,17 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 		return mut.String(field, coercedVal), coerced
 
 	case ssql.JSONString:
-		// A nested field takes a nested result (or whatever the expression
-		// produced, by its own type); there is no coercion into JSON text.
+		// A nested field takes a nested result; text is read as JSON, as a
+		// declared json cell is, and text that is not a JSON array or object
+		// is the cast's error (it was stored as text, so `-set j [1]` wrote
+		// the string "[1]" where the typed lane wrote the array; DFC163 §7).
+		if text, ok := value.(string); ok {
+			out, ok := ssql.CastValue(text, ssql.FieldTypeJSON)
+			if !ok {
+				panic(&ssql.CastError{Field: field, Value: value, Target: ssql.FieldTypeJSON})
+			}
+			return mut.JSONString(field, out.(ssql.JSONString)), true
+		}
 		return applyValueToRecord(mut, field, value), false
 
 	case ssql.Inet:

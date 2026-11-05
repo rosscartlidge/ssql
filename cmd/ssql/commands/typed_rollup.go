@@ -66,7 +66,7 @@ func emitTypedRollup(inputVar string, in *lib.TypedSchema, groupFields []string,
 			return true, "", lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: aggregation %q references unknown field %q", s.function, s.field))
 		}
-		if err := typedAggAccepts(s.function, s.field, f.GoType); err != nil {
+		if err := typedAggAccepts(s.function, s.field, f); err != nil {
 			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 		}
 	}

@@ -85,13 +85,22 @@ func TestMinOfMaxOf(t *testing.T) {
 		}()
 		MinOf("v")(aggRecords("v", "a", int64(1)))
 	})
-	t.Run("unorderable kinds are loud", func(t *testing.T) {
+	t.Run("bools are ordered, false before true", func(t *testing.T) {
+		if got := MaxOf("b")(aggRecords("b", false, true, false)).getValue(); got != true {
+			t.Fatalf("MaxOf bools = %v", got)
+		}
+		if got := MinOf("b")(aggRecords("b", true, false)).getValue(); got != false {
+			t.Fatalf("MinOf bools = %v", got)
+		}
+	})
+
+	t.Run("json has no order", func(t *testing.T) {
 		defer func() {
 			r := recover()
-			if r == nil || !strings.Contains(r.(error).Error(), "cannot order") {
-				t.Fatalf("expected a cannot-order panic, got %v", r)
+			if r == nil || !strings.Contains(r.(error).Error(), "has no order") {
+				t.Fatalf("expected a no-order panic, got %v", r)
 			}
 		}()
-		MaxOf("b")(aggRecords("b", true))
+		MaxOf("j")(aggRecords("j", JSONString("[1]"), JSONString("[2]")))
 	})
 }

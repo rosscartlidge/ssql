@@ -77,6 +77,24 @@ func goRunGeneratedModule(t *testing.T, module string, files map[string]string) 
 // for the program's run (not its build).
 func goRunGeneratedModuleEnv(t *testing.T, module string, files map[string]string, env []string) (string, error) {
 	t.Helper()
+	out, buildErr, runErr := goBuildRunGenerated(t, module, files, env)
+	if buildErr != nil {
+		var all strings.Builder
+		for name, src := range files {
+			fmt.Fprintf(&all, "--- %s:\n%s\n", name, src)
+		}
+		t.Fatalf("go build generated:\n%s\n%s", out, all.String())
+	}
+	return out, runErr
+}
+
+// goBuildRunGenerated writes files into a temp module that replaces ssql
+// with this checkout, builds it and runs it, telling a build failure
+// (buildErr, out = the compiler's output) from a run failure (runErr, out
+// = the program's combined output) without failing the test: the type
+// matrix (DFC163 §2.1) records which a lane did.
+func goBuildRunGenerated(t *testing.T, module string, files map[string]string, env []string) (out string, buildErr, runErr error) {
+	t.Helper()
 	dir := t.TempDir()
 	for name, src := range files {
 		path := filepath.Join(dir, name)
@@ -103,17 +121,13 @@ func goRunGeneratedModuleEnv(t *testing.T, module string, files map[string]strin
 	build := exec.Command("go", "build", "-o", "prog", ".")
 	build.Dir = dir
 	if out, err := build.CombinedOutput(); err != nil {
-		var all strings.Builder
-		for name, src := range files {
-			fmt.Fprintf(&all, "--- %s:\n%s\n", name, src)
-		}
-		t.Fatalf("go build generated:\n%s\n%s", out, all.String())
+		return string(out), err, nil
 	}
 	run := exec.Command(filepath.Join(dir, "prog"))
 	run.Dir = dir
 	run.Env = append(os.Environ(), env...)
-	out, err := run.CombinedOutput()
-	return string(out), err
+	b, err := run.CombinedOutput()
+	return string(b), nil, err
 }
 
 func TestTypedFromToCSV(t *testing.T) {

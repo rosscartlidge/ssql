@@ -223,6 +223,10 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 				return lib.WriteErrorAndExit(getCommandString(),
 					fmt.Errorf("ssql generate go -typed: 'sort' references unknown field %q", of.Field))
 			}
+			if f.JSON {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: 'sort' on field %q: a json value has no order (eq and ne compare it; sort by a path such as x.a)", of.Field))
+			}
 			if !isSortableGoType(f.GoType) {
 				return lib.WriteErrorAndExit(getCommandString(),
 					fmt.Errorf("ssql generate go -typed: 'sort' on field %q (type %s) not supported (need int/float/string)", of.Field, f.GoType))
@@ -234,7 +238,8 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 		// typed.SortByDesc. Multi-field path: build a comparator
 		// closure and use typed.SortByFunc.
 		var code, serialCode string
-		if len(fields) == 1 && (goCompareMethod(fields[0].f.GoType) == "" || fields[0].f.GoType == "time.Time") { // the others are not cmp.Ordered: the comparator path
+		_, cmpForm := goCompareSrc(fields[0].f.GoType, "", "")
+		if len(fields) == 1 && (!cmpForm || fields[0].f.GoType == "time.Time") { // the others are not cmp.Ordered: the comparator path
 			fn := "typed.SortBy"
 			if fields[0].desc {
 				fn = "typed.SortByDesc"
@@ -259,8 +264,8 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 				if i > 0 {
 					cmpBody.WriteString("\n\t\t")
 				}
-				if m := goCompareMethod(sf.f.GoType); m != "" {
-					cmpBody.WriteString(fmt.Sprintf(`if c := %s.%s(%s); c != 0 { return c }`, lhs, m, rhs))
+				if src, ok := goCompareSrc(sf.f.GoType, lhs, rhs); ok {
+					cmpBody.WriteString(fmt.Sprintf(`if c := %s; c != 0 { return c }`, src))
 					continue
 				}
 				cmpBody.WriteString(fmt.Sprintf(`if %s < %s { return -1 }; if %s > %s { return 1 }`, lhs, rhs, lhs, rhs))
@@ -274,6 +279,10 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 		}
 
 		imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+		for _, sf := range fields {
+			imports = append(imports, goCompareImports(sf.f.GoType)...)
+		}
+		imports = dedupeImports(imports)
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
@@ -304,27 +313,38 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 func isSortableGoType(t string) bool {
 	// ssql:domain ordered
 	switch t {
-	case "string", "int", "int32", "int64", "uint64", "float32", "float64", "time.Time", "ssql.Int128", "ssql.Decimal", "ssql.Inet":
+	case "string", "int", "int32", "int64", "uint64", "float32", "float64", "time.Time", "ssql.Int128", "ssql.Decimal", "ssql.Inet", "bool":
 		return true
 	}
 	return false
 }
 
-// goCompareMethod is the method a typed field of goType is ordered by when
+// goCompareSrc is the three-way comparison of a and b, typed goType, when
 // the type is not cmp.Ordered — Compare for a time or an inet, Cmp for the
-// exact numbers — and "" for the ordered kinds, which `<` compares. The
-// one table sort, top, window and the group-by extremes read, where each
-// had its own list and `top` on a decimal or a time emitted typed.TopBy,
-// which does not compile for a type that is not cmp.Ordered.
-func goCompareMethod(goType string) string {
-	// ssql:domain fixed: the struct scalars' compare methods; the rest compare with <
+// exact numbers, ssql.CompareBool for a bool (false < true, DFC163 §7) —
+// and ok=false for the ordered kinds, which `<` compares. The one table
+// sort, top, window and the group-by extremes read, where each had its
+// own list and `top` on a decimal or a time emitted typed.TopBy, which
+// does not compile for a type that is not cmp.Ordered.
+func goCompareSrc(goType, a, b string) (src string, ok bool) {
+	// ssql:domain fixed: the types `<` cannot compare; the rest are cmp.Ordered
 	switch goType {
 	case "time.Time", "ssql.Inet":
-		return "Compare"
+		return a + ".Compare(" + b + ")", true
 	case "ssql.Int128", "ssql.Decimal":
-		return "Cmp"
+		return a + ".Cmp(" + b + ")", true
+	case "bool":
+		return "ssql.CompareBool(" + a + ", " + b + ")", true
 	}
-	return ""
+	return "", false
+}
+
+// goCompareImports is what goCompareSrc's form for goType needs imported.
+func goCompareImports(goType string) []string {
+	if goType == "bool" {
+		return []string{"github.com/rosscartlidge/ssql/v4"}
+	}
+	return nil
 }
 
 // orderFieldNames lists the fields of a sort order, for the runtime check.

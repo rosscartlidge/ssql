@@ -90,7 +90,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 		// so the program does not spell the same order twice; any other
 		// order is a comparator.
 		if len(cfg.OrderBy) == 1 {
-			if f, ok := lookupSchemaField(in, cfg.OrderBy[0].Field); ok && !strings.HasPrefix(f.GoType, "*") {
+			if f, ok := lookupSchemaField(in, cfg.OrderBy[0].Field); ok && !strings.HasPrefix(f.GoType, "*") && !f.JSON {
 				if key, ok := map[string]string{"string": "KeyString", "int64": "KeyInt", "float64": "KeyFloat"}[f.GoType]; ok {
 					fmt.Fprintf(&b, "\t\t\tHasOrder: true,\n\t\t\t%s: func(r %s) %s { return r.%s },\n", key, in.TypeName, f.GoType, f.GoName)
 					if cfg.OrderBy[0].Desc {
@@ -108,6 +108,9 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 					return true, "", lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'window' orders by unknown field %q", of.Field))
 				}
+				if f.JSON {
+					return false, fmt.Sprintf("window: order by json field %q stays on the record path, which refuses it (json has no order)", of.Field), nil
+				}
 				if strings.HasPrefix(f.GoType, "*") {
 					return false, fmt.Sprintf("window: nullable order field %q has no typed comparator yet", of.Field), nil
 				}
@@ -115,9 +118,10 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				if of.Desc {
 					lhs, rhs = rhs, lhs
 				}
-				switch m := goCompareMethod(f.GoType); {
-				case m != "": // not cmp.Ordered: the comparator form (DFC155 C, E; DFC162)
-					fmt.Fprintf(&cmp, "if c := %s.%s(%s); c != 0 { return c }; ", lhs, m, rhs)
+				switch src, ok := goCompareSrc(f.GoType, lhs, rhs); {
+				case ok: // not cmp.Ordered: the comparator form (DFC155 C, E; DFC162; a bool, DFC163)
+					fmt.Fprintf(&cmp, "if c := %s; c != 0 { return c }; ", src)
+					imports = append(imports, goCompareImports(f.GoType)...)
 				case f.GoType == "string":
 					// One byte comparison per call: `<` then `>` compared
 					// twice on every "greater" (10 s of the benchmark's sort).
@@ -216,7 +220,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 			}
 			usedGo[gn] = true
 			results = append(results, resultField{goName: gn, goType: goType, assign: strings.ReplaceAll(assign, "GONAME", gn)})
-			out.Fields = append(out.Fields, lib.TypedSchemaField{Name: spec.ResultName, GoName: gn, GoType: goType, Scale: scale})
+			out.Fields = append(out.Fields, lib.TypedSchemaField{Name: spec.ResultName, GoName: gn, GoType: goType, Scale: scale, JSON: f.JSON && windowKeepsValue(d)})
 			fmt.Fprintf(&b, "\t\t\t\t%s,\n", specLit)
 			resIdx++
 		}
@@ -393,6 +397,9 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, in *lib.Type
 	case "count_field":
 		return d.Kind, "int64", read("int64"), of("Count"), ""
 	case "first", "last", "min", "max":
+		if f.JSON && (d.Kind == "min" || d.Kind == "max") {
+			return "", "", "", "", fmt.Sprintf("window: %s over json field %q stays on the record path, which refuses it (json has no order)", d.Kind, f.Name)
+		}
 		k := map[string]string{"first": "First", "last": "Last", "min": "Min", "max": "Max"}[d.Kind]
 		// Always present within a non-empty frame; keeps the field's type
 		// (a nullable field stays nullable).
@@ -427,7 +434,7 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, in *lib.Type
 			// FIELD at the extreme BY: the BY field's getter is the second
 			// argument; a nullable BY stays on the record path.
 			bf, ok := lookupSchemaField(in, d.Agg.Extra)
-			if !ok || strings.HasPrefix(bf.GoType, "*") {
+			if !ok || strings.HasPrefix(bf.GoType, "*") || bf.JSON {
 				return "", "", "", "", fmt.Sprintf("window: %s by %q stays on the record path (the field is nullable or unknown)", d.Agg.Name, d.Agg.Extra)
 			}
 			k := map[string]string{"arg-max": "ArgMax", "arg-min": "ArgMin"}[d.Agg.Name]
@@ -518,4 +525,17 @@ func goLiteralOf(v any) string {
 		return fmt.Sprintf("%t", x)
 	}
 	return fmt.Sprintf("%#v", v)
+}
+
+// windowKeepsValue: a window function whose result is one of its field's
+// values, so a json field's result is json too (the typed lane wrote its
+// text as a string until DFC163's matrix).
+func windowKeepsValue(d ssql.WindowFuncDesc) bool {
+	switch d.Kind {
+	case "first", "last", "lag", "lead", "nth_value":
+		return true
+	case "aggregate":
+		return d.Agg.Name == "mode" || d.Agg.Name == "arg-max" || d.Agg.Name == "arg-min"
+	}
+	return false
 }

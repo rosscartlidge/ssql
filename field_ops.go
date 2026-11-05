@@ -1,6 +1,8 @@
 package ssql
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -64,7 +66,24 @@ func FieldOpValues(a any, op string, b any) (bool, error) {
 	if !sameKind(a, b) {
 		return false, &CompareError{Op: op, Kind: kindName(a) + " against " + kindName(b), Fields: true}
 	}
+	if x, ok := a.(JSONString); ok {
+		return jsonOp(x, op, b.(JSONString))
+	}
 	return ValueOp(a, op, b), nil
+}
+
+// jsonOp is eq or ne on two json values, by their canonical (compacted)
+// text, so [1, 2] equals [1,2]; any ordering is refused, since json has
+// no order (DFC163 §7). A literal that is not JSON is a CompareError.
+func jsonOp(a JSONString, op string, b JSONString) (bool, error) {
+	if op != "eq" && op != "ne" {
+		return false, noOrder(op, a)
+	}
+	var ca, cb bytes.Buffer
+	if json.Compact(&ca, []byte(a)) != nil || json.Compact(&cb, []byte(b)) != nil {
+		return false, &CompareError{Op: op, Value: string(b), Kind: "json"}
+	}
+	return bytes.Equal(ca.Bytes(), cb.Bytes()) == (op == "eq"), nil
 }
 
 // sameKind: both numeric, or both of one other kind.
@@ -87,6 +106,9 @@ func sameKind(a, b any) bool {
 	case Inet:
 		_, ok := b.(Inet)
 		return ok
+	case JSONString:
+		_, ok := b.(JSONString)
+		return ok
 	}
 	return false
 }
@@ -104,6 +126,8 @@ func kindName(v any) string {
 		return "time"
 	case Inet:
 		return "inet"
+	case JSONString:
+		return "json"
 	}
 	return fmt.Sprintf("%T", v)
 }
@@ -383,6 +407,16 @@ func LiteralOp(v any, op, literal string) (bool, error) {
 			return false, &CompareError{Op: op, Value: literal, Kind: "time"}
 		}
 		return ValueOp(x, op, t), nil
+	case JSONString:
+		// A json value compares only for equality, by its canonical text
+		// (Ross, 2026-11-05, DFC163 §7); it was compared as its rendering.
+		if literal == "" {
+			return false, nil
+		}
+		if isStringOp(op) {
+			return false, &CompareError{Op: op, Value: literal, Kind: "json"}
+		}
+		return jsonOp(x, op, JSONString(literal))
 	}
 	// Other kinds (nested records, sequences) compare by their rendering,
 	// as they always have.
@@ -460,4 +494,13 @@ func Without(r Record, fields ...string) Record {
 		m = m.Delete(f)
 	}
 	return m.Freeze()
+}
+
+// JSONEqual reports whether two JSON texts are one value, by their
+// canonical (compacted) form: the typed lane's eq on a json field, as
+// exec's LiteralOp compares (DFC163 §7). Text that is not JSON equals
+// nothing.
+func JSONEqual(a, b string) bool {
+	eq, err := jsonOp(JSONString(a), "eq", JSONString(b))
+	return err == nil && eq
 }

@@ -134,7 +134,11 @@ func parseBoolCell(s string) (any, error) {
 
 // parseTimeCell parses a declared `time` column (from csv -type F time).
 func parseTimeCell(s string) (any, error) {
-	if t, ok := ParseTime(strings.TrimSpace(s)); ok {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil // missing, as an empty cell of every other declared type is (DFC124); an error until DFC163's matrix
+	}
+	if t, ok := ParseTime(s); ok {
 		return t, nil
 	}
 	return nil, errCellType
@@ -160,6 +164,9 @@ func parseTimeCellPattern(pattern string) cellParser {
 	return func(s string) (any, error) {
 		if lerr != nil {
 			return nil, lerr
+		}
+		if strings.TrimSpace(s) == "" {
+			return nil, nil // missing (DFC124)
 		}
 		t, err := time.ParseInLocation(layout, strings.TrimSpace(s), StreamLocation()) // a local clock: the pipeline zone
 		if err != nil {

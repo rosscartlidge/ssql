@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A type × operation matrix** (`SSQL_MATRIX=1 go test ./cmd/ssql -run TestTypeOperationMatrix`, a pre-tag gate). It runs every declarable type × every argument that takes a field (read from `ssql -spec-json`) × every lane. It checks four things: a cell works or every lane refuses it loudly, the lanes agree, an input column keeps its type, and the lanes' refusals agree. Gaps it found and that are not fixed yet are listed by name and in TODO ([DFC163](doc/research/dfc163_type_operation_matrix_and_domain_lint.md) §7).
+
+### Changed
+
+- **`-sum` and `-avg` of a string, bool, time or json column are an error,** as in generated typed code and in every SQL engine. They silently gave 0. In the library, `ssql.Sum`/`ssql.Avg` over string values refuse too, even numeric text such as `"2"` (it was parsed).
+- **Bools are ordered, false before true, everywhere.** `group-by -min/-max/-arg-*` of a bool column work, and so do typed `sort`, `top`, `where -if b lt true` and `window -order b`; they refused or did not compile.
+- **A json value compares only with `eq` and `ne`,** by its canonical text, so `[1, 2]` equals `[1,2]`. Sorting, `top`, min/max and `lt` on a json column are an error naming the way out (a path such as `x.a`). `where -if-field j eq j` works; it was refused.
+
+### Fixed
+
+- **Times in different zones sorted by their text,** so 09:00+11:00 sorted after 23:30Z. They sort by instant, as typed code and SQL already did.
+- **An empty cell in a column declared `time` was an error;** it is missing, as for every other declared type.
+- **Typed code wrote a json column's derived values as strings** (`window -first/-lag/-mode`, `group-by -first/-mode`, `unpivot`, `update -set-field`), and `cast -type j string` stayed nested.
+- **`update -set j [1]` stored the text `"[1]"` in a json column;** it stores the array, and text that is not JSON is an error.
+
 ## [4.139.0] - 2026-11-05
 
 ### Added

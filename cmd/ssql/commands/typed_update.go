@@ -40,6 +40,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		expr      *exprGo // natively transpiled expression (-set-expr)
 		tierVCall string  // Tier-V eval call (-set-expr outside the subset); "" otherwise
 		tierVExpr string  // the original expression text, for error messages
+		json      bool    // a -set-field copy of a json field: the new field is json too (DFC163 §7)
 	}
 	type cond struct {
 		field   string
@@ -174,7 +175,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				if !ok {
 					return false, fmt.Sprintf("-set-field %s %s: source type %s has no typed form", st.field, st.source, src.GoType), nil
 				}
-				uc.sets = append(uc.sets, setOp{field: st.field, expr: &operand})
+				uc.sets = append(uc.sets, setOp{field: st.field, expr: &operand, json: src.JSON})
 				continue
 			}
 			field, expression := st.field, st.expression
@@ -298,6 +299,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				GoName: lib.GoNameFromColumn(s.field),
 				GoType: goType,
 				Scale:  scale,
+				JSON:   s.json,
 			})
 			newFieldTypes[lower] = goType
 		}

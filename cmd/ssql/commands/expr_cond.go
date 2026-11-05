@@ -43,6 +43,13 @@ func condOpToExprGo(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
+		if lhs.Type == exprGoBool && op != "eq" && op != "ne" {
+			// A flag condition orders bools false < true, as exec's
+			// LiteralOp and SQL do (DFC163 §7); the expression language's
+			// own `<` has no bool form, which exprCompare mirrors.
+			res := exprGo{Src: "(ssql.CompareBool(" + lhs.Src + ", " + rhs.Src + ") " + sym + " 0)", Type: exprGoBool, Imports: []string{ssqlImport}}
+			return mergeMeta(res, lhs, rhs), nil
+		}
 		return exprCompare(sym, lhs, rhs, op == "eq" || op == "ne")
 
 	case "contains", "startswith", "endswith":
@@ -140,9 +147,6 @@ func condRHS(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 		}
 		return asInetGo(exprGo{Src: strconv.Quote(value), Type: exprGoString})
 	case exprGoBool:
-		if op != "eq" && op != "ne" {
-			return exprGo{}, fmt.Errorf("operator %q is not defined for bool fields", op)
-		}
 		b, err := strconv.ParseBool(value)
 		if err != nil {
 			return exprGo{}, &ssql.CompareError{Field: lhs.field, Op: op, Value: value, Kind: "bool"}

@@ -112,10 +112,12 @@ func TestSumAndAvgAccumulateIntegersExactly(t *testing.T) {
 	if got := Sum("v")(mixed).getValue(); got != float64(18014398509481987)+0.5 {
 		t.Errorf("mixed sum: got %v (%T)", got, got)
 	}
-	// numeric strings still count, as Get[float64] made them
+	// a string is no number, even one that reads as one: the sum refuses
+	// it, as typed code and every SQL engine do (Ross, DFC163 §7.3; it
+	// parsed numeric text until then and skipped the rest as 0)
 	strs := []Record{NewRecord(map[string]any{"v": "2"}), NewRecord(map[string]any{"v": "3"})}
-	if got := Sum("v")(strs).getValue(); got != float64(5) {
-		t.Errorf("string sum: got %v (%T)", got, got)
+	if err := Run(func() error { Sum("v")(strs); return nil }); err == nil || !strings.Contains(err.Error(), "no arithmetic") {
+		t.Errorf("string sum: want the no-arithmetic refusal, got %v", err)
 	}
 	// an int64 sum widens past 2^63, as DuckDB's SUM(BIGINT) does (DFC155 C)
 	wide := []Record{NewRecord(map[string]any{"v": int64(math.MaxInt64)}), NewRecord(map[string]any{"v": int64(1)})}

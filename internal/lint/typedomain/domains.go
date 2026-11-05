@@ -111,3 +111,7 @@ func (a annotation) missing(covered map[string]bool) []string {
 	}
 	return out
 }
+
+// Members is every scalar member's wire name, for the tests that must
+// cover each one (the type matrix's type table, DFC163 §2.1).
+func Members() []string { return append([]string(nil), members...) }

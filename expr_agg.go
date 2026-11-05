@@ -199,7 +199,8 @@ func aggExtreme(name string, args []any, sign int) (any, error) {
 }
 
 // aggCompare orders two aggregation values of the same kind: numbers
-// (any width, compared as float64), strings, or times.
+// (any width, compared exactly when exact), strings, times, inets or
+// bools. A json value has no order.
 func aggCompare(name string, a, b any) (int, error) {
 	// ssql:domain fixed: numbers are compared before the switch
 	switch x := a.(type) {
@@ -227,6 +228,14 @@ func aggCompare(name string, a, b any) (int, error) {
 			return 0, fmt.Errorf("%s: mixed types %T and %T", name, a, b)
 		}
 		return x.Compare(y), nil
+	case bool:
+		y, ok := b.(bool)
+		if !ok {
+			return 0, fmt.Errorf("%s: mixed types %T and %T", name, a, b)
+		}
+		return CompareBool(x, y), nil // false < true, as SQL orders them (DFC163 §7)
+	case JSONString:
+		return 0, noOrder(name, x)
 	}
 	if !isNumeric(a) || !isNumeric(b) {
 		return 0, fmt.Errorf("%s: cannot order %T and %T", name, a, b)

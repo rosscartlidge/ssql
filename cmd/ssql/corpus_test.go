@@ -267,11 +267,15 @@ func corpusData(t *testing.T) string {
 			// DFC155 E: money, shuffled, with values a float sum gets wrong
 			// and ones a declared scale must round; a decimal key beside
 			// an integer key.
-			"money.csv":     "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
-			"fractions.csv": "k,amt\nb,-2.75\nd,0.50\na,2.75\nc,-0.49\n",
-			"dec.csv":       "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
-			"big.csv":       "k,amt\nx,90071992547409.92\nx,0.01\nx,0.01\n",
-			"ids.csv":       "id,n\n1,one\n5,five\n",
+			"money.csv":          "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
+			"fractions.csv":      "k,amt\nb,-2.75\nd,0.50\na,2.75\nc,-0.49\n",
+			"matrix.csv":         matrixCSV, // DFC163 §2.1: a column per declarable type
+			"matrix_empties.csv": matrixEmptiesCSV,
+			"empty_time.csv":     "k,v\n2,2026-01-02\n1,\n3,2026-01-01\n",
+			"zone_times.csv":     "k,t\n1,2026-01-02T09:00:00+11:00\n2,2026-01-01T23:30:00Z\n3,2026-01-01T12:00:00-05:00\n",
+			"dec.csv":            "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
+			"big.csv":            "k,amt\nx,90071992547409.92\nx,0.01\nx,0.01\n",
+			"ids.csv":            "id,n\n1,one\n5,five\n",
 			// DFC162: addresses whose text order is not their inet order,
 			// shuffled, with spellings of one value (10.0.0.1 and /32; ::1
 			// and 0:0:0:0:0:0:0:1), an IPv4-compatible and a v4-mapped one.

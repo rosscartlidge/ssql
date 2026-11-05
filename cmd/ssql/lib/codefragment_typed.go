@@ -910,6 +910,9 @@ func serialOnlyTag(serialOnly bool) string {
 // ssql.JSONString so the Record writer emits it as JSON, not as a quoted
 // string (DFC144 Level 0).
 func typedFieldAsRecordValue(f TypedSchemaField) string {
+	if f.JSON && strings.HasPrefix(f.GoType, "*") {
+		return "ssql.JSONPtrOrNull(v." + f.GoName + ")" // a nullable json result (a lag, a mode; DFC163 §7)
+	}
 	if f.JSON {
 		return "ssql.JSONOrNull(v." + f.GoName + ")"
 	}

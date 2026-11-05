@@ -2744,6 +2744,27 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"go-typed": "typed reader: describe FIELDS typed lane N/A here (see empties_*)", "go-parallel": "typed reader: describe FIELDS typed lane N/A here (see empties_*)"},
 	},
 	{
+		// Times sort by their instant: exec's CompareAny fell back to the
+		// value's %v text, so 09:00+11:00 (22:00Z) sorted after 23:30Z.
+		// Typed (time.Compare) and DuckDB had it right (DFC163 §7).
+		Name:     "sort_time_mixed_zones",
+		Pipeline: `{{.bin}} from csv -type t time {{.data}}/zone_times.csv | {{.bin}} sort t`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"k": 3, "t": "2026-01-01T12:00:00-05:00"}, {"k": 1, "t": "2026-01-02T09:00:00+11:00"}, {"k": 2, "t": "2026-01-01T23:30:00Z"}},
+		Skip:     map[string]string{"rust": "generate rust reads a declared time as text (rustSourceSchema) and sorts its spelling — TODO, DFC163 §7.5"},
+	},
+	{
+		// An empty cell in a column declared time is missing, as it is in
+		// every other declared type (DFC124). It was an error ("" is not
+		// time) until DFC163's matrix: its fixture's empty row refused
+		// every cell at the source.
+		Name:     "empties_declared_time",
+		Pipeline: `{{.bin}} from csv -type v time {{.data}}/empty_time.csv | {{.bin}} sort k`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"k": 1}, {"k": 2, "v": "2026-01-02T00:00:00Z"}, {"k": 3, "v": "2026-01-01T00:00:00Z"}},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
+	},
+	{
 		// DFC124: empties are absent → describe's missing/mean agree with
 		// the DuckDB oracle. Typed lanes skipped: the typed reader still
 		// writes zero values (DFC124 §3 — the recorded next step).
@@ -3450,7 +3471,7 @@ var equivCases = []EquivCase{
 	{
 		// top on a type that is not cmp.Ordered: typed codegen emitted
 		// typed.TopBy for a decimal or a time column, which did not
-		// compile, until goCompareMethod (2026-11-04, found by DFC162's
+		// compile, until goCompareSrc (2026-11-04, found by DFC162's
 		// inet work).
 		Name:     "top_decimal_field",
 		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} top 2 -field amt`,

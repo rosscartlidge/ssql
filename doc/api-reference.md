@@ -413,6 +413,8 @@ field is `json`; `FieldTypeJSON` is its `FieldType` (`ParseFieldType("json")`,
 
 ```go
 func JSONOrNull(text string) any                    // JSONString(text), or nil for "" — a typed program's json field back on the wire
+func JSONPtrOrNull(text *string) any                // JSONOrNull for a nullable json field (a window lag, a mode); nil for nil
+func JSONEqual(a, b string) bool                     // two JSON texts are one value, by their compacted form ([1, 2] == [1,2]); json compares only for equality
 func ExprValue(v any) any                           // what an expression sees for a field: a JSONString parsed to []any / map[string]any (whole numbers int64), else v
 func NestedValue(v any) (JSONString, bool)          // a slice, map or JSONString result as JSON text; false for scalars and strings
 func JSONValue(v any) JSONString                    // json.Marshal as a JSONString (panics with an error on a value that cannot be marshalled)
@@ -652,7 +654,8 @@ func ValueOp(a any, op string, b any) bool                    // FieldOp on two 
 func FieldOpValues(a any, op string, b any) (bool, error)     // reports a mixed-kind pairing as *CompareError
 func LiteralOp(v any, op, literal string) (bool, error)       // v OP literal, the literal read in v's kind
 func CompareLiteral(r Record, field, op, literal string) bool // LiteralOp on a field; panics *CompareError
-func CompareAny(a, b any) int                                 // -1/0/1: nil first, numbers numerically, then text
+func CompareAny(a, b any) int                                 // -1/0/1: nil first, numbers exactly or numerically, inets and times by value, bools false < true, then text; panics on a json value (no order)
+func CompareBool(a, b bool) int                               // -1/0/1: false before true, as SQL orders bools
 func CompareRecordFields(a, b Record, orderBy []OrderField) int
 type CompareError struct{ Field, Op, Value, Kind string; Fields bool }
 func (e *CompareError) Error() string

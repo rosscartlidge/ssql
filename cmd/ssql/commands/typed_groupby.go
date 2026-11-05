@@ -62,7 +62,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 			return true, "", lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: aggregation %q references unknown field %q", s.function, s.field))
 		}
-		if err := typedAggAccepts(s.function, s.field, f.GoType); err != nil {
+		if err := typedAggAccepts(s.function, s.field, f); err != nil {
 			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 		}
 		if s.function == "arg-max" || s.function == "arg-min" {
@@ -71,7 +71,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 				return true, "", lib.WriteErrorAndExit(getCommandString(),
 					fmt.Errorf("ssql generate go -typed: aggregation %q orders by unknown field %q", s.function, s.extra))
 			}
-			if err := typedAggAccepts("min", s.extra, bf.GoType); err != nil { // BY needs an ordered type
+			if err := typedAggAccepts("min", s.extra, bf); err != nil { // BY needs an ordered type
 				return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 			}
 		}
@@ -128,6 +128,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 			GoName: resultGoName,
 			GoType: aggResultGoType(s, in),
 			Scale:  aggResultScale(s, in),
+			JSON:   aggResultJSON(s, in),
 		})
 	}
 	for _, p := range exprPlans {
@@ -771,17 +772,23 @@ func buildResultCtor(groupFields []lib.TypedSchemaField, specs []aggSpec, exprPl
 
 // typedAggAccepts says whether the typed lane can aggregate a field of
 // the given Go type with fn: sum/avg need a number; min/max take any
-// ordered type — numbers, strings and times (DFC129 §5 ordered-extreme);
-// count takes no field. The error is the loud refusal the caller emits.
-func typedAggAccepts(fn, field, goType string) error {
+// ordered type — the one list sort reads, isSortableGoType (DFC129 §5;
+// a bool since DFC163 §7);
+// count takes no field; a json field has no order (DFC163 §7). The error
+// is the loud refusal the caller emits.
+func typedAggAccepts(fn, field string, f lib.TypedSchemaField) error {
+	goType := f.GoType
 	switch fn {
 	case "sum", "avg":
 		if !isNumericGoType(goType) {
 			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires a numeric type, got %s", fn, field, goType)
 		}
 	case "min", "max":
-		if !isNumericGoType(goType) && goType != "string" && goType != "time.Time" && goType != "ssql.Inet" {
-			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires an ordered type (number, string, time or inet), got %s", fn, field, goType)
+		if f.JSON {
+			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q: a json value has no order (eq and ne compare it)", fn, field)
+		}
+		if !isSortableGoType(goType) {
+			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires an ordered type (number, string, time, inet or bool), got %s", fn, field, goType)
 		}
 	case "count-distinct", "string-agg":
 		// A nullable (*T) column has no value to hash or format.
@@ -803,11 +810,15 @@ func typedAggAccepts(fn, field, goType string) error {
 	return nil
 }
 
-// orderedLess emits the Go expression "a < b" for the field's type —
-// time.Time has no < operator, so it becomes a.Before(b).
+// orderedLess emits the Go expression "a < b" for the field's type: a
+// type `<` cannot compare goes through its three-way form, and a bool
+// is `!a && b` (false < true, DFC163 §7).
 func orderedLess(goType, a, b string) string {
-	if m := goCompareMethod(goType); m != "" {
-		return fmt.Sprintf("%s.%s(%s) < 0", a, m, b)
+	if goType == "bool" {
+		return fmt.Sprintf("!%s && %s", a, b)
+	}
+	if src, ok := goCompareSrc(goType, a, b); ok {
+		return src + " < 0"
 	}
 	return fmt.Sprintf("%s < %s", a, b)
 }
@@ -891,6 +902,21 @@ func aggResultGoType(s aggSpec, in *lib.TypedSchema) string {
 		return f.GoType
 	}
 	return "string"
+}
+
+// aggResultJSON: an aggregation whose result is one of a json field's
+// values (first, last, any, mode, the arg-* value) is json too; the typed
+// lane wrote its text as a string until DFC163's matrix.
+func aggResultJSON(s aggSpec, in *lib.TypedSchema) bool {
+	f, ok := lookupSchemaField(in, s.field)
+	if !ok || !f.JSON {
+		return false
+	}
+	switch s.function {
+	case "first", "last", "any", "mode", "arg-max", "arg-min":
+		return true
+	}
+	return false
 }
 
 // aggResultScale is the scale of an aggregation's output field: the

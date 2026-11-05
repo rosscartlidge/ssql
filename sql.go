@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 )
 
 // OrderedValue represents types that are both orderable and valid Record field values
@@ -1791,6 +1792,8 @@ func (s *numericSum) add(value any) {
 		}
 	case Inet:
 		panic(inetNoArithmetic("sum", v))
+	case string, bool, time.Time, JSONString:
+		panic(noArithmetic("sum", v)) // a loud refusal, as typed and every SQL engine give (DFC163 §7)
 	default:
 		f, ok := convertTo[float64](value) // float64, and the smart conversions Get[float64] made
 		if !ok {
@@ -1807,6 +1810,38 @@ func (s *numericSum) add(value any) {
 		s.floats.Add(f)
 	}
 	s.n++
+}
+
+// noArithmetic is the refusal of a sum or an average over a value that
+// is not a number: a string, a bool, a time or a json value. It was a
+// silent 0 (a skipped value) in exec until DFC163's matrix, where typed
+// codegen and every SQL engine refuse it; an inet has its own message.
+func noArithmetic(op string, v any) error {
+	kind := kindName(v)
+	if kind == "text" {
+		kind = "string"
+	}
+	if _, ok := v.(JSONString); ok {
+		kind = "json value"
+	}
+	return fmt.Errorf("%s: %s is a %s, which has no arithmetic (count, min, max and group-by work on it)", op, AggValueString(v), kind)
+}
+
+// CompareBool orders two bools as SQL does: false before true.
+func CompareBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case !a:
+		return -1
+	}
+	return 1
+}
+
+// noOrder is the refusal of ordering a json value: json compares only
+// with eq and ne (Ross, 2026-11-05, DFC163 §7).
+func noOrder(op string, v JSONString) error {
+	return fmt.Errorf("%s: %s is a json value, which has no order (eq and ne compare it; order by a path such as x.a, or by string(x))", op, string(v))
 }
 
 // result is the sum as the kind it was accumulated in.
@@ -2216,6 +2251,25 @@ func CompareAny(a, b any) int {
 	// sorts before 10.0.0.0/8.
 	if c, ok := inetCmp(a, b); ok {
 		return c
+	}
+	// A time by its instant (its %v text, the fallback below, put two
+	// zones in text order), a bool false < true as SQL orders it, and a
+	// json value not at all (DFC163 §7).
+	// ssql:domain fixed: the kinds the exact-number and inet comparisons above leave, before the float and text fallbacks
+	switch x := a.(type) {
+	case time.Time:
+		if y, ok := b.(time.Time); ok {
+			return x.Compare(y)
+		}
+	case bool:
+		if y, ok := b.(bool); ok {
+			return CompareBool(x, y)
+		}
+	case JSONString:
+		panic(noOrder("order", x))
+	}
+	if y, ok := b.(JSONString); ok {
+		panic(noOrder("order", y))
 	}
 	af, aOk := toFloat(a)
 	bf, bOk := toFloat(b)
@@ -2850,6 +2904,8 @@ func slidingNumeric(v any) (i Int128, d Decimal, f float64, kind slidingKind, ok
 		return Int128{}, x, 0, slidingDec, true
 	case Inet:
 		panic(inetNoArithmetic("sum", x))
+	case string, bool, time.Time, JSONString:
+		panic(noArithmetic("sum", x))
 	case nil:
 		return Int128{}, Decimal{}, 0, slidingFloat, false
 	}

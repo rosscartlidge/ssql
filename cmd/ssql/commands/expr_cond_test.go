@@ -74,7 +74,6 @@ func TestCondOpToExprGo(t *testing.T) {
 			{"contains on numeric", typedInt, "contains", "x", "needs a text field"},
 			{"invalid regex at codegen", typedStr, "regex", "([", "invalid regex"},
 			{"unknown operator", typedInt, "frobnicate", "1", "unknown where operator"},
-			{"ordering on bool", exprGo{Src: "r.Active", Type: exprGoBool}, "gt", "true", "not defined for bool"},
 		}
 		for _, tt := range cases {
 			t.Run(tt.name, func(t *testing.T) {
