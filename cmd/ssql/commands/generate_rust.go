@@ -443,6 +443,11 @@ func (g *rustGen) source(s *sqlSource, name string) {
 			opts += fmt.Sprintf(".file_extension(%s)", rustStr(ext))
 		}
 		g.line("let %s = ctx.read_json(%s, %s).await?;", name, paths, opts)
+		if s.headed {
+			// ssql's `_schema` header line is a row of nulls to the reader,
+			// with a `_schema` column: drop both, as the DuckDB form does.
+			g.line("let %s = %s.filter(col(\"_schema\").is_null())?.drop_columns(&[\"_schema\"])?;", name, name)
+		}
 	default:
 		opts := "CsvReadOptions::new().has_header(true)"
 		if format == "tsv" || ext == ".tsv" {

@@ -73,6 +73,7 @@ func sameKind(a, b any) bool {
 		_, ok := toFloat(b)
 		return ok
 	}
+	// ssql:domain fixed: numbers are compared before the switch
 	switch a.(type) {
 	case string:
 		_, ok := b.(string)
@@ -91,8 +92,9 @@ func sameKind(a, b any) bool {
 }
 
 func kindName(v any) string {
+	// ssql:domain scalar
 	switch v.(type) {
-	case int64, int, float64, Int128:
+	case int64, int, float64, Int128, Decimal:
 		return "number"
 	case string:
 		return "text"
@@ -170,6 +172,7 @@ func compareTyped(a, b any) (int, bool) {
 		}
 		return cmpOrdered(af, bf), true
 	}
+	// ssql:domain fixed: numbers and inets are compared before the switch
 	switch av := a.(type) {
 	case string:
 		if bv, ok := b.(string); ok {
@@ -258,6 +261,7 @@ func (e *CompareError) Error() string {
 		}
 		return fmt.Sprintf("where: operator %s needs a text field, and %s is a %s", e.Op, where, kind)
 	}
+	// ssql:domain fixed: a message per kind; the default names any other
 	switch e.Kind {
 	case "int", "float":
 		return fmt.Sprintf("where: %s is a number but %q is not (operator %s)", where, e.Value, e.Op)
@@ -278,6 +282,7 @@ func (e *CompareError) Error() string {
 // string operators need a text field. An empty literal against a
 // non-text field is false.
 func LiteralOp(v any, op, literal string) (bool, error) {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case string:
 		return ValueOp(x, op, literal), nil

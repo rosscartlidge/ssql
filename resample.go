@@ -124,6 +124,7 @@ func noteEpochUnit(warn io.Writer, u time.Duration) {
 }
 
 func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error) {
+	// ssql:domain fixed: a resample axis is an int, float, string or time
 	switch v := sample.(type) {
 	case int64:
 		u := time.Second
@@ -177,6 +178,7 @@ func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error
 }
 
 func (c *tsCodec) toNanos(v any) (int64, error) {
+	// ssql:domain fixed: a resample axis is an int, float, string or time
 	switch x := v.(type) {
 	case int64:
 		if c.kind != "int" && c.kind != "float" {
@@ -378,6 +380,7 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 	var out []Record
 	for gp := gridFrom; gp <= gridTo; gp += e {
 		m := MakeMutableRecordWithCapacity(1 + len(cfg.Values))
+		// ssql:domain fixed: a resample axis is an int, float, string or time
 		switch tv := codec.fromNanos(gp).(type) {
 		case int64:
 			m = m.Int(cfg.TimeField, tv)
@@ -504,6 +507,7 @@ func parseBoundLiteral(s string) any {
 // snap with ResampleRecords so downsampling (bucket + group-by) and
 // resampling land on the SAME grid.
 func BucketValue(v any, every time.Duration) (any, error) {
+	// ssql:domain fixed: a bucket axis is an int, float, string or time
 	switch x := v.(type) {
 	case int64:
 		return exprfn.BucketInt64(x, int64(every)), nil

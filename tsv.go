@@ -248,6 +248,7 @@ func formatTSVValue(v any, timeFormat string) string {
 	if v == nil {
 		return ""
 	}
+	// ssql:domain fixed: every other scalar through displayValueIn
 	switch val := v.(type) {
 	case string:
 		return val

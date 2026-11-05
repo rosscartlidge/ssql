@@ -153,6 +153,7 @@ func withPeekedSchema(records iter.Seq[ssql.Record], headers []string) (iter.Seq
 }
 
 func auxTypeString(v any) string {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case int64, int:
 		return "int"
@@ -168,6 +169,8 @@ func auxTypeString(v any) string {
 		return "time"
 	case ssql.Inet:
 		return lib.TypeInet
+	case string:
+		return "string"
 	default:
 		return "string"
 	}

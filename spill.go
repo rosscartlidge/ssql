@@ -161,6 +161,7 @@ func writeSpillRun(path string, run []Record) error {
 	for _, r := range run {
 		sr := spillRecord{Keys: make([]string, 0, r.Len()), Values: make([]any, 0, r.Len())}
 		for k, v := range r.All() {
+			// ssql:domain scalar
 			switch v.(type) {
 			case nil, string, int64, float64, bool, time.Time, JSONString, int, Int128, Decimal, Inet:
 			default:

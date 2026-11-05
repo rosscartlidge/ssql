@@ -80,9 +80,14 @@ func DistinctKey(v any) any { return distinctKey(v) }
 // themselves (numbers widened to float64 so 3 and 3.0 are one value),
 // everything else by its formatted text.
 func distinctKey(v any) any {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case string, bool, Inet:
 		return x // an Inet is comparable: ::1 and 0::1 are one value
+	case int64:
+		return float64(x)
+	case float64:
+		return x
 	case time.Time:
 		return x.UnixNano()
 	case Int128:
@@ -122,12 +127,15 @@ func StringAgg(field, sep string) AggregateFunc {
 // in full, floats in Go's shortest round-trip form, times as RFC 3339.
 // Generated typed code emits the same formatting inline (typed_groupby.go).
 func AggValueString(v any) string {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case string:
 		return x
 	case int64:
 		return strconv.FormatInt(x, 10)
 	case Int128:
+		return x.String()
+	case Decimal:
 		return x.String()
 	case Inet:
 		return x.String()

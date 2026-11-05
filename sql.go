@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -613,6 +614,7 @@ func joinValuesEqual(a, b any) bool {
 }
 
 func joinNumber(v any) (float64, bool) {
+	// ssql:domain numeric
 	switch x := v.(type) {
 	case int64:
 		return float64(x), true
@@ -1757,6 +1759,7 @@ type numericSum struct {
 }
 
 func (s *numericSum) add(value any) {
+	// ssql:domain exact+inet
 	switch v := value.(type) {
 	case int64:
 		switch {
@@ -2240,6 +2243,7 @@ func CompareAny(a, b any) int {
 
 // toFloat converts any numeric value to float64.
 func toFloat(v any) (float64, bool) {
+	// ssql:domain numeric
 	switch val := v.(type) {
 	case float64:
 		return val, true
@@ -2276,6 +2280,7 @@ func CompareRecordFields(a, b Record, orderBy []OrderField) int {
 // Each WindowConfig defines a partition/order/frame context and a set of window functions.
 // The result fields are added to every output record.
 func Window(configs []WindowConfig) Filter[Record, Record] {
+	names := windowResultNames(configs)
 	return func(input iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
 			// 1. Materialize all input records with original indices
@@ -2294,7 +2299,11 @@ func Window(configs []WindowConfig) Filter[Record, Record] {
 			for _, origIdx := range outputOrder {
 				r := all[origIdx]
 				mut := r.ToMutable()
-				for field, val := range results[origIdx] {
+				for _, field := range names {
+					val, ok := results[origIdx][field]
+					if !ok {
+						continue
+					}
 					if val == nil {
 						mut.put(field, nil)
 					} else {
@@ -2307,6 +2316,22 @@ func Window(configs []WindowConfig) Filter[Record, Record] {
 			}
 		}
 	}
+}
+
+// windowResultNames is every clause's result names in spec order, each
+// once: the order Window adds them to a record. It ranged over the
+// results map until 2026-11-05, so the generated program's columns came
+// out in map order while exec's header followed the specs (DFC163 §6.5).
+func windowResultNames(configs []WindowConfig) []string {
+	var names []string
+	for _, cfg := range configs {
+		for _, spec := range cfg.Specs {
+			if !slices.Contains(names, spec.ResultName) {
+				names = append(names, spec.ResultName)
+			}
+		}
+	}
+	return names
 }
 
 // windowResults computes every clause over the materialised input:
@@ -2815,6 +2840,7 @@ const (
 )
 
 func slidingNumeric(v any) (i Int128, d Decimal, f float64, kind slidingKind, ok bool) {
+	// ssql:domain exact+inet
 	switch x := v.(type) {
 	case int64:
 		return Int128From(x), Decimal{}, 0, slidingInt, true
@@ -3270,7 +3296,7 @@ func StreamWindow(configs []WindowConfig) (Filter[Record, Record], error) {
 	}
 
 	// LEAD present — delayed emission path
-	return streamWindowDelayed(regularAggs, leadSpecs, maxLeadOffset, partitionBy, orderBy), nil
+	return streamWindowDelayed(regularAggs, leadSpecs, windowResultNames(configs), maxLeadOffset, partitionBy, orderBy), nil
 }
 
 // streamWindowImmediate emits records immediately (no LEAD specs).
@@ -3338,7 +3364,7 @@ type pendingRecord struct {
 }
 
 // streamWindowDelayed handles LEAD specs by buffering records for lookahead.
-func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSpec, maxLeadOffset int, partitionBy []string, orderBy []OrderField) Filter[Record, Record] {
+func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSpec, names []string, maxLeadOffset int, partitionBy []string, orderBy []OrderField) Filter[Record, Record] {
 	return func(input iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
 			var prevKey string
@@ -3349,19 +3375,10 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 			guard := newPresortedGuard("window", partitionBy)
 
 			emitRecord := func(pr pendingRecord, bufIdx int, bufLen int) bool {
-				mut := pr.record.ToMutable()
-				// Apply regular agg values, in spec order (the record keeps
-				// insertion order; a map walk here would be random).
-				for _, sa := range regularAggs {
-					name := sa.resultName
-					val := pr.aggValues[name]
-					if val == nil {
-						mut.put(name, nil)
-					} else {
-						mut = applyWindowValue(mut, name, val)
-					}
-				}
-				// Apply LEAD values
+				// The LEAD values join the row's others, then every value is
+				// applied in spec order (the record keeps insertion order; a
+				// map walk would be random, and leads last broke the written
+				// order, DFC163 §6.5).
 				for _, ls := range leadSpecs {
 					lookIdx := bufIdx + ls.offset
 					var v any
@@ -3371,10 +3388,14 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 					if v == nil {
 						v = ls.def // LEAD's default, or nil → absent
 					}
-					if v == nil {
-						mut.put(ls.resultName, nil)
+					pr.aggValues[ls.resultName] = v
+				}
+				mut := pr.record.ToMutable()
+				for _, name := range names {
+					if val := pr.aggValues[name]; val == nil {
+						mut.put(name, nil)
 					} else {
-						mut = applyWindowValue(mut, ls.resultName, v)
+						mut = applyWindowValue(mut, name, val)
 					}
 				}
 				return yield(mut.Freeze())

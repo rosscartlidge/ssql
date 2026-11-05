@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-04
+Last modified: 2026-11-05
 
 [Back to Index](./README.md)
 
@@ -35,11 +35,24 @@ Tracked issues and feature gaps discovered during development.
   - `-param p inet V` (no struct type has a `-param` form yet).
   - A codelab paragraph on declaring an address column.
   - `from json` (the array reader) has no `-type` flag; `from jsonl` does.
-- [ ] **Type × operation matrix and a domain lint for type switches**:
-  proposal [DFC163](./dfc163_type_operation_matrix_and_domain_lint.md),
-  awaiting Ross (§4: order, annotation form, gate placement). The inet
-  build found seven bugs of one shape (a type switch or Go-type table
-  missing a newer type).
+- [x] **Domain lint for type switches — built 2026-11-05**
+  ([DFC163](./dfc163_type_operation_matrix_and_domain_lint.md) §6):
+  `// ssql:domain D` on every switch over record values, checked by
+  `internal/lint/typedomain` in `make vet`; 194 sites annotated; twelve
+  bugs fixed (§6.4).
+- [ ] **Type × operation matrix** (DFC163 §2.1; Ross: pre-tag gate only,
+  `SSQL_MATRIX=1`): every declarable type × every field-taking argument
+  from `ssql -spec-json` × every lane, with the four oracles (loud or
+  working, the type survives, the lanes agree, refusals agree). Batch
+  the Go lanes as one program per lane with `generate go -func`, as the
+  rust lane batches into one crate. Acceptance: red for DFC163 §1's
+  seven bugs against v4.137.2, green on HEAD.
+- [ ] **Declared types in DFC133's random differential** (DFC163 §2.3):
+  the generator declares `-type col decimal:2|int128|time|inet` per
+  column, with one typed program per run over a sample.
+- [x] **`window` column order, `int128(decimal)`, `addJSONField`** —
+  done 2026-11-05 (DFC163 §6.5, Ross's decisions): written order in
+  every lane, `int128()` truncates a decimal, the dead code deleted.
 
 ## Multi-file `from` (see multi-file-from.md)
 

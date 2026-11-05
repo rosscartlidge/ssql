@@ -128,6 +128,7 @@ func sqlAsInet(node ast.Node) (string, error) {
 }
 
 func inetFuncToSQL(name string, args []ast.Node) (string, bool, error) {
+	// ssql:domain fixed: function names, not types
 	want := map[string]int{"isip": 1, "ip": 1, "inet": 1, "ipfamily": 1, "ipint": 1, "ipkey": 1, "ipnet": 2, "ipin": 2}[name]
 	if want == 0 {
 		return "", false, nil
@@ -152,6 +153,7 @@ func inetFuncToSQL(name string, args []ast.Node) (string, bool, error) {
 	if err != nil {
 		return "", true, fmt.Errorf("%s(): %w", name, err)
 	}
+	// ssql:domain fixed: function names, not types
 	switch name {
 	case "ip":
 		return sqlInetText(x), true, nil

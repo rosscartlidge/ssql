@@ -1204,6 +1204,7 @@ func convertTo[T any](val any) (T, bool) {
 	}
 
 	// Custom conversions for common cases
+	// ssql:domain scalar
 	switch target := any(zero).(type) {
 	case int64:
 		if converted, ok := convertToInt64(val); ok {
@@ -1257,6 +1258,7 @@ func convertTo[T any](val any) (T, bool) {
 // integer of either width at scale 0, a float64 by its shortest decimal
 // form, a decimal string by its text (the scale is the text's).
 func convertToDecimal(val any) (Decimal, bool) {
+	// ssql:domain numeric+string+bool
 	switch v := val.(type) {
 	case Decimal:
 		return v, true
@@ -1277,6 +1279,7 @@ func convertToDecimal(val any) (Decimal, bool) {
 }
 
 func convertToInt128(val any) (Int128, bool) {
+	// ssql:domain numeric+string+bool
 	switch v := val.(type) {
 	case Int128:
 		return v, true
@@ -1304,6 +1307,7 @@ func convertToInt128(val any) (Int128, bool) {
 // From: float64, string, bool (canonical sources only)
 // Users must explicitly convert from int/int32/uint/etc to int64
 func convertToInt64(val any) (int64, bool) {
+	// ssql:domain numeric+string+bool
 	switch v := val.(type) {
 	case int64:
 		return v, true
@@ -1332,6 +1336,7 @@ func convertToInt64(val any) (int64, bool) {
 // From: int64, string (canonical sources only)
 // Users must explicitly convert from float32/int/int32/etc to float64
 func convertToFloat64(val any) (float64, bool) {
+	// ssql:domain numeric+string
 	switch v := val.(type) {
 	case float64:
 		return v, true
@@ -1352,6 +1357,7 @@ func convertToFloat64(val any) (float64, bool) {
 }
 
 func convertToString(val any) (string, bool) {
+	// ssql:domain fixed: every other scalar's text is its String (or %v), as the cast's is
 	switch v := val.(type) {
 	case string:
 		return v, true
@@ -1369,12 +1375,15 @@ func convertToString(val any) (string, bool) {
 
 // convertToBool only handles conversions from canonical types
 func convertToBool(val any) (bool, bool) {
+	// ssql:domain numeric+string+bool
 	switch v := val.(type) {
 	case bool:
 		return v, true
 	case int64:
 		return v != 0, true
 	case Int128:
+		return !v.IsZero(), true
+	case Decimal:
 		return !v.IsZero(), true
 	case float64:
 		return v != 0, true
@@ -1498,6 +1507,7 @@ func (r Record) AppendJSONOrdered(buf []byte, fieldOrder []string) []byte {
 // appendJSONValue appends a JSON-encoded value to buf.
 // Handles all common types efficiently without reflection.
 func appendJSONValue(buf []byte, v any) []byte {
+	// ssql:domain scalar
 	switch val := v.(type) {
 	case nil:
 		return append(buf, "null"...)
@@ -1887,6 +1897,7 @@ func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType
 				// digits at the declared scale (DFC155 E) — never through
 				// the float64 the JSON syntax would give it; a quoted form
 				// (duckdb -json) the same.
+				// ssql:domain fixed: the JSON tokens a decimal column can hold
 				switch v := value.(type) {
 				case int64, Int128, float64:
 					if d, err := ParseDecimalScale(string(line[valueStart:valueEnd]), types[idx].Scale()); err == nil {
@@ -2210,6 +2221,7 @@ func ValidateRecord(r Record) error {
 // IsValueType checks if a value conforms to the Value interface using type assertions
 // Hybrid approach: Only canonical scalars (int64, float64), but all sequence variants allowed
 func isValueType(value any) bool {
+	// ssql:domain scalar
 	switch value.(type) {
 	// Canonical scalar types only
 	case int64, float64, Int128, Decimal, Inet:
@@ -2516,6 +2528,7 @@ func StableKey(value any) string {
 
 // stableKeyAppend appends the stable key representation to a byte slice
 func stableKeyAppend(buf []byte, value any) string {
+	// ssql:domain scalar
 	switch v := value.(type) {
 	case nil:
 		return string(append(buf, "null"...))
@@ -2532,6 +2545,10 @@ func stableKeyAppend(buf []byte, value any) string {
 		return string(append(buf, v.Normalized().String()...)) // 5.00 keys with 5 and 5.000
 	case Inet:
 		return stableKeyAppend(buf, v.String()) // the canonical text: ::1 keys with 0::1
+	case time.Time:
+		// The instant, in UTC: one key for one instant whatever its zone
+		// (%v was Go's Time.String, zone and monotonic reading included).
+		return string(v.UTC().AppendFormat(buf, time.RFC3339Nano))
 	case float64:
 		return string(strconv.AppendFloat(buf, v, 'g', -1, 64))
 	case string:
@@ -2928,6 +2945,7 @@ func isSimpleValue(value any) bool {
 	if value == nil {
 		return true // nil is simple
 	}
+	// ssql:domain scalar
 	switch value.(type) {
 	// Canonical scalar types only
 	case int64, float64, Int128, Decimal, Inet:

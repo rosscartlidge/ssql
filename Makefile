@@ -22,7 +22,7 @@ help:
 	@echo "  make test         - Run all tests"
 	@echo "  make build        - Build the project"
 	@echo "  make fmt          - Format all Go code"
-	@echo "  make vet          - Run go vet"
+	@echo "  make vet          - Run go vet and the type-domain lint (DFC163)"
 	@echo ""
 	@echo "GPU Build (requires CUDA toolkit locally):"
 	@echo "  make gpu          - Build CUDA library (gpu/libssqlgpu.so)"
@@ -81,6 +81,8 @@ fmt:
 vet:
 	@echo "Running go vet..."
 	go vet ./...
+	@echo "Running the type-domain lint (DFC163)..."
+	go run ./internal/lint/cmd/typedomain ./...
 
 # Level 1: Fast documentation validation
 doc-check:

@@ -79,6 +79,7 @@ func (t exprGoType) exact() bool { return t.integer() || t == exprGoDecimal }
 // asDec renders an exact operand as an ssql.Decimal (an integer at scale
 // 0; the methods align scales at run time). The caller adds ssqlImport.
 func asDec(v exprGo) string {
+	// ssql:domain wide
 	switch v.Type {
 	case exprGoDecimal:
 		return v.Src
@@ -361,6 +362,7 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 			return exprGo{}, &exprUnknownFieldError{
 				msg: fmt.Sprintf("unknown field %q (schema has %s)", name, e.fieldNames())}
 		}
+		// ssql:domain scalar
 		switch f.GoType {
 		case "int64":
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, int64(0))", e.recv, f.Name), Type: exprGoInt}, nil
@@ -395,6 +397,7 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 		// member access mean the list or map, which only the VM does.
 		return exprGo{}, fmt.Errorf("field %q is a nested value (json), which has no native Go emission", name)
 	}
+	// ssql:domain scalar
 	switch f.GoType {
 	case "int64":
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoInt}, nil
@@ -420,6 +423,7 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 // at generation (a bad one an error here, hoisted as a package var), any
 // other string through ssql.MustParseInet per row (its error the VM's).
 func asInetGo(v exprGo) (exprGo, error) {
+	// ssql:domain string+inet
 	switch v.Type {
 	case exprGoInet:
 		return v, nil
@@ -937,6 +941,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		return e.node(args[0])
 	}
 
+	// ssql:domain fixed: function names, not types
 	switch name {
 	case "bucket":
 		// bucket(ts, "5m") — DFC121. The duration must be a literal so
@@ -959,6 +964,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
+		// ssql:domain fixed: a bucket axis is an int, float or time
 		switch arg.Type {
 		case exprGoInt:
 			res := exprGo{Src: fmt.Sprintf("exprfn.BucketInt64(%s, %d)", arg.Src, int64(d)), Type: exprGoInt, Imports: []string{exprfnImport}}
@@ -1235,9 +1241,12 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
+		// ssql:domain numeric+string
 		switch arg.Type {
 		case exprGoInt128:
 			return arg, nil
+		case exprGoDecimal:
+			return mergeMeta(exprGo{Src: arg.Src + ".Trunc()", Type: exprGoInt128}, arg), nil // toward zero, as int() does
 		case exprGoInt:
 			return mergeMeta(exprGo{Src: "ssql.Int128From(" + arg.Src + ")", Type: exprGoInt128, Imports: []string{ssqlImport}}, arg), nil
 		case exprGoFloat, exprGoString:
@@ -1281,6 +1290,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 			return exprGo{}, err
 		}
 		at := max(scale, 0)
+		// ssql:domain numeric+string
 		switch arg.Type {
 		case exprGoDecimal:
 			if !hasScale {
@@ -1308,6 +1318,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
+		// ssql:domain numeric
 		switch arg.Type {
 		case exprGoInt:
 			return arg, nil
@@ -1327,6 +1338,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
+		// ssql:domain numeric
 		switch arg.Type {
 		case exprGoFloat:
 			return arg, nil
@@ -1341,6 +1353,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
+		// ssql:domain fixed: string() of a time or a bool is not transpiled (the VM runs it)
 		switch arg.Type {
 		case exprGoString:
 			return arg, nil
@@ -1731,6 +1744,7 @@ func exprCoerceFunc(f lib.TypedSchemaField) (string, bool) {
 	if f.JSON {
 		return "exprvm.MustCoerceJSON", true
 	}
+	// ssql:domain scalar
 	switch f.GoType {
 	case "int64":
 		return "exprvm.MustCoerceInt64", true
@@ -1768,6 +1782,7 @@ func (e *exprGoEnv) inetFunc(name string, args []ast.Node) (exprGo, error) {
 		return exprGo{}, err
 	}
 	if name == "isip" {
+		// ssql:domain string+inet
 		switch x.Type {
 		case exprGoInet:
 			return mergeMeta(exprGo{Src: x.Src + ".IsValid()", Type: exprGoBool}, x), nil
@@ -1780,6 +1795,7 @@ func (e *exprGoEnv) inetFunc(name string, args []ast.Node) (exprGo, error) {
 	if err != nil {
 		return exprGo{}, fmt.Errorf("%s(): %w", name, err)
 	}
+	// ssql:domain fixed: function names, not types
 	switch name {
 	case "ip":
 		return mergeMeta(exprGo{Src: v.Src + ".String()", Type: exprGoString}, v), nil

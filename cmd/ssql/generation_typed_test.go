@@ -794,7 +794,8 @@ func TestTypedWindowFrameStatistics(t *testing.T) {
 	// Rows 3 and 4 are the first with a full five-row frame: the median is
 	// the row, the sample stddev of five consecutive integers is sqrt(2.5),
 	// the mode of five distinct values is the first seen (the lowest).
-	if want := "3,5,1.5811388300841898,3,5,\"1,2,3,4,5\",1,1\n4,5,1.5811388300841898,4,5,\"2,3,4,5,6\",2,2\n"; !strings.Contains(out, want) {
+	// Columns in the order the flags were written (DFC163 §6.5).
+	if want := "n,med,sd,mo,cd,sa,lo,c\n3,3,1.5811388300841898,1,5,\"1,2,3,4,5\",1,5\n4,4,1.5811388300841898,2,5,\"2,3,4,5,6\",2,5\n"; !strings.Contains(out, want) {
 		t.Errorf("expected %q in output\n%s", want, out)
 	}
 }
@@ -896,7 +897,7 @@ func TestTypedWindowProgramReadsPlainly(t *testing.T) {
 		}
 	}
 	out := goRunGenerated(t, src)
-	if want := "n,count,running\n6,11,6\n7,11,7\n8,11,8\n"; !strings.Contains(out, want) {
+	if want := "n,running,count\n6,6,11\n7,7,11\n8,8,11\n"; !strings.Contains(out, want) { // the written order (DFC163 §6.5)
 		t.Errorf("expected %q in output\n%s", want, out)
 	}
 }

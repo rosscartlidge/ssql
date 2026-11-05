@@ -437,6 +437,7 @@ func wideInt(args []any) (any, bool, error) {
 	if len(args) != 1 {
 		return nil, false, nil
 	}
+	// ssql:domain wide
 	switch x := args[0].(type) {
 	case Int128:
 		i, fits := x.Int64()
@@ -468,6 +469,7 @@ func wideFloat(args []any) (any, bool, error) {
 
 // exactToFloat is an Int128 or a Decimal as its nearest float64.
 func exactToFloat(v any) (float64, bool) {
+	// ssql:domain wide
 	switch x := v.(type) {
 	case Int128:
 		return x.Float64(), true
@@ -484,6 +486,7 @@ func wideFloorCeil(dir int) func(args []any) (any, bool, error) {
 		if len(args) != 1 {
 			return nil, false, nil
 		}
+		// ssql:domain wide
 		switch x := args[0].(type) {
 		case Int128:
 			return x, true, nil
@@ -502,6 +505,7 @@ func wideAbs(args []any) (any, bool, error) {
 	if len(args) != 1 {
 		return nil, false, nil
 	}
+	// ssql:domain wide
 	switch x := args[0].(type) {
 	case Int128:
 		v, err := x.CheckedAbs()
@@ -524,6 +528,7 @@ func wideExtreme(dir int) func(args []any) (any, bool, error) {
 		}
 		hasWide, hasDec := false, false
 		for _, a := range args {
+			// ssql:domain wide
 			switch a.(type) {
 			case Int128:
 				hasWide = true
@@ -667,6 +672,7 @@ func exprDecimalPair(a, b any) (Decimal, Decimal, bool) {
 // unwrapped to the value, a nil pointer to nil (a nullable window value,
 // the lag before the first row, reaches an expression as a *int64).
 func exprDeref(v any) any {
+	// ssql:domain fixed: a time or an inet is returned by the default as it is; only pointers deref
 	switch v.(type) {
 	case nil, int64, int, float64, string, bool, Int128, Decimal:
 		return v

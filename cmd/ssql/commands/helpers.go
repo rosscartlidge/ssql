@@ -648,6 +648,7 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 
 	// Determine the target type from existing value
 	var coerced bool
+	// ssql:domain fixed: an existing time column takes the value's own type (the default)
 	switch existingValue.(type) {
 	case int64:
 		if w, ok := value.(ssql.Int128); ok {
@@ -733,6 +734,7 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 // occurred: integers widen without one; a whole float, a digit string and
 // a bool are coercions.
 func coerceToInt128(value any) (ssql.Int128, bool) {
+	// ssql:domain fixed: an int128 column's sources; the default is a type error
 	switch v := value.(type) {
 	case ssql.Int128:
 		return v, false
@@ -844,6 +846,7 @@ func coerceToBool(value any) (bool, bool) {
 
 // coerceToString converts a value to string, returning whether coercion occurred
 func coerceToString(value any) (string, bool) {
+	// ssql:domain fixed: every other scalar's text is its String (or %v)
 	switch v := value.(type) {
 	case string:
 		return v, false
@@ -869,6 +872,7 @@ func coerceToString(value any) (string, bool) {
 // applyValueToRecord applies a value to a mutable record with automatic type inference
 // Handles type conversions (int→int64, float32→float64) and defaults unknown types to string
 func applyValueToRecord(mut ssql.MutableRecord, field string, value any) ssql.MutableRecord {
+	// ssql:domain scalar
 	switch v := value.(type) {
 	case int64:
 		return mut.Int(field, v)

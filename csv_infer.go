@@ -187,6 +187,7 @@ func zeroForEmpty(ft FieldType, p cellParser) cellParser {
 			return p(s)
 		}
 	}
+	// ssql:domain numeric+bool
 	switch ft {
 	case FieldTypeInt:
 		zero = int64(0)
@@ -212,6 +213,7 @@ func parserForType(ft FieldType) cellParser {
 	if ft.IsDecimal() {
 		return parseDecimalCell(ft.Scale())
 	}
+	// ssql:domain scalar
 	switch ft {
 	case FieldTypeInt:
 		return parseIntCell
@@ -227,6 +229,8 @@ func parserForType(ft FieldType) cellParser {
 		return parseJSONCell
 	case FieldTypeInet:
 		return parseInetCell
+	case FieldTypeString:
+		return parseStringCell
 	default:
 		return parseStringCell
 	}

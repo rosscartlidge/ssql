@@ -239,6 +239,7 @@ func emitTypedAsofJoin(inputVar, funcName string, leftSchema, rightSchema *lib.T
 	lf, _ := lookupSchemaField(leftSchema, cfg.LeftTime)
 	rf, _ := lookupSchemaField(rightSchema, cfg.RightTime)
 	axis := func(f lib.TypedSchemaField, v string) (string, string) {
+		// ssql:domain fixed: an as-of axis is a time or a number; a decimal axis is refused before it
 		switch f.GoType {
 		case "time.Time":
 			return v + "." + f.GoName + ".UnixNano()", "int64"

@@ -20,6 +20,7 @@ type CastError struct {
 
 func (e *CastError) Error() string {
 	hint := ""
+	// ssql:domain fixed: a hint for each type with spelling rules
 	switch e.Target {
 	case FieldTypeTime:
 		hint = ` (accepted: RFC 3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", Unix seconds; use date(value, layout) in -set-expr for another layout)`
@@ -46,7 +47,10 @@ func castTypeNoun(t FieldType) string {
 	if t.IsDecimal() {
 		return "a " + t.String()
 	}
+	// ssql:domain scalar
 	switch t {
+	case FieldTypeString:
+		return "a string"
 	case FieldTypeInt:
 		return "an int"
 	case FieldTypeInt128:
@@ -76,6 +80,7 @@ func CastValue(v any, target FieldType) (any, bool) {
 	if target.IsDecimal() {
 		return castToDecimal(v, target.Scale())
 	}
+	// ssql:domain scalar
 	switch target {
 	case FieldTypeJSON:
 		// A nested value: its JSON text. A JSONString is accepted as it is;
@@ -93,6 +98,7 @@ func CastValue(v any, target FieldType) (any, bool) {
 		}
 		return nil, false
 	case FieldTypeString:
+		// ssql:domain scalar
 		switch x := v.(type) {
 		case string:
 			return x, true
@@ -116,6 +122,7 @@ func CastValue(v any, target FieldType) (any, bool) {
 		// The widening cast (DFC155 C): an int64 or a whole part of a
 		// float (truncated, as the int cast does) that fits 128 bits, a
 		// bool, a digit string, an int128 as it is.
+		// ssql:domain numeric+string+bool
 		switch x := v.(type) {
 		case Int128:
 			return x, true
@@ -143,6 +150,7 @@ func CastValue(v any, target FieldType) (any, bool) {
 			}
 		}
 	case FieldTypeInt:
+		// ssql:domain numeric+string+bool
 		switch x := v.(type) {
 		case int64:
 			return x, true
@@ -167,6 +175,7 @@ func CastValue(v any, target FieldType) (any, bool) {
 			}
 		}
 	case FieldTypeFloat:
+		// ssql:domain numeric+string+bool
 		switch x := v.(type) {
 		case float64:
 			return x, true
@@ -187,6 +196,7 @@ func CastValue(v any, target FieldType) (any, bool) {
 			}
 		}
 	case FieldTypeBool:
+		// ssql:domain numeric+string+bool
 		switch x := v.(type) {
 		case bool:
 			return x, true
@@ -228,6 +238,7 @@ func CastValue(v any, target FieldType) (any, bool) {
 func castToDecimal(v any, scale int) (any, bool) {
 	var d Decimal
 	var err error
+	// ssql:domain numeric+string+bool
 	switch x := v.(type) {
 	case Decimal:
 		d, err = x.Rescale(scale)

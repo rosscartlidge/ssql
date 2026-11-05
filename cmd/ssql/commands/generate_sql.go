@@ -303,6 +303,7 @@ type sqlSource struct {
 	files   []string  // one or several (several: UNION ALL of the files)
 	columns []string  // a parquet -columns projection
 	schema  []sqlPair // generate rust: every column and its ssql kind, when a type is declared (nil = the reader infers)
+	headed  bool      // a JSONL whose first line is ssql's `_schema` header, which a JSON reader reads as a row
 }
 
 // sqlStar is a `* EXCLUDE / REPLACE / RENAME` projection, structured.
@@ -932,6 +933,12 @@ func translateFrom(q *sqlQuery, args []string) error {
 				// found this: every JSON source left q.columns unknown).
 				var headed bool
 				q.columns, headed = jsonHeader(files[0])
+				if sqlForRust && len(typeOverrides) > 0 {
+					// DataFusion's JSON reader takes no declared schema here:
+					// a -type would be silently ignored (DFC163 §6).
+					return dialectRefuse("from "+args[0]+" -type", "generate rust reads JSON through DataFusion's inferring reader")
+				}
+				q.source.headed = headed
 				if headed && sqlDialectCur == dialectDuckDB {
 					// A `_schema` header line is a row of NULLs to the
 					// engine's JSON reader (and a `_schema` STRUCT column):
@@ -2493,7 +2500,11 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+4 < len(args) {
 				cur.orderFns = append(cur.orderFns, args[i])
 				sqlFunc := strings.ToUpper(strings.TrimSuffix(args[i][1:], "-default"))
-				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s, %s, %s) AS %s", sqlFunc, quoteIdent(args[i+1]), args[i+2], sqlTypedLiteral(windowDefaultLiteral(args[i+3])), quoteIdent(args[i+4])))
+				def := sqlTypedLiteral(windowDefaultLiteral(args[i+3]))
+				if sqlColumnKinds[args[i+1]] == "inet" {
+					def = sqlLiteralFor(args[i+1], args[i+3]) // DuckDB casts no text to INET implicitly (DFC163)
+				}
+				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s, %s, %s) AS %s", sqlFunc, quoteIdent(args[i+1]), args[i+2], def, quoteIdent(args[i+4])))
 				cur.flags = append(cur.flags, args[i])
 				cur.fargs = append(cur.fargs, args[i+1:i+5])
 				i += 5
@@ -2552,6 +2563,22 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		default:
 			i++
+		}
+	}
+
+	// A function whose value is one of its field's values has the
+	// field's kind: an inet lag is an inet, cast to text at the output
+	// (sqlInetOutput), and a later literal against it is typed by it.
+	// Unrecorded, `-lag ip` printed DuckDB's INET struct (DFC163).
+	for _, c := range clauses {
+		for j, flag := range c.flags {
+			switch flag {
+			case "-lag", "-lead", "-lag-default", "-lead-default", "-first", "-last", "-nth-value", "-min", "-max":
+				fa := c.fargs[j]
+				if kind := sqlColumnKinds[fa[0]]; kind != "" {
+					sqlColumnKinds[fa[len(fa)-1]] = kind
+				}
+			}
 		}
 	}
 
@@ -2918,6 +2945,7 @@ func translateCast(q *sqlQuery, args []string) error {
 			if kindBefore == "inet" {
 				// An inet casts to its text (abbrev on Postgres, whose ::text
 				// adds /32) and to nothing else (DFC162).
+				// ssql:domain fixed: casts from an inet
 				switch ft, _ := ssql.ParseFieldType(typeName); ft {
 				case ssql.FieldTypeString:
 					expr = sqlInetText(quoteIdent(field))
@@ -3269,6 +3297,7 @@ func mapTypeToSQL(typeName string) string {
 	if base, scale := ssql.ParseWireType(typeName); base == "decimal" && scale >= 0 {
 		return sqlDecimalType(scale)
 	}
+	// ssql:domain scalar
 	switch strings.ToLower(typeName) {
 	case "int", "integer", "int64":
 		return "BIGINT"
@@ -3709,6 +3738,7 @@ func emptyZeroDefaults(columns []string) []sqlPair {
 		if base, _ := ssql.ParseWireType(kind); base == "decimal" {
 			kind = "decimal"
 		}
+		// ssql:domain numeric+bool
 		switch kind {
 		case "int", "float", "int128", "decimal":
 			out = append(out, sqlPair{c, "0"})
@@ -3792,6 +3822,7 @@ func duckColumnType(typeName string) string {
 	if base, scale := ssql.ParseWireType(typeName); base == "decimal" && scale >= 0 {
 		return fmt.Sprintf("DECIMAL(38,%d)", scale) // read_csv rounds the text to the scale, as ssql does
 	}
+	// ssql:domain scalar
 	switch typeName {
 	case "int":
 		return "BIGINT"
@@ -3805,6 +3836,8 @@ func duckColumnType(typeName string) string {
 		return sqlTimestampType()
 	case "inet":
 		return "INET" // read_csv parses the text (DFC162)
+	case "string":
+		return "VARCHAR"
 	}
 	return "VARCHAR"
 }

@@ -385,6 +385,7 @@ func sidecarFieldType(name, typeName, format string, uts35 bool) (FieldType, str
 	if ft, err := ParseFieldType(typeName); err == nil && ft.IsDecimal() {
 		return ft, "", "", nil // ssqlType "decimal:S" (DFC155 E)
 	}
+	// ssql:domain scalar
 	switch strings.ToLower(typeName) {
 	case "integer", "int", "long", "short", "byte", "year":
 		return FieldTypeInt, "", "", nil
@@ -441,6 +442,7 @@ func TableTypeName(f TableField) string {
 	if f.Type.IsDecimal() {
 		return "number" // a Frictionless number; ssqlType keeps the scale
 	}
+	// ssql:domain scalar
 	switch f.Type {
 	case FieldTypeInt, FieldTypeInt128:
 		return "integer" // a Frictionless integer is unbounded; sidecarExtra keeps the width
@@ -580,6 +582,7 @@ func TableFieldsFromRecords(records iter.Seq[Record], known map[string]FieldType
 		if _, fixed := known[name]; fixed {
 			return
 		}
+		// ssql:domain scalar
 		switch x := v.(type) {
 		case int64:
 			if f.Type == FieldTypeAuto {
@@ -588,6 +591,10 @@ func TableFieldsFromRecords(records iter.Seq[Record], known map[string]FieldType
 		case Int128:
 			if f.Type == FieldTypeAuto || f.Type == FieldTypeInt {
 				f.Type = FieldTypeInt128
+			}
+		case Decimal:
+			if f.Type == FieldTypeAuto {
+				f.Type = DecimalType(x.Scale()) // a decimal is never inferred from text, so its value says it
 			}
 		case float64:
 			if f.Type == FieldTypeAuto || f.Type == FieldTypeInt || f.Type == FieldTypeInt128 {

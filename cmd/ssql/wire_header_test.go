@@ -384,6 +384,11 @@ func TestCastIsStrict(t *testing.T) {
 		"-type score float": {`field "score" value "`, `" is not a float`},
 		"-type flag bool":   {`field "flag" value "maybe" is not a bool`, ""},
 		"-type when time":   {`field "when" value "`, `" is not a time`},
+		// A decimal was missing from the typed lane's strict targets until
+		// DFC163's lint: "N/A" cast to decimal:2 was a silent zero there.
+		"-type score decimal:2": {`field "score" value "`, `" is not a decimal:2`},
+		"-type score int128":    {`field "score" value "`, `" is not an int128`},
+		"-type flag inet":       {`field "flag" value "`, `" is not an inet`},
 	} {
 		for _, script := range []string{
 			bin + " from " + f + " | " + bin + " cast " + target + " | " + bin + " to csv",

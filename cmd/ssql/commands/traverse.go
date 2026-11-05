@@ -304,6 +304,7 @@ func followCheck(edgeFields []string, edgeType func(string) string, startFields 
 			}
 		}
 		for _, w := range f.weights() {
+			// ssql:domain numeric
 			switch base, _ := lib.ParseWireType(edgeType(w.Field)); base {
 			case "", lib.TypeInt, lib.TypeInt128, lib.TypeFloat, lib.TypeDecimal:
 			default:
@@ -402,6 +403,7 @@ func followFields(sums []ssql.FollowSum) []string {
 // followSumType is the wire type of a total over an edge field: an
 // integer sum is an int128 (DFC155 C), a decimal keeps its scale.
 func followSumType(edgeType string) string {
+	// ssql:domain exact
 	switch base, _ := lib.ParseWireType(edgeType); base {
 	case lib.TypeInt, lib.TypeInt128:
 		return lib.TypeInt128
@@ -540,6 +542,7 @@ func typedWireType(s *lib.TypedSchema) func(string) string {
 		if !ok {
 			return ""
 		}
+		// ssql:domain fixed: a traverse edge type is a number or a time
 		switch f.GoType {
 		case "int64":
 			return lib.TypeInt
@@ -650,6 +653,7 @@ func emitTypedFollow(c sideCtx, startSchema *lib.TypedSchema, startFragments []*
 		ef, _ := lookupSchemaField(edgeSchema, w.Field)
 		af := lib.TypedSchemaField{Name: w.Name, GoName: lib.GoNameFromColumn(w.Name), Scale: ef.Scale}
 		var step, cmpE, neg string
+		// ssql:domain numeric
 		switch ef.GoType {
 		case "int64":
 			af.GoType = "ssql.Int128"

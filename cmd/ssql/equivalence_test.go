@@ -3465,6 +3465,106 @@ var equivCases = []EquivCase{
 		Golden:   []map[string]any{{"id": 1, "ts": "2026-03-01T00:00:00Z"}, {"id": 3, "ts": "2026-02-01T00:00:00Z"}},
 	},
 	{
+		// One clause's new columns come out in the order the flags were
+		// written, in every lane (the harness checks column order against
+		// exec, and SQL writes the SELECT list as typed). Exec grouped them
+		// by function and record codegen put -lag-default first until
+		// 2026-11-05 (DFC163 §6.5).
+		Name:     "window_columns_in_written_order",
+		Pipeline: `{{.bin}} from csv {{.data}}/ids.csv | {{.bin}} window -order id -first n f -lag-default id 1 0 pd -row-number rn -sum id s -max id m | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "n": "one", "f": "one", "pd": 0, "rn": 1, "s": 1, "m": 1},
+			{"id": 5, "n": "five", "f": "one", "pd": 1, "rn": 2, "s": 6, "m": 5},
+		},
+	},
+	{
+		// The streaming form keeps the written order too: it applied the
+		// leads after every other result (DFC163 §6.5).
+		Name:     "window_presorted_columns_in_written_order",
+		Pipeline: `{{.bin}} from csv {{.data}}/ids.csv | {{.bin}} sort id | {{.bin}} window -presorted -order id -lead-default id 1 0 nx -sum id s -lag-default id 1 0 pd`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "n": "one", "nx": 5, "s": 1, "pd": 0},
+			{"id": 5, "n": "five", "nx": 0, "s": 6, "pd": 1},
+		},
+	},
+	{
+		// int128() of a decimal truncates toward zero, as int() does; it
+		// was an error in every lane until DFC163 §6.5 (Ross, 2026-11-05).
+		// SQL: CAST of a DECIMAL rounds, so trunc first.
+		Name:     "expr_int128_of_decimal_truncates",
+		Pipeline: `{{.bin}} from csv {{.data}}/fractions.csv -type amt decimal:2 | {{.bin}} update -set-expr w 'int128(amt)' -set-expr i 'int(amt)' | {{.bin}} include k amt w i`,
+		Golden: []map[string]any{
+			{"k": "b", "amt": json.Number("-2.75"), "w": -2, "i": -2},
+			{"k": "d", "amt": json.Number("0.5"), "w": 0, "i": 0},
+			{"k": "a", "amt": json.Number("2.75"), "w": 2, "i": 2},
+			{"k": "c", "amt": json.Number("-0.49"), "w": 0, "i": 0},
+		},
+		Decimals: []string{"amt"},
+	},
+	{
+		// Found by DFC163's domain lint: `-type ts string` over a time
+		// column wrote Go's Time.String ("2026-01-31 12:00:00 +0000 UTC")
+		// in exec, the switch in coerceValue having no time arm. A time's
+		// text is RFC 3339, in its own offset, as `cast -type ts string`.
+		Name:     "jsonl_type_time_as_string",
+		Pipeline: `{{.bin}} from jsonl -type ts string {{.data}}/times_sydney.jsonl | {{.bin}} include id ts | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "ts": "2026-01-04T23:30:00Z"},
+			{"id": 2, "ts": "2026-01-05T10:30:00+11:00"},
+			{"id": 3, "ts": "2026-01-31T12:00:00Z"},
+			{"id": 4, "ts": "2026-04-05T02:30:00+11:00"},
+			{"id": 5, "ts": "2024-02-29T20:15:30-05:00"},
+			{"id": 6, "ts": "2026-01-11T23:59:59Z"},
+		},
+	},
+	{
+		// Found by DFC163's domain lint: typed string-agg imported strconv
+		// for a decimal or inet column, whose text is its own String(),
+		// and the program did not compile.
+		Name:     "decimal_string_agg",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} group-by k -string-agg amt ";" s | {{.bin}} sort k`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"k": "a", "s": "0.10;0.30;-5.01;0.20"}, {"k": "b", "s": "0.20;12.35;0.10;0.13"}},
+	},
+	{
+		Name:     "inet_string_agg",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} group-by -string-agg ip ";" s`,
+		Golden: []map[string]any{
+			{"s": "192.168.0.2;10.0.0.0/16;::1.2.3.4;9.0.0.1;2001:db8::1;10.0.0.1/24;fe80::1;10.0.0.1;::1;10.0.0.0/8;::ffff:1.2.3.4;10.0.0.9;::1;10.0.0.1"},
+		},
+		Skip: equivInetPending(),
+	},
+	{
+		// A window function whose value is a field's value keeps the
+		// field's kind: unrecorded, DuckDB printed an inet lag as its
+		// INET struct, and a lag default was text it would not cast
+		// (DFC163). The running max is decided by the first byte: every
+		// v6 address here is past every v4 one, and fe80:: past them all.
+		Name:     "inet_window_values",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} window -order n -first ip f -max ip mx -lag-default ip 1 1.1.1.1 pd | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"n": 1, "ip": "192.168.0.2", "f": "192.168.0.2", "mx": "192.168.0.2", "pd": "1.1.1.1"},
+			{"n": 2, "ip": "10.0.0.0/16", "f": "192.168.0.2", "mx": "192.168.0.2", "pd": "192.168.0.2"},
+			{"n": 3, "ip": "::1.2.3.4", "f": "192.168.0.2", "mx": "::1.2.3.4", "pd": "10.0.0.0/16"},
+			{"n": 4, "ip": "9.0.0.1", "f": "192.168.0.2", "mx": "::1.2.3.4", "pd": "::1.2.3.4"},
+			{"n": 5, "ip": "2001:db8::1", "f": "192.168.0.2", "mx": "2001:db8::1", "pd": "9.0.0.1"},
+			{"n": 6, "ip": "10.0.0.1/24", "f": "192.168.0.2", "mx": "2001:db8::1", "pd": "2001:db8::1"},
+			{"n": 7, "ip": "fe80::1", "f": "192.168.0.2", "mx": "fe80::1", "pd": "10.0.0.1/24"},
+			{"n": 8, "ip": "10.0.0.1", "f": "192.168.0.2", "mx": "fe80::1", "pd": "fe80::1"},
+			{"n": 9, "ip": "::1", "f": "192.168.0.2", "mx": "fe80::1", "pd": "10.0.0.1"},
+			{"n": 10, "ip": "10.0.0.0/8", "f": "192.168.0.2", "mx": "fe80::1", "pd": "::1"},
+			{"n": 11, "ip": "::ffff:1.2.3.4", "f": "192.168.0.2", "mx": "fe80::1", "pd": "10.0.0.0/8"},
+			{"n": 12, "ip": "10.0.0.9", "f": "192.168.0.2", "mx": "fe80::1", "pd": "::ffff:1.2.3.4"},
+			{"n": 13, "ip": "::1", "f": "192.168.0.2", "mx": "fe80::1", "pd": "10.0.0.9"},
+			{"n": 14, "ip": "10.0.0.1", "f": "192.168.0.2", "mx": "fe80::1", "pd": "::1"},
+		},
+		Skip: equivInetPending(),
+	},
+	{
 		// + on strings is concatenation, || in SQL: a literal, a cast and
 		// a string function each make the other side text. The SQL
 		// translator emitted a numeric + until 2026-11-04 (DFC162 found it).

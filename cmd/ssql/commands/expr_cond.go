@@ -86,6 +86,7 @@ func condOpToExprGo(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 // field (exec's applyOperator branches the comparison on the FIELD's runtime
 // type — so must we).
 func condRHS(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
+	// ssql:domain fixed: a time field compares through its own form before condRHS
 	switch lhs.Type {
 	case exprGoDecimal:
 		// A decimal field compares with its literal exactly (DFC155 E): the
@@ -270,6 +271,7 @@ func isStringCondOp(op string) bool {
 
 // condKindName renders a transpiler type as CompareError's kind word.
 func condKindName(t exprGoType) string {
+	// ssql:domain fixed: a message per kind; the default names any other
 	switch t {
 	case exprGoInt:
 		return "int"

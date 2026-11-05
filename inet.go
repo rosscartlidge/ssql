@@ -289,6 +289,7 @@ func inetNoArithmetic(op string, v Inet) error {
 // asInet reads an Inet, or a string that parses as one; ok is false for
 // anything else, or for a string that does not parse.
 func asInet(v any) (Inet, bool) {
+	// ssql:domain string+inet
 	switch x := v.(type) {
 	case Inet:
 		return x, true

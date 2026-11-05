@@ -565,6 +565,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, error) {
 	field := "r." + f.GoName
 	var lhs exprGo
+	// ssql:domain scalar
 	switch f.GoType {
 	case "int64", "int", "int32", "uint64":
 		lhs = exprGo{Src: field, Type: exprGoInt, field: f.Name}
@@ -610,6 +611,7 @@ func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, erro
 
 // typedLiteral formats value as a Go literal of the given type.
 func typedLiteral(goType, value string) (string, error) {
+	// ssql:domain fixed: decimal and inet literals have their own forms in typedWhereCondition
 	switch goType {
 	case "string":
 		return fmt.Sprintf("%q", value), nil
@@ -886,6 +888,7 @@ func generateCondition(field, op, value, goType string, seen map[string]int) (st
 // pre-existing record behaviour); comparisons branch on the advisory type
 // when known, else on the value's form.
 func recordCondLHS(recv, field, op, value, goType string) exprGo {
+	// ssql:domain fixed: an advisory type's operand; time and inet take CompareLiteral before it
 	switch goType {
 	case "int64", "float64":
 		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", recv, field), Type: exprGoFloat, field: field}

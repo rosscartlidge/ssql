@@ -74,6 +74,7 @@ func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc {
 // coercion to 0 turned that into corrupted-looking data, and until
 // v4.94.0 a string result panicked too ("need a numeric result").
 func aggResult(context string, v any) AggregateResult {
+	// ssql:domain scalar
 	switch x := aggValue(context, v).(type) {
 	case int64:
 		return AggResult[int64]{val: x}
@@ -102,6 +103,7 @@ func aggResult(context string, v any) AggregateResult {
 // list or map; anything else panics with a clear message. The window fold
 // (WStreamExpr) types its per-row value with it.
 func aggValue(context string, v any) any {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case int, int64, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
 		return toInt64(v)
@@ -199,6 +201,7 @@ func aggExtreme(name string, args []any, sign int) (any, error) {
 // aggCompare orders two aggregation values of the same kind: numbers
 // (any width, compared as float64), strings, or times.
 func aggCompare(name string, a, b any) (int, error) {
+	// ssql:domain fixed: numbers are compared before the switch
 	switch x := a.(type) {
 	case string:
 		y, ok := b.(string)
@@ -242,6 +245,7 @@ func aggCompare(name string, a, b any) (int, error) {
 }
 
 func isNumeric(v any) bool {
+	// ssql:domain numeric
 	switch v.(type) {
 	case float64, float32, int, int64, int32, int16, int8,
 		uint, uint64, uint32, uint16, uint8, Int128, Decimal:
@@ -280,6 +284,7 @@ func toInt64(v any) int64 {
 
 // toFloat64 converts various numeric types to float64
 func toFloat64(v any) float64 {
+	// ssql:domain numeric
 	switch val := v.(type) {
 	case float64:
 		return val

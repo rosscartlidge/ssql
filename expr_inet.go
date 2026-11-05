@@ -18,6 +18,7 @@ var ExprInetFunctionNames = []string{"isip", "ip", "inet", "ipfamily", "ipint", 
 // ExprInetArg reads an IP function's argument: an Inet, or text that
 // parses as one; anything else is an error naming the function.
 func ExprInetArg(fn, what string, v any) (Inet, error) {
+	// ssql:domain string+inet
 	switch x := exprDeref(v).(type) {
 	case Inet:
 		return x, nil

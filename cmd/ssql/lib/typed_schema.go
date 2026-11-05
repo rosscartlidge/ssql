@@ -66,6 +66,7 @@ func (o TypeOptions) goTypeFor(column string) (string, bool) {
 	if base, scale := ParseWireType(name); base == TypeDecimal && scale >= 0 {
 		return "ssql.Decimal", true // the scale: scaleFor (DFC155 E)
 	}
+	// ssql:domain scalar
 	switch strings.ToLower(name) {
 	case "string":
 		return "string", true
@@ -506,6 +507,7 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 		if base == TypeDecimal && sc >= 0 {
 			base, scale = TypeDecimal, sc
 		}
+		// ssql:domain scalar
 		switch base {
 		case TypeDecimal:
 			goType = "ssql.Decimal" // DFC155 E: the scale rides on the field

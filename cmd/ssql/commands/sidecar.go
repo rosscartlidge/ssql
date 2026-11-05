@@ -144,6 +144,7 @@ func wireFieldType(wire string) ssql.FieldType {
 // goFieldType is the ssql.FieldType a typed field is written as in a
 // sidecar: the Go type's, a JSON-flagged string as json.
 func goFieldType(goType string, isJSON bool, scale int) ssql.FieldType {
+	// ssql:domain scalar
 	switch strings.TrimPrefix(goType, "*") {
 	case "int64":
 		return ssql.FieldTypeInt

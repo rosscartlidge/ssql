@@ -2,11 +2,11 @@
 
 Reference: DFC163
 Created: 2026-11-04
-Last modified: 2026-11-04
+Last modified: 2026-11-05
 
 [Back to Index](./README.md)
 
-Status: **proposal, 2026-11-04.** Nothing is built.
+Status: **lint built 2026-11-05 (§6).** The matrix (§2.1) and the declared-types generator (§2.3) are not built yet.
 
 ## 0. The prompt
 
@@ -196,7 +196,168 @@ fixes). It must be red for each of §1's seven bugs, and green on HEAD.
 3. **Gate placement:** the matrix in the pre-tag gates only, or on every
    push of a change to a type switch?
 
-## 5. Related
+## 6. Decided and built: the lint (2026-11-05)
+
+### 6.1 Ross's answers to §4
+
+1. **The lint comes first.**
+2. **The annotation is a comment.**
+3. **The matrix runs in the pre-tag gates only.** It is not built yet.
+
+### 6.2 What was built
+
+- **`internal/lint/typedomain`** is a `go/analysis` pass, and
+  **`internal/lint/cmd/typedomain`** is its `singlechecker` main.
+  `make vet` runs it after `go vet`. `golang.org/x/tools` is now a
+  direct dependency. The lint is not linked into ssql, so the slim
+  build is unchanged.
+- **The domains:**
+
+  | Domain | Members |
+  |---|---|
+  | `wide` | Int128, Decimal |
+  | `exact` | int64 + wide |
+  | `numeric` | exact + float64 |
+  | `ordered` | numeric + string, time.Time, Inet |
+  | `scalar` | ordered + bool |
+
+  `TestScalarDomainIsTheValueConstraint` reads `ssql.Value`'s terms
+  through go/packages and fails if `scalar` differs from them. Adding a
+  type to `Value` therefore forces the domain table to be updated, and
+  `make vet` then names every switch that must handle the new type.
+- **The grammar.** The comment goes on the line above the switch, or
+  above the statement holding a map literal:
+  - `// ssql:domain D`;
+  - unions, such as `numeric+string+bool`;
+  - `// ssql:domain fixed: <reason>` for a switch that is really about a
+    fixed set. The reason is required.
+- **Three shapes qualify.** A shape qualifies when it names a struct
+  scalar (time.Time, Int128, Decimal or Inet), or the name of one:
+  1. a Go type switch;
+  2. a switch on an `ssql.FieldType`;
+  3. a string table: a switch on a string, or a `map[string]…` literal,
+     keyed by Go type names (`"ssql.Int128"`) or wire names
+     (`"int128"`).
+
+  The basic types alone never qualify, and neither does `"time"`
+  alone.
+- **Decimal is never a case label.** Its scale rides in the FieldType
+  and in the wire name. So a FieldType or name switch counts as
+  covering decimal when its function calls `IsDecimal` or
+  `ParseWireType`, or tests a `"decimal"` prefix.
+- **§2.2's "default must not stringify" rule was dropped.** A switch
+  that declares `scalar` must name every scalar, so its default can
+  never see one.
+
+### 6.3 The annotation pass: 194 sites
+
+The lint flagged 193 switches and tables, and one more was written
+during the pass (`strictCastTarget`, bug 4 below). Each was read and
+given a domain:
+- **110 take a named domain** or a union of named domains:
+  - `scalar` for every "every value" switch;
+  - `numeric`, `exact` and `wide` for arithmetic;
+  - unions where the switch's own arms are the contract.
+- **84 are `fixed:` with a reason**, for example:
+  - a time parse;
+  - function names that happen to be type words (`decimal()`,
+    `inet()`);
+  - the sources of one cast target;
+  - a resample axis.
+
+The rule that emerged: **where a `default:` would silently do the wrong
+thing for a new type, declare `scalar` and give `string` an explicit
+arm.** That applies to type-to-name maps such as `auxTypeString`,
+`duckColumnType`, `castTargetGoConst` and `arrowKindForWireType`. Only
+then does a new type surface there.
+
+The rehearsal: adding a dummy `uuid` member to `ordered` (and so to
+`scalar`) makes `make vet` name **52 switches across 28 files**. That is
+the census DFC155 §7.6 and DFC162 §9.3 kept by hand.
+
+**Watched fail:**
+- deleting the Inet arm from `setScalar` is named at `operations.go`;
+- deleting `exprGoDecimal` from update's native setter table (bug 4's
+  shape) is named at `update.go`;
+- the analysistest cases cover a missing annotation, a partial
+  `ordered`, a reasonless `fixed:`, an unknown domain, a FieldType
+  switch, a map literal and a wire-name switch.
+
+### 6.4 Bugs the audit found, and fixed
+
+Each was checked against every lane and pinned by a test that was
+watched to fail without the fix.
+
+| # | Bug | Lanes | Fix | Test |
+|---|---|---|---|---|
+| 1 | Typed `group-by -string-agg` on a decimal or inet column imported `strconv` for a value printed by its own `String()`, and the program **did not compile** | typed | `typedAggImports` | `decimal_string_agg`, `inet_string_agg` |
+| 2 | `window -lag/-lead/-first/-last/-nth-value/-min/-max` over an inet column printed DuckDB's **INET struct** (not JSON): window results had no recorded kind, so `sqlInetOutput` never cast them | duckdb | value-carrying window results take their field's kind in `sqlColumnKinds` | `inet_window_values` |
+| 3 | `-lag-default ip 1 1.1.1.1` was an **error** on DuckDB, which casts no text to INET implicitly | duckdb | the default is `sqlLiteralFor` the field | `inet_window_values` |
+| 4 | Typed `cast -type s decimal:2` of the text "abc" was a **silent 0**, where exec and record refuse it. The strict-cast target table had no decimal | typed | `strictCastTarget`, a switch with a decimal arm | `TestCastIsStrict` (decimal:2, int128, inet added) |
+| 5 | `from jsonl -type ts string` over a time column wrote **Go's `Time.String()`** ("2026-01-31 12:00:00 +0000 UTC"), the DFC128 F3 shape. `coerceValue`'s string arm had no time | exec, record | the string target is `CastValue`'s text | `jsonl_type_time_as_string` |
+| 6 | `StableKey` (behind `ssql.Hash`) keyed a time by `%v`, so one instant in two zones gave two keys | library | the UTC RFC 3339 instant | `TestDomainLintGaps` |
+| 7 | `WriteJSONPretty` wrote a time by `%v` | library | RFC 3339, as `to jsonl` writes it | `TestDomainLintGaps` |
+| 8 | `GetOr(r, f, false)` of a decimal failed to convert, where an int128 converts | library | a Decimal arm in `convertToBool` | `TestDomainLintGaps` |
+| 9 | `TableFieldsFromRecords` without a header left a decimal column untyped | library | a Decimal arm | `TestDomainLintGaps` |
+| 10 | A comparison message named a decimal `ssql.Decimal`, not "number" (`kindName`) | exec | a Decimal arm | `TestDomainLintGaps` |
+| 11 | A chart did not see a decimal column as numeric (`isNumericValue`), though `getNumericValue` reads one | chart | a Decimal arm | `TestDomainLintGaps` |
+| 12 | `serve`'s schema listing called an int128, decimal or inet column "string" | serve | `lib.InferTypeString`, which knows every scalar | none: display only |
+
+### 6.5 Found beyond the type gaps; decided by Ross (2026-11-05)
+
+Ross asked for all three in plan mode, and all three are built.
+
+- **`int128(d)` of a decimal truncates toward zero, as `int()` and
+  `cast` do.** It was an error in the VM and the transpiler.
+  - The SQL form is `CAST(trunc(x) AS HUGEINT)`, because a bare CAST of
+    a DECIMAL rounds.
+  - The case `expr_int128_of_decimal_truncates` runs over a new
+    `fractions.csv` (±2.75, 0.50, −0.49), so rounding and truncating
+    give different answers. Watched fail: without `trunc`, DuckDB and
+    Postgres disagree.
+  - The two sites are now `numeric+string`.
+- **A window clause's new columns come out in the written order, in
+  every lane.** There were three causes:
+  1. The exec parser collected the specs grouped by function.
+     `parseWindowClauses` now collects them per flag and lays them out
+     by `Clause.Order` (`windowSpecsInOrder`), as `clauseSets` does for
+     `update`.
+  2. `ssql.Window` added each row's results by ranging over a **map**,
+     so the generated program's columns came out in map order. It now
+     walks `windowResultNames`, in spec order.
+  3. The streaming form (`-presorted`) applied the leads after every
+     other result. It now applies all of them in spec order.
+
+  `BenchmarkWindow*` interleaved against a HEAD worktree shows no
+  regression. Cases `window_columns_in_written_order` and
+  `window_presorted_columns_in_written_order` cover it, and
+  `inet_window_values` is one mixed clause again. Watched fail:
+  - the old parse order is caught by the DuckDB lane's column-order
+    check;
+  - the map walk and the leads-last emission are caught by the record
+    lane.
+- **`addJSONField` is deleted.** It had no caller.
+
+After the pass and these three, the tree holds 193 annotations: 112
+named and 81 `fixed:`, including the lint's own three tables.
+
+### 6.6 Found by the lanes while gating this work
+
+- **Postgres `string_agg` over an inet column** cast it to text, which
+  adds `/32`. It now uses `abbrev`, as other inet text does
+  (`inet_string_agg`).
+- **`generate rust` read a schema-headed JSONL file's `_schema` line as
+  a row of nulls**, and silently ignored `-type` on a JSON source (the
+  datafusion dialect refuses `-type`).
+  - A headed JSONL is now filtered and the `_schema` column dropped, as
+    the DuckDB form does.
+  - `-type` on a JSON source is refused under rust.
+
+  `jsonl_type_override_agrees` had passed in rust only because ignoring
+  `-type age float` happened to print the same numbers. It is now
+  refused by design.
+
+## 7. Related
 
 - DFC133: the four instruments for unknown bugs; this is a fifth and a
   sixth.

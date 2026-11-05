@@ -608,6 +608,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 // advisoryToSchemaType maps a record fragment's advisory Go type to the
 // wire schema's type name.
 func advisoryToSchemaType(goType string) string {
+	// ssql:domain fixed: an advisory type; the default is unknown
 	switch goType {
 	case "int64":
 		return lib.TypeInt
@@ -781,6 +782,7 @@ func typedJoinKey(leftKeyField, rightKeyField lib.TypedSchemaField) (keyType, le
 		if leftKeyField.GoType == "float64" || rightKeyField.GoType == "float64" {
 			keyType = "float64"
 			toFloat := func(t, src string) string {
+				// ssql:domain fixed: a float join key
 				switch t {
 				case "float64":
 					return src
@@ -795,6 +797,7 @@ func typedJoinKey(leftKeyField, rightKeyField lib.TypedSchemaField) (keyType, le
 			// so 5, 5.00 and 5.000 are one key (DFC155 E).
 			keyType = "ssql.Decimal"
 			toDec := func(t, src string) string {
+				// ssql:domain wide
 				switch t {
 				case "ssql.Decimal":
 					return src + ".Normalized()"

@@ -121,11 +121,14 @@ func ExprMathFunctions() []expr.Option {
 		if len(args) != 1 {
 			return nil, fmt.Errorf("int128() takes one argument")
 		}
+		// ssql:domain numeric+string
 		switch x := exprDeref(args[0]).(type) {
 		case nil:
 			return nil, nil
 		case Int128:
 			return x, nil
+		case Decimal:
+			return x.Trunc(), nil // toward zero, as int() and cast do (DFC163 §6.5)
 		case int64:
 			return Int128From(x), nil
 		case int:
@@ -170,6 +173,7 @@ func ExprMathFunctions() []expr.Option {
 			}
 			return d.Rescale(scale)
 		}
+		// ssql:domain numeric+string
 		switch x := exprDeref(args[0]).(type) {
 		case nil:
 			return nil, nil
@@ -325,6 +329,7 @@ func ExprMathFunctions() []expr.Option {
 // exprNumber reads a numeric argument as a float64; a string or other
 // value is refused by name.
 func exprNumber(fn string, v any) (float64, error) {
+	// ssql:domain numeric
 	switch x := v.(type) {
 	case float64:
 		return x, nil
@@ -347,6 +352,7 @@ func exprNumber(fn string, v any) (float64, error) {
 // exprInteger reads an integer argument; a float with no fraction is
 // accepted (a literal 2.0), any other float is not.
 func exprInteger(fn, what string, v any) (int64, error) {
+	// ssql:domain numeric
 	switch x := v.(type) {
 	case int64:
 		return x, nil

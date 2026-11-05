@@ -610,6 +610,7 @@ func exactNumCmp(a, b any) (int, bool) {
 // asDecimal is v as a Decimal when it is one or an integer of either
 // width (at scale 0); ok is false for anything else.
 func asDecimal(v any) (Decimal, bool) {
+	// ssql:domain exact
 	switch x := v.(type) {
 	case Decimal:
 		return x, true

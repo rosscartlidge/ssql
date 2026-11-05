@@ -26,6 +26,7 @@ var timeLayouts = []string{
 // ParseTime converts a value to a time: a time.Time as is, a string in any
 // of timeLayouts (zoneless forms are UTC), an int64 as Unix seconds (UTC).
 func ParseTime(val any) (time.Time, bool) {
+	// ssql:domain fixed: a time parse
 	switch v := val.(type) {
 	case time.Time:
 		return v, true

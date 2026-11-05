@@ -11,6 +11,7 @@ require (
 	github.com/rosscartlidge/autocli/ssh v0.1.15
 	github.com/xuri/excelize/v2 v2.10.0
 	golang.org/x/mod v0.35.0
+	golang.org/x/tools v0.44.0
 )
 
 require (
@@ -40,7 +41,6 @@ require (
 	golang.org/x/telemetry v0.0.0-20260409153401-be6f6cb8b1fa // indirect
 	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
-	golang.org/x/tools v0.44.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240227224415-6ceb2ff114de // indirect
 	google.golang.org/grpc v1.63.2 // indirect

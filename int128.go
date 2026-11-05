@@ -494,6 +494,7 @@ func (x *Int128) UnmarshalText(b []byte) error {
 // asInt128 widens an integer of either width (int64, the VM's int, or an
 // Int128); ok is false for anything else.
 func asInt128(v any) (Int128, bool) {
+	// ssql:domain fixed: the integer forms
 	switch x := v.(type) {
 	case Int128:
 		return x, true

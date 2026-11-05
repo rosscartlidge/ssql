@@ -83,6 +83,7 @@ func renderRecordConverter(schema *lib.TypedSchema) string {
 	fmt.Fprintf(&b, "func(r ssql.Record) %s {\n\t\treturn %s{\n", schema.TypeName, schema.TypeName)
 	for _, f := range schema.Fields {
 		var def string
+		// ssql:domain scalar
 		switch f.GoType {
 		case "int64":
 			def = "int64(0)"
@@ -96,6 +97,8 @@ func renderRecordConverter(schema *lib.TypedSchema) string {
 			def = "false"
 		case "time.Time", "ssql.Inet":
 			def = f.GoType + "{}" // a struct's zero: "" gave GetOr a string and the field did not compile
+		case "string":
+			def = `""`
 		default:
 			def = `""`
 		}

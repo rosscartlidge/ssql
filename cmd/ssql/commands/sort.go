@@ -302,6 +302,7 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 // don't satisfy cmp.Ordered directly; defer them to a future
 // SortByFunc that takes a cmp closure.
 func isSortableGoType(t string) bool {
+	// ssql:domain ordered
 	switch t {
 	case "string", "int", "int32", "int64", "uint64", "float32", "float64", "time.Time", "ssql.Int128", "ssql.Decimal", "ssql.Inet":
 		return true
@@ -316,6 +317,7 @@ func isSortableGoType(t string) bool {
 // had its own list and `top` on a decimal or a time emitted typed.TopBy,
 // which does not compile for a type that is not cmp.Ordered.
 func goCompareMethod(goType string) string {
+	// ssql:domain fixed: the struct scalars' compare methods; the rest compare with <
 	switch goType {
 	case "time.Time", "ssql.Inet":
 		return "Compare"

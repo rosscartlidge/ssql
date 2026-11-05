@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"iter"
 	"math"
-	"strconv"
 )
 
 // CoerceFieldTypes converts the named fields of every record to the
@@ -83,20 +82,16 @@ func coerceValue(v any, ft FieldType) (any, error) {
 		}
 		return nil, errCellType
 	}
+	// ssql:domain scalar
 	switch ft {
 	case FieldTypeString:
-		switch x := v.(type) {
-		case int64:
-			return strconv.FormatInt(x, 10), nil
-		case Int128:
-			return x.String(), nil
-		case float64:
-			return strconv.FormatFloat(x, 'g', -1, 64), nil
-		case bool:
-			return strconv.FormatBool(x), nil
-		}
-		return fmt.Sprint(v), nil
+		// The cast's text, the one every lane writes: a time is RFC 3339
+		// (fmt.Sprint gave Go's Time.String, "2024-01-01 00:00:00 +0000
+		// UTC", until DFC163's lint found the switch without its arm).
+		out, _ := CastValue(v, FieldTypeString)
+		return out, nil
 	case FieldTypeInt:
+		// ssql:domain fixed: a decimal source is cast before the switch; any other value is a cell error
 		switch x := v.(type) {
 		case int64:
 			return x, nil
@@ -110,6 +105,7 @@ func coerceValue(v any, ft FieldType) (any, error) {
 			}
 		}
 	case FieldTypeInt128:
+		// ssql:domain fixed: a decimal source is cast before the switch; any other value is a cell error
 		switch x := v.(type) {
 		case Int128:
 			return x, nil
@@ -121,6 +117,7 @@ func coerceValue(v any, ft FieldType) (any, error) {
 			}
 		}
 	case FieldTypeFloat:
+		// ssql:domain fixed: a decimal source is cast before the switch; any other value is a cell error
 		switch x := v.(type) {
 		case float64:
 			return x, nil

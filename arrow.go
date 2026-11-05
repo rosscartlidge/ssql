@@ -395,6 +395,7 @@ func decimal128Of(v Int128) decimal128.Num {
 func decimal128At(v any, scale int) (decimal128.Num, bool) {
 	var d Decimal
 	var err error
+	// ssql:domain exact
 	switch x := v.(type) {
 	case Decimal:
 		d, err = x.Rescale(scale)
@@ -417,6 +418,7 @@ func decimal128At(v any, scale int) (decimal128.Num, bool) {
 }
 
 func arrowKindOf(v any) arrowColumnKind {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case nil:
 		return arrowKindNull
@@ -432,6 +434,8 @@ func arrowKindOf(v any) arrowColumnKind {
 		return arrowKindBool
 	case time.Time:
 		return arrowKindTime
+	case string, Inet:
+		return arrowKindString // an inet is its text in a file (DFC162 §2)
 	default:
 		return arrowKindString
 	}
@@ -441,6 +445,7 @@ func arrowKindForWireType(t string) arrowColumnKind {
 	if base, scale := ParseWireType(t); base == "decimal" && scale >= 0 {
 		return arrowDecimalKind(scale)
 	}
+	// ssql:domain scalar
 	switch t {
 	case "":
 		return arrowKindNull
@@ -454,6 +459,8 @@ func arrowKindForWireType(t string) arrowColumnKind {
 		return arrowKindBool
 	case "time":
 		return arrowKindTime
+	case "string", "inet":
+		return arrowKindString
 	default:
 		return arrowKindString
 	}
@@ -595,6 +602,7 @@ func appendValueToBuilder(builder array.Builder, val any) {
 			}
 			break
 		}
+		// ssql:domain exact
 		switch v := val.(type) {
 		case Int128:
 			b.Append(decimal128Of(v))

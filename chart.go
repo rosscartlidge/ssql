@@ -1080,8 +1080,9 @@ func analyzeFieldType(values []any) (string, bool, bool) {
 
 // isNumericValue checks if a value can be treated as numeric
 func isNumericValue(value any) bool {
+	// ssql:domain numeric+string
 	switch v := value.(type) {
-	case int, int32, int64, float32, float64, Int128:
+	case int, int32, int64, float32, float64, Int128, Decimal:
 		return true
 	case string:
 		_, err := strconv.ParseFloat(v, 64)
@@ -1093,6 +1094,7 @@ func isNumericValue(value any) bool {
 
 // isDateValue checks if a value can be treated as a date
 func isDateValue(value any) bool {
+	// ssql:domain string+time
 	switch v := value.(type) {
 	case time.Time:
 		return true
@@ -1182,6 +1184,7 @@ func nanToNullGrid(grid [][]float64) [][]any {
 
 // getNumericValue safely converts any value to float64
 func getNumericValue(value any) float64 {
+	// ssql:domain numeric+string
 	switch v := value.(type) {
 	case Int128:
 		return v.Float64()
@@ -1212,6 +1215,7 @@ func getFieldAsTime(record Record, field string) time.Time {
 		return time.Time{}
 	}
 
+	// ssql:domain string+time
 	switch v := value.(type) {
 	case time.Time:
 		return v

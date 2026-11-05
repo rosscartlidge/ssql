@@ -246,6 +246,7 @@ func castTargetGoConst(t ssql.FieldType) string {
 	if t.IsDecimal() {
 		return fmt.Sprintf("ssql.DecimalType(%d)", t.Scale())
 	}
+	// ssql:domain scalar
 	switch t {
 	case ssql.FieldTypeInt:
 		return "ssql.FieldTypeInt"
@@ -261,6 +262,8 @@ func castTargetGoConst(t ssql.FieldType) string {
 		return "ssql.FieldTypeInt128"
 	case ssql.FieldTypeInet:
 		return "ssql.FieldTypeInet"
+	case ssql.FieldTypeString:
+		return "ssql.FieldTypeString"
 	}
 	return "ssql.FieldTypeString"
 }

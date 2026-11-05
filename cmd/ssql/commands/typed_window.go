@@ -296,6 +296,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 // reads through Int either way).
 func windowResultAssign(i int, goType string, ptr bool) string {
 	var read string
+	// ssql:domain fixed: the typed result readers; the default asserts the type
 	switch goType {
 	case "int64":
 		read = fmt.Sprintf("res.Int(%d)", i)
@@ -485,6 +486,7 @@ func renderWindowFoldSpec(stateType, rowType string, p streamAggPlan) string {
 
 // goLiteralType names the Go type of a CLI literal default.
 func goLiteralType(v any) string {
+	// ssql:domain fixed: a window default literal (int, float, bool, text); any other default stays on the record path
 	switch v.(type) {
 	case int64:
 		return "int64"
@@ -502,6 +504,7 @@ func goLiteralType(v any) string {
 
 // goLiteralOf renders a CLI literal default as Go source.
 func goLiteralOf(v any) string {
+	// ssql:domain fixed: a window default literal (int, float, bool, text); any other default stays on the record path
 	switch x := v.(type) {
 	case string:
 		return fmt.Sprintf("%q", x)

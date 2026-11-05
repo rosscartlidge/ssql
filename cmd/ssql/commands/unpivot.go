@@ -314,6 +314,7 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 		} else if f.Scale != commonScale {
 			common = "MIXED" // decimals of two scales: a float, as mixed numbers are
 		}
+		// ssql:domain fixed: unpivot's numeric value column; a decimal value keeps its own type
 		switch f.GoType {
 		case "int64", "float64", "int", "int32", "float32", "ssql.Int128":
 		default:

@@ -281,6 +281,7 @@ func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpec
 }
 
 func isNumericOrBoolGoType(t string) bool {
+	// ssql:domain numeric+bool
 	switch t {
 	case "int", "int8", "int16", "int32", "int64",
 		"uint", "uint8", "uint16", "uint32", "uint64",

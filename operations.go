@@ -1204,6 +1204,7 @@ func extractTimestamp(value any, timeField string) time.Time {
 
 // parseTimeValue attempts to parse various time representations
 func parseTimeValue(value any) time.Time {
+	// ssql:domain fixed: a time parse
 	switch v := value.(type) {
 	case time.Time:
 		return v
@@ -1586,6 +1587,7 @@ func jsonObjectKeyOrder(text string) ([]string, error) {
 // readers go through it), so a new scalar type gets one arm here rather
 // than one in each — setAny had none for a decimal or a time.
 func setScalar(mut MutableRecord, field string, v any) MutableRecord {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case int64:
 		return mut.Int(field, x)
@@ -1620,6 +1622,7 @@ func setScalar(mut MutableRecord, field string, v any) MutableRecord {
 // program carried a type switch that needed an arm per scalar type (a
 // missing arm stored an int128, a time or an inet as text; DFC155 §7.6).
 func SetValue(mut MutableRecord, field string, v any) MutableRecord {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case nil:
 		return mut.Null(field)

@@ -192,6 +192,7 @@ func fieldCondTypedGo(schema *lib.TypedSchema, c Condition) (exprGo, bool, error
 // typedOperand is a struct field as a transpiler operand for the four
 // scalar kinds; ok=false for time and anything else.
 func typedOperand(f lib.TypedSchemaField) (exprGo, bool) {
+	// ssql:domain fixed: a time pair has its own form; an inet pair falls back to record mode
 	switch f.GoType {
 	case "int64", "int", "int32", "uint64":
 		return exprGo{Src: "r." + f.GoName, Type: exprGoInt}, true

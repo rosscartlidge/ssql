@@ -267,10 +267,11 @@ func corpusData(t *testing.T) string {
 			// DFC155 E: money, shuffled, with values a float sum gets wrong
 			// and ones a declared scale must round; a decimal key beside
 			// an integer key.
-			"money.csv": "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
-			"dec.csv":   "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
-			"big.csv":   "k,amt\nx,90071992547409.92\nx,0.01\nx,0.01\n",
-			"ids.csv":   "id,n\n1,one\n5,five\n",
+			"money.csv":     "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
+			"fractions.csv": "k,amt\nb,-2.75\nd,0.50\na,2.75\nc,-0.49\n",
+			"dec.csv":       "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
+			"big.csv":       "k,amt\nx,90071992547409.92\nx,0.01\nx,0.01\n",
+			"ids.csv":       "id,n\n1,one\n5,five\n",
 			// DFC162: addresses whose text order is not their inet order,
 			// shuffled, with spellings of one value (10.0.0.1 and /32; ::1
 			// and 0:0:0:0:0:0:0:1), an IPv4-compatible and a v4-mapped one.

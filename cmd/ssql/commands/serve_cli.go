@@ -150,21 +150,13 @@ func serveFromLoadedHandler(ctx *cf.Context) error {
 	return lib.WriteJSONLWithSchema(ctx.Stdout(), schema, iter.Seq[ssql.Record](records))
 }
 
-// inferTypeForServe returns a short, readable type tag for a value.
+// inferTypeForServe returns a short, readable type tag for a value: its
+// wire type (lib.InferTypeString, which knows every scalar: an int128,
+// decimal or inet was "string" here until DFC163's lint), or "null".
 // Used by serveSchemaHandler to summarise field types.
 func inferTypeForServe(v any) string {
-	switch v.(type) {
-	case int, int32, int64:
-		return "int"
-	case float32, float64:
-		return "float"
-	case bool:
-		return "bool"
-	case time.Time:
-		return "time"
-	case nil:
+	if v == nil {
 		return "null"
-	default:
-		return "string"
 	}
+	return lib.InferTypeString(v)
 }

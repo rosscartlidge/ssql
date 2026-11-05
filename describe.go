@@ -150,6 +150,7 @@ func (s *fieldStats) observe(v any) {
 		s.missing++
 		return
 	}
+	// ssql:domain fixed: numbers and bools are summarised; every other value is counted as its text
 	switch x := v.(type) {
 	case string:
 		if x == "" {

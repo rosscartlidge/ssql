@@ -47,6 +47,7 @@ type sqlFoldPlan struct {
 
 // foldSQLType is the SQL type of a state the typed lowering typed.
 func foldSQLType(t exprGoType, scale int) (string, error) {
+	// ssql:domain fixed: a fold accumulator is a number, a string or a bool
 	switch t {
 	case exprGoDecimal:
 		return sqlDecimalType(scale), nil
@@ -66,6 +67,7 @@ func foldSQLType(t exprGoType, scale int) (string, error) {
 
 // foldKind is the sqlColumnKinds kind of a fold's result type.
 func foldKind(t exprGoType, scale int) string {
+	// ssql:domain fixed: a fold accumulator is a number or a bool; the default is its text
 	switch t {
 	case exprGoDecimal:
 		return ssql.DecimalType(scale).String()
@@ -86,6 +88,7 @@ func kindGoType(kind string) string {
 	if base, _ := ssql.ParseWireType(kind); base == "decimal" {
 		return "ssql.Decimal" // the scale: kindScale
 	}
+	// ssql:domain fixed: the kinds a fold produces
 	switch kind {
 	case "int":
 		return "int64"

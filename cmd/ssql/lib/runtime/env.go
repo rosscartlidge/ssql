@@ -126,6 +126,7 @@ func MustCoerceInt64(v any, expression string) int64 {
 }
 
 func MustCoerceFloat64(v any, expression string) float64 {
+	// ssql:domain numeric
 	switch x := v.(type) {
 	case float64:
 		return x
@@ -148,6 +149,7 @@ func MustCoerceFloat64(v any, expression string) float64 {
 // a typed column cannot retype (DFC155 E).
 func MustCoerceDecimalAt(scale int) func(v any, expression string) ssql.Decimal {
 	return func(v any, expression string) ssql.Decimal {
+		// ssql:domain exact
 		switch x := v.(type) {
 		case ssql.Decimal:
 			if x.Scale() == scale {
@@ -168,6 +170,7 @@ func MustCoerceDecimalAt(scale int) func(v any, expression string) ssql.Decimal 
 // MustCoerceInt128 types a result for an int128 column: an Int128 as it
 // is, an integer widened; a float or anything else fails (DFC155 C).
 func MustCoerceInt128(v any, expression string) ssql.Int128 {
+	// ssql:domain fixed: the integer forms
 	switch x := v.(type) {
 	case ssql.Int128:
 		return x
@@ -182,6 +185,7 @@ func MustCoerceInt128(v any, expression string) ssql.Int128 {
 
 // MustCoerceInet is an inet result, or text that parses as one (DFC162).
 func MustCoerceInet(v any, expression string) ssql.Inet {
+	// ssql:domain string+inet
 	switch x := v.(type) {
 	case ssql.Inet:
 		return x

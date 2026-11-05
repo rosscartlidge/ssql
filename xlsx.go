@@ -250,6 +250,7 @@ func WriteXLSX(records iter.Seq[Record], filename string, config ...XLSXConfig) 
 
 // xlsxCellValue converts a Go value to an appropriate excelize cell value.
 func xlsxCellValue(val any) any {
+	// ssql:domain fixed: a sheet cell is a number, bool or text; every other scalar is its text
 	switch v := val.(type) {
 	case int64:
 		return v

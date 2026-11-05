@@ -113,6 +113,7 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v any) ssql.Mutable
 
 // convertRecordValue converts ssql Record values to JSON-friendly types
 func convertRecordValue(v any) any {
+	// ssql:domain scalar
 	switch val := v.(type) {
 	case ssql.Record:
 		// Convert nested Record to map

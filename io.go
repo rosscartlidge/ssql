@@ -137,6 +137,7 @@ func ParseFieldType(s string) (FieldType, error) {
 		}
 		return DecimalType(scale), nil
 	}
+	// ssql:domain scalar
 	switch strings.ToLower(s) {
 	case "auto":
 		return FieldTypeAuto, nil
@@ -168,6 +169,7 @@ func (ft FieldType) String() string {
 	if ft.IsDecimal() {
 		return "decimal:" + strconv.Itoa(ft.Scale())
 	}
+	// ssql:domain scalar
 	switch ft {
 	case FieldTypeString:
 		return "string"
@@ -512,6 +514,7 @@ func ReadJSONFromReader(reader io.Reader) iter.Seq[Record] {
 
 // inferJSONFieldType determines FieldType from a JSON-parsed value
 func inferJSONFieldType(value any) FieldType {
+	// ssql:domain fixed: a JSON value is never a time
 	switch x := value.(type) {
 	case float64, int64:
 		return FieldTypeFloat // this reader's numbers are floats, as encoding/json's were
@@ -546,6 +549,7 @@ func coerceToType(value any, targetType FieldType) any {
 			return out
 		}
 	}
+	// ssql:domain scalar
 	switch targetType {
 	case FieldTypeInet:
 		if out, ok := CastValue(value, targetType); ok {
@@ -560,6 +564,7 @@ func coerceToType(value any, targetType FieldType) any {
 		}
 		return value
 	case FieldTypeFloat:
+		// ssql:domain fixed: this reader's JSON values are numbers, strings and bools (never a decimal or a time)
 		switch v := value.(type) {
 		case float64:
 			return v
@@ -581,6 +586,7 @@ func coerceToType(value any, targetType FieldType) any {
 			return float64(0)
 		}
 	case FieldTypeInt128:
+		// ssql:domain fixed: this reader's JSON values are numbers, strings and bools (never a decimal or a time)
 		switch v := value.(type) {
 		case Int128:
 			return v
@@ -600,6 +606,7 @@ func coerceToType(value any, targetType FieldType) any {
 			return value
 		}
 	case FieldTypeInt:
+		// ssql:domain fixed: this reader's JSON values are numbers, strings and bools (never a decimal or a time)
 		switch v := value.(type) {
 		case float64:
 			return int64(v)
@@ -1197,6 +1204,7 @@ func WriteJSONLWithInferredSchemaToWriter(sb iter.Seq[Record], writer io.Writer)
 // Types match the existing CLI _schema header format ("string", "int",
 // "float", "bool", "json"). Unknown types fall back to "string".
 func inferJSONType(v any) string {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case int64, int, int32:
 		return "int"
@@ -1589,6 +1597,7 @@ func formatValueIn(value any, timeFormat string) string {
 	if value == nil {
 		return ""
 	}
+	// ssql:domain scalar
 	switch v := value.(type) {
 	case string:
 		return v
@@ -2031,6 +2040,7 @@ func displayTableBuffered(w io.Writer, records iter.Seq[Record], o DisplayOption
 // isNumericOrBoolValue reports whether v is a numeric or boolean
 // type — anything that should be right-justified in a table.
 func isNumericOrBoolValue(v any) bool {
+	// ssql:domain numeric+bool
 	switch v.(type) {
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
@@ -2787,44 +2797,9 @@ func WriteJSONPretty(sb iter.Seq[Record], filename string) error {
 	return nil
 }
 
-// addJSONField adds a JSON field to a MutableRecord using type-safe methods
-// Skips nil values. Converts arrays/objects to JSONString for type safety.
-func addJSONField(record MutableRecord, key string, value any) MutableRecord {
-	switch val := value.(type) {
-	case float64:
-		// JSON numbers are always float64
-		// Check if it's actually an integer
-		if val == float64(int64(val)) {
-			return record.Int(key, int64(val))
-		}
-		return record.Float(key, val)
-	case int64:
-		return record.Int(key, val)
-	case Int128:
-		return record.Int128(key, val)
-	case bool:
-		return record.Bool(key, val)
-	case string:
-		return record.String(key, val)
-	case nil:
-		// A JSON null: the field exists, without a value (DFC128 §6g).
-		return record.Null(key)
-	case []any, map[string]any:
-		// Convert arrays/objects to JSONString for type safety
-		jsonBytes, err := json.Marshal(val)
-		if err != nil {
-			// On error, store as string representation
-			return record.String(key, fmt.Sprintf("%v", val))
-		}
-		return record.JSONString(key, JSONString(jsonBytes))
-	default:
-		// Convert unknown types to string
-		return record.String(key, fmt.Sprintf("%v", val))
-	}
-}
-
 // convertRecordValueForJSON converts ssql Record values to JSON-friendly types
 func convertRecordValueForJSON(v any) any {
+	// ssql:domain scalar
 	switch val := v.(type) {
 	case Record:
 		// Convert nested Record to map
@@ -2835,6 +2810,8 @@ func convertRecordValueForJSON(v any) any {
 		return result
 	case int64, float64, bool, string, nil, Int128, Decimal, Inet:
 		return val
+	case time.Time:
+		return val.Format(time.RFC3339Nano) // as `to jsonl` writes it; %v was Go's Time.String
 	default:
 		return fmt.Sprintf("%v", v)
 	}

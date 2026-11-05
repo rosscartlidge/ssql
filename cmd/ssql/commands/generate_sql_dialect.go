@@ -672,7 +672,11 @@ func sqlAggPercentile(qf, p string) string {
 }
 
 func sqlAggStringAgg(qf, sep string) string {
-	if sqlDialectCur == dialectPostgres {
+	if sqlColumnKinds[strings.Trim(qf, `"`)] == "inet" {
+		// An address's text, as ssql writes it: Postgres's CAST to text
+		// adds /32 (DFC162 §9); abbrev does not (DFC163 §6).
+		qf = sqlInetText(qf)
+	} else if sqlDialectCur == dialectPostgres {
 		// string_agg(bigint, text) does not exist in Postgres.
 		qf = "CAST(" + qf + " AS TEXT)"
 	}
@@ -836,6 +840,7 @@ func pgColumnType(typeName, inferred string) string {
 	if base, scale := ssql.ParseWireType(typeName); base == "decimal" && scale >= 0 {
 		return fmt.Sprintf("NUMERIC(38,%d)", scale)
 	}
+	// ssql:domain scalar
 	switch typeName {
 	case "int":
 		return "BIGINT"

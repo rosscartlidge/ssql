@@ -92,6 +92,7 @@ func SampleJSONSchema(filename, typeName string, maxRows int, opts ...TypeOption
 				continue
 			}
 			c.seen = true
+			// ssql:domain fixed: sampling JSON values for a column's kind
 			switch v.(type) {
 			case int64:
 			case ssql.Int128:

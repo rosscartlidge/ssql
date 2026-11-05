@@ -180,6 +180,7 @@ func newFollowGraph(edges iter.Seq[Record], cfg FollowConfig) *followGraph {
 		for i, f := range fields {
 			w, _ := Get[any](r, f)
 			e.weights[i] = w
+			// ssql:domain fixed: a follow total is a float or a decimal; integers are int128 before it
 			switch x := w.(type) {
 			case float64:
 				g.kinds[i] = "float"
@@ -234,6 +235,7 @@ func followSwap(r Record, src, dst string) Record {
 
 // zero is an accumulator's starting total, in its column's kind.
 func (g *followGraph) zero(i int) followAcc {
+	// ssql:domain fixed: a follow total is a float or a decimal; integers are int128 before it
 	switch g.kinds[i] {
 	case "float":
 		return followAcc{v: float64(0)}
@@ -248,6 +250,7 @@ func (g *followGraph) add(i int, a followAcc, w any) followAcc {
 	if a.absent {
 		return a
 	}
+	// ssql:domain fixed: a follow total is a float or a decimal; integers are int128 before it
 	switch g.kinds[i] {
 	case "float":
 		f, ok := toFloat(w)
@@ -257,6 +260,7 @@ func (g *followGraph) add(i int, a followAcc, w any) followAcc {
 		return followAcc{v: a.v.(float64) + f}
 	case "decimal":
 		var d Decimal
+		// ssql:domain exact
 		switch x := w.(type) {
 		case Decimal:
 			d = x
@@ -269,6 +273,7 @@ func (g *followGraph) add(i int, a followAcc, w any) followAcc {
 		}
 		return followAcc{v: a.v.(Decimal).Add(d)}
 	}
+	// ssql:domain fixed: an integer total
 	switch x := w.(type) {
 	case int64:
 		return followAcc{v: a.v.(Int128).Add(Int128From(x))}

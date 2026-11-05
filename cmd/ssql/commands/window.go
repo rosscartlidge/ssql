@@ -568,73 +568,117 @@ func parseWindowClauses(clauses []cf.Clause) ([]ssql.WindowConfig, error) {
 			cfg.Frame.RangeTime = isTimeP || isTimeF
 		}
 
-		// Parse window function specs
-		var specs []ssql.WindowSpec
-
-		// Single-arg functions: -row-number result, -rank result, -dense-rank result, -percent-rank result, -count result
-		specs = append(specs, parseSingleArgSpecs(clause.Flags, "-row-number", func(result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WRowNumber(), ResultName: result}
-		})...)
-		specs = append(specs, parseSingleArgSpecs(clause.Flags, "-rank", func(result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WRank(), ResultName: result}
-		})...)
-		specs = append(specs, parseSingleArgSpecs(clause.Flags, "-dense-rank", func(result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WDenseRank(), ResultName: result}
-		})...)
-		specs = append(specs, parseSingleArgSpecs(clause.Flags, "-percent-rank", func(result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WPercentRank(), ResultName: result}
-		})...)
-		specs = append(specs, parseSingleArgSpecs(clause.Flags, "-count", func(result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WCount(), ResultName: result}
-		})...)
-		specs = append(specs, parseSingleArgSpecs(clause.Flags, "-cume-dist", func(result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WCumeDist(), ResultName: result}
-		})...)
-		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-count-field", "field", "result", func(field, result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WCountField(field), ResultName: result}
-		})...)
-
-		// Two-arg functions: -first field result, -last field result, -sum field result, -avg field result, -min field result, -max field result
-		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-first", "field", "result", func(field, result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WFirst(field), ResultName: result}
-		})...)
-		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-last", "field", "result", func(field, result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WLast(field), ResultName: result}
-		})...)
-		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-sum", "field", "result", func(field, result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WSum(field), ResultName: result}
-		})...)
-		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-avg", "field", "result", func(field, result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WAvg(field), ResultName: result}
-		})...)
-		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-min", "field", "result", func(field, result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WMin(field), ResultName: result}
-		})...)
-		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-max", "field", "result", func(field, result string) ssql.WindowSpec {
-			return ssql.WindowSpec{Function: ssql.WMax(field), ResultName: result}
-		})...)
-
-		// Registry aggregates over the frame (DFC130 unit 2)
-		specs = append(specs, parseWindowRegistrySpecs(clause.Flags)...)
-
-		// Folds over the frame: -stream-expr INIT EVERY FINAL RESULT
-		for _, se := range decodeStreamExprSpecs(clause.Flags["-stream-expr"]) {
-			specs = append(specs, ssql.WindowSpec{Function: ssql.WStreamExpr(se.initExpr, se.everyExpr, se.finalExpr), ResultName: se.result})
+		// Parse window function specs, each flag's in its own list, then
+		// lay them out in the order the flags were written (Clause.Order),
+		// as update's sets are (clauseSets): the result columns follow the
+		// command line in every lane. Exec grouped them by function and
+		// record codegen put -lag-default first until 2026-11-05 (DFC163
+		// §6.5); SQL already kept the written order.
+		byFlag := map[string][]ssql.WindowSpec{}
+		var tableOrder []string
+		add := func(flag string, specs []ssql.WindowSpec) {
+			if len(specs) > 0 {
+				byFlag[flag] = append(byFlag[flag], specs...)
+				tableOrder = append(tableOrder, flag)
+			}
 		}
 
-		// Three-arg functions: -ntile n result, -lag field n result, -lead field n result
-		specs = append(specs, parseNtileSpecs(clause.Flags)...)
-		specs = append(specs, parseLagLeadSpecs(clause.Flags, "-lag", true)...)
-		specs = append(specs, parseLagLeadSpecs(clause.Flags, "-lead", false)...)
-		specs = append(specs, parseFieldNSpecs(clause.Flags, "-nth-value", func(field string, n int) ssql.WindowFunc { return ssql.WNthValue(field, n) })...)
-		specs = append(specs, parseLagLeadDefaultSpecs(clause.Flags, "-lag-default", true)...)
-		specs = append(specs, parseLagLeadDefaultSpecs(clause.Flags, "-lead-default", false)...)
+		add("-row-number", parseSingleArgSpecs(clause.Flags, "-row-number", func(result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WRowNumber(), ResultName: result}
+		}))
+		add("-rank", parseSingleArgSpecs(clause.Flags, "-rank", func(result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WRank(), ResultName: result}
+		}))
+		add("-dense-rank", parseSingleArgSpecs(clause.Flags, "-dense-rank", func(result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WDenseRank(), ResultName: result}
+		}))
+		add("-percent-rank", parseSingleArgSpecs(clause.Flags, "-percent-rank", func(result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WPercentRank(), ResultName: result}
+		}))
+		add("-count", parseSingleArgSpecs(clause.Flags, "-count", func(result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WCount(), ResultName: result}
+		}))
+		add("-cume-dist", parseSingleArgSpecs(clause.Flags, "-cume-dist", func(result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WCumeDist(), ResultName: result}
+		}))
+		add("-count-field", parseTwoArgSpecs(clause.Flags, "-count-field", "field", "result", func(field, result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WCountField(field), ResultName: result}
+		}))
+		add("-first", parseTwoArgSpecs(clause.Flags, "-first", "field", "result", func(field, result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WFirst(field), ResultName: result}
+		}))
+		add("-last", parseTwoArgSpecs(clause.Flags, "-last", "field", "result", func(field, result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WLast(field), ResultName: result}
+		}))
+		add("-sum", parseTwoArgSpecs(clause.Flags, "-sum", "field", "result", func(field, result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WSum(field), ResultName: result}
+		}))
+		add("-avg", parseTwoArgSpecs(clause.Flags, "-avg", "field", "result", func(field, result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WAvg(field), ResultName: result}
+		}))
+		add("-min", parseTwoArgSpecs(clause.Flags, "-min", "field", "result", func(field, result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WMin(field), ResultName: result}
+		}))
+		add("-max", parseTwoArgSpecs(clause.Flags, "-max", "field", "result", func(field, result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WMax(field), ResultName: result}
+		}))
 
+		// Registry aggregates over the frame (DFC130 unit 2), a flag each
+		for _, d := range windowRegistryDefs() {
+			if raw, ok := clause.Flags[d.flag]; ok {
+				add(d.flag, parseWindowRegistrySpecs(map[string]any{d.flag: raw}))
+			}
+		}
+
+		// Folds over the frame: -stream-expr INIT EVERY FINAL RESULT
+		var folds []ssql.WindowSpec
+		for _, se := range decodeStreamExprSpecs(clause.Flags["-stream-expr"]) {
+			folds = append(folds, ssql.WindowSpec{Function: ssql.WStreamExpr(se.initExpr, se.everyExpr, se.finalExpr), ResultName: se.result})
+		}
+		add("-stream-expr", folds)
+
+		// Three-arg functions: -ntile n result, -lag field n result, -lead field n result
+		add("-ntile", parseNtileSpecs(clause.Flags))
+		add("-lag", parseLagLeadSpecs(clause.Flags, "-lag", true))
+		add("-lead", parseLagLeadSpecs(clause.Flags, "-lead", false))
+		add("-nth-value", parseFieldNSpecs(clause.Flags, "-nth-value", func(field string, n int) ssql.WindowFunc { return ssql.WNthValue(field, n) }))
+		add("-lag-default", parseLagLeadDefaultSpecs(clause.Flags, "-lag-default", true))
+		add("-lead-default", parseLagLeadDefaultSpecs(clause.Flags, "-lead-default", false))
+
+		specs := windowSpecsInOrder(clause.Order, byFlag, tableOrder)
 		cfg.Specs = specs
 		configs = append(configs, cfg)
 	}
 
 	return configs, nil
+}
+
+// windowSpecsInOrder lays a clause's specs out in the order its flags
+// were written: each occurrence in order takes its flag's next spec. A
+// clause without a recorded order (built in code) keeps the table's.
+func windowSpecsInOrder(order []string, byFlag map[string][]ssql.WindowSpec, tableOrder []string) []ssql.WindowSpec {
+	if order == nil {
+		for _, flag := range tableOrder {
+			for range byFlag[flag] {
+				order = append(order, flag)
+			}
+		}
+	}
+	var out []ssql.WindowSpec
+	next := map[string]int{}
+	for _, flag := range order {
+		if list := byFlag[flag]; next[flag] < len(list) {
+			out = append(out, list[next[flag]])
+			next[flag]++
+		}
+	}
+	// A spec its flag's occurrences did not reach (an entry Order does not
+	// count) is kept, after the rest, rather than dropped.
+	for _, flag := range tableOrder {
+		out = append(out, byFlag[flag][next[flag]:]...)
+		next[flag] = len(byFlag[flag])
+	}
+	return out
 }
 
 // parseSingleArgSpecs parses single-arg accumulated flags (result field only).

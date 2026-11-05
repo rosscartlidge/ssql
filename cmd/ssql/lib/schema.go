@@ -343,6 +343,7 @@ func widenWireType(a, b string) string {
 // another decimal at the larger scale, an integer of either width into
 // the decimal, a float into a float (DFC155 E).
 func widenDecimalWire(scale int, other string) string {
+	// ssql:domain numeric
 	switch ob, os := ParseWireType(other); ob {
 	case TypeDecimal:
 		return WireDecimal(max(scale, os))
@@ -378,6 +379,7 @@ func InferFromRecordOrdered(record ssql.Record, fieldOrder []string) *Schema {
 
 // InferTypeString returns the schema type string for a value.
 func InferTypeString(v any) string {
+	// ssql:domain scalar
 	switch x := v.(type) {
 	case int64:
 		return TypeInt
@@ -407,6 +409,7 @@ func FieldTypeToSchemaType(ft ssql.FieldType) string {
 	if ft.IsDecimal() {
 		return ft.String()
 	}
+	// ssql:domain scalar
 	switch ft {
 	case ssql.FieldTypeInt:
 		return TypeInt
@@ -434,6 +437,7 @@ func SchemaTypeToFieldType(typ string) ssql.FieldType {
 	if base, scale := ParseWireType(typ); base == TypeDecimal && scale >= 0 {
 		return ssql.DecimalType(scale)
 	}
+	// ssql:domain scalar
 	switch typ {
 	case TypeInt:
 		return ssql.FieldTypeInt

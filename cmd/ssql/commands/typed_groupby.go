@@ -817,6 +817,7 @@ func orderedLess(goType, a, b string) string {
 func isFloatGoType(t string) bool { return t == "float64" || t == "float32" }
 
 func isNumericGoType(t string) bool {
+	// ssql:domain numeric
 	switch t {
 	case "int", "int32", "int64", "uint64", "float32", "float64", "ssql.Int128", "ssql.Decimal":
 		return true
@@ -830,6 +831,7 @@ func isDecimalGoType(t string) bool { return t == "ssql.Decimal" }
 
 // isIntegerGoType: the integer columns, whose sums are an Int128.
 func isIntegerGoType(t string) bool {
+	// ssql:domain fixed: the integer types
 	switch t {
 	case "int", "int32", "int64", "uint64", "ssql.Int128":
 		return true
@@ -840,6 +842,7 @@ func isIntegerGoType(t string) bool {
 // wideOf renders an integer value of Go type t as an ssql.Int128 for the
 // exact accumulator; floatOf renders a numeric value as a float64.
 func wideOf(t, src string) string {
+	// ssql:domain fixed: the integer types
 	switch t {
 	case "ssql.Int128":
 		return src
@@ -850,6 +853,7 @@ func wideOf(t, src string) string {
 }
 
 func floatOf(t, src string) string {
+	// ssql:domain fixed: the types with Float64()
 	switch t {
 	case "float64":
 		return src
@@ -935,8 +939,9 @@ func typedAggImports(specs []aggSpec, in *lib.TypedSchema) []string {
 		case "string-agg":
 			out = append(out, "strings")
 			if f, ok := lookupSchemaField(in, s.field); ok {
+				// ssql:domain fixed: the imports a string-agg's text needs
 				switch f.GoType {
-				case "string":
+				case "string", "ssql.Int128", "ssql.Decimal", "ssql.Inet": // their own String(): aggValueStringCode
 				case "time.Time":
 					out = append(out, "time")
 				default:
@@ -968,6 +973,7 @@ func needsModeEntry(specs []aggSpec) bool { return hasAggFn(specs, "mode") }
 // the given type the way ssql.AggValueString does — the exec lane's
 // StringAgg and the typed lane must produce identical text.
 func aggValueStringCode(goType, v string) string {
+	// ssql:domain scalar
 	switch goType {
 	case "string":
 		return v

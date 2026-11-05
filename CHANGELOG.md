@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A domain lint for type switches (`make vet`).** A switch over record values that names a time, int128, decimal or inet declares the types it handles with `// ssql:domain D` (`scalar`, `ordered`, `numeric`, `exact`, `wide`, a union, or `fixed: reason`), and `internal/lint/typedomain` fails one that is missing an annotation or an arm. A new scalar type starts in the lint's domain table, and `make vet` then lists every switch that must handle it. Every type since `time` shipped bugs of this shape; annotating the 194 existing sites found the twelve below ([DFC163](doc/research/dfc163_type_operation_matrix_and_domain_lint.md) §6).
+
+### Changed
+
+- **`int128(x)` of a decimal truncates toward zero** (`int128(-2.75)` is `-2`), as `int()` and `cast -type x int128` do. It was an error in every lane.
+
+### Fixed
+
+- **Typed `group-by -string-agg` on a decimal or inet column generated Go that did not compile** (an unused `strconv` import).
+- **`generate sql`: a window function's result over an inet column** (`-lag`, `-lead`, `-first`, `-last`, `-nth-value`, `-min`, `-max`) printed DuckDB's INET struct instead of the address, and `-lag-default ip 1 1.1.1.1` was an error. Such results now keep their field's kind.
+- **Typed `cast -type F decimal:S` turned text that is not a number into 0**, where exec and record codegen refuse it. It now stops with the same error as the other lanes.
+- **`from jsonl -type F string` over a time column wrote Go's time text** (`2026-01-31 12:00:00 +0000 UTC`); it now writes RFC 3339, as `cast` does.
+- **`serve`'s schema listing called an int128, decimal or inet column `string`.**
+- **A `window` clause's new columns now come out in the order the flags were written, in every lane.** Exec grouped them by function, and generated programs used Go map order (`ssql.Window` ranged over a map); `-presorted` put `-lead` results last. SQL already kept the written order.
+- **`generate sql` (Postgres): `-string-agg` over an inet column** wrote `10.0.0.1/32`; it now writes the address as ssql does.
+- **`generate rust`: a JSONL file with ssql's `_schema` header** gained an all-null row, and `-type` on a JSON source was silently ignored. The header row is now dropped, and `-type` on a JSON source is refused, as in the datafusion dialect.
+- **Library:**
+  - `ssql.Hash` (via `StableKey`) gave one instant two hashes in two zones;
+  - `WriteJSONPretty` wrote a time as Go's text;
+  - `GetOr(r, f, false)` did not convert a decimal;
+  - `TableFieldsFromRecords` left a decimal column untyped without a header;
+  - a chart did not treat a decimal column as numeric;
+  - a comparison message called a decimal `ssql.Decimal` instead of a number.
+
 ## [4.138.0] - 2026-11-04
 
 ### Added

@@ -486,6 +486,12 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 	}
 	if name == "int128" && len(args) == 1 {
 		// The widening conversion (DFC155 C): the dialect's 128-bit type.
+		if id, ok := args[0].(*ast.IdentifierNode); ok {
+			if base, _ := ssql.ParseWireType(sqlColumnKinds[id.Value]); base == "decimal" {
+				// Toward zero, as int() of a decimal: a bare CAST rounds.
+				return "CAST(trunc(" + quoteIdent(id.Value) + ") AS " + sqlInt128Type() + ")", nil
+			}
+		}
 		arg, err := exprNodeToSQL(args[0])
 		if err != nil {
 			return "", err

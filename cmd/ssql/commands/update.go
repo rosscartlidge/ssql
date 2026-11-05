@@ -805,6 +805,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 					// The typed setter for the result; a type without one takes
 					// the VM path below (an int128, decimal or inet result had
 					// no entry and emitted `mut.(…)`, which does not compile).
+					// ssql:domain scalar
 					setter := map[exprGoType]string{
 						exprGoInt: "Int", exprGoFloat: "Float", exprGoString: "String", exprGoBool: "Bool", exprGoTime: "Time",
 						exprGoInt128: "Int128", exprGoDecimal: "Decimal", exprGoInet: "Inet",
@@ -857,6 +858,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 					parsedValue = upd.value
 				}
 
+				// ssql:domain fixed: a parsed -set literal (int, int128, float, bool, time, text)
 				switch v := parsedValue.(type) {
 				case int64:
 					stmt = fmt.Sprintf("%smut = mut.Int(%q, int64(%d))", indent, upd.field, v)
@@ -959,6 +961,7 @@ func generateConditionCode(field, op, value, goType string) (string, []string, [
 // getDefaultValueForComparison returns the default value for GetOr based on the comparison value's type
 func getDefaultValueForComparison(value string) string {
 	parsedValue := parseValue(value)
+	// ssql:domain fixed: a parsed -set literal (int, int128, float, bool, time, text)
 	switch parsedValue.(type) {
 	case int64, float64:
 		return "float64(0)"
@@ -996,6 +999,7 @@ func getOperatorCode(op string) string {
 // getComparisonValue formats a value for comparison in generated code
 func getComparisonValue(value string) string {
 	parsedValue := parseValue(value)
+	// ssql:domain fixed: a parsed -set literal (int, int128, float, bool, time, text)
 	switch v := parsedValue.(type) {
 	case int64:
 		return fmt.Sprintf("float64(%d)", v)

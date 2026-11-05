@@ -36,6 +36,7 @@ type asofOrd struct {
 }
 
 func asofOrdOf(v any) (asofOrd, bool) {
+	// ssql:domain fixed: an as-of axis is a time or a float; a decimal axis is refused in every lane
 	switch x := v.(type) {
 	case time.Time:
 		return asofOrd{t: x.UnixNano(), isTime: true}, true

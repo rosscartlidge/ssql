@@ -147,6 +147,7 @@ func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 	totals := f.weights()
 	totalTypes := make([]string, len(totals))
 	for i, w := range totals {
+		// ssql:domain numeric
 		switch base, scale := lib.ParseWireType(edgeType(w.Field)); base {
 		case lib.TypeInt, lib.TypeInt128:
 			totalTypes[i] = sqlInt128Type()

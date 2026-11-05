@@ -307,6 +307,7 @@ func (p ExprParam) codeParam() lib.CodeParam {
 
 // goValue is the Go expression reading the parameter after flag.Parse.
 func (p ExprParam) goValue() string {
+	// ssql:domain fixed: a parameter's Go form; every other type is its own flag type
 	switch p.Type {
 	case ssql.FieldTypeInt:
 		return "int64(*" + p.varName() + ")"
@@ -450,6 +451,7 @@ func (p ExprParam) sqlLiteral() string {
 		}
 		return "CAST(" + col + " AS " + mapTypeToSQL(p.Type.String()) + ")"
 	}
+	// ssql:domain fixed: a parameter's SQL literal; every other type is quoted text
 	switch v := p.Value.(type) {
 	case int64:
 		return strconv.FormatInt(v, 10)
