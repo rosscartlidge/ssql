@@ -2264,8 +2264,13 @@ func collectDownstreamFields(cmds []*pipelineCmd, startIdx int) (map[string]bool
 			}
 		}
 		created, conditional := stageCreatedFields(cmds[j])
+		literal := setLiteralTargets(cmds[j])
 		for _, f := range created {
-			if conditional {
+			// A -set literal takes the source column's type where the source
+			// has one (ssql.IntoColumn: 9.755 into a decimal:2 is 9.76), so
+			// the source still decides it, as under a condition: pruned
+			// away, the literal took its own type (DFC163 §7).
+			if conditional || slices.Contains(literal, f) {
 				maybe[f] = true
 			} else {
 				made[f] = true
@@ -2315,6 +2320,20 @@ func stageCreatedFields(cmd *pipelineCmd) (created []string, conditional bool) {
 		}
 	}
 	return created, conditional
+}
+
+// setLiteralTargets are the fields an update's -set literals write.
+func setLiteralTargets(cmd *pipelineCmd) []string {
+	if cmd.Kind != "update" {
+		return nil
+	}
+	var out []string
+	for i := 0; i+1 < len(cmd.RawArgs); i++ {
+		if f := normFlag(cmd.RawArgs[i]); f == "-set" || f == "-s" {
+			out = append(out, cmd.RawArgs[i+1])
+		}
+	}
+	return out
 }
 
 // redefinesSourceSchema reports whether a command fully replaces the stream

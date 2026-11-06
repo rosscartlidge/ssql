@@ -393,7 +393,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 					return false, fmt.Sprintf("-set-expr %s: a %s result would retype the %s column", s.field, s.expr.Type, f.GoType), nil
 				}
 			} else {
-				lit, err := typedLiteral(f.GoType, s.value)
+				lit, err := typedSetLiteral(f, s.value)
 				if err != nil {
 					return true, "", lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: update -set %s = %q: %w", s.field, s.value, err))
@@ -609,4 +609,25 @@ func renderUpdateStructDef(s *lib.TypedSchema) string {
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// typedSetLiteral is a -set literal as Go source of its column's type:
+// typedLiteral's forms, a decimal at the column's scale (rounded half away
+// from zero, as exec's ssql.IntoColumn casts it) and an address; the typed
+// lane refused both columns until 2026-11-06 (DFC163 §7).
+func typedSetLiteral(f lib.TypedSchemaField, value string) (string, error) {
+	// ssql:domain fixed: the column types typedLiteral has no form for
+	switch f.GoType {
+	case "ssql.Decimal":
+		if _, err := ssql.ParseDecimalScale(value, f.Scale); err != nil {
+			return "", fmt.Errorf("the field is a decimal:%d but %q is not one", f.Scale, value)
+		}
+		return fmt.Sprintf("ssql.MustParseDecimalScale(%q, %d)", value, f.Scale), nil
+	case "ssql.Inet":
+		if _, err := ssql.ParseInet(value); err != nil {
+			return "", fmt.Errorf("the field is an inet but %q is not an IP address", value)
+		}
+		return fmt.Sprintf("ssql.MustParseInet(%q)", value), nil
+	}
+	return typedLiteral(f.GoType, value)
 }

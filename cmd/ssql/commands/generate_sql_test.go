@@ -325,7 +325,7 @@ func TestResortPrepends(t *testing.T) {
 	if err := translateSort(q, []string{"y", "-desc"}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"y DESC", "x"}
+	want := []string{"y DESC NULLS LAST", "x ASC NULLS FIRST"}
 	if !slices.Equal(q.orderBy, want) {
 		t.Errorf("orderBy = %v, want %v", q.orderBy, want)
 	}
@@ -593,10 +593,10 @@ func TestTranslateTopSQL(t *testing.T) {
 		wantLimit string
 	}{
 		// quoteIdent leaves simple identifiers unquoted.
-		{"desc", []string{"3", "-field", "name"}, "name DESC", "3"},
-		{"asc", []string{"-asc", "3", "-field", "name"}, "name ASC", "3"},
-		{"asc-after-n", []string{"3", "-asc", "-field", "name"}, "name ASC", "3"},
-		{"short-field", []string{"5", "-f", "salary"}, "salary DESC", "5"},
+		{"desc", []string{"3", "-field", "name"}, "name DESC NULLS LAST", "3"},
+		{"asc", []string{"-asc", "3", "-field", "name"}, "name ASC NULLS FIRST", "3"},
+		{"asc-after-n", []string{"3", "-asc", "-field", "name"}, "name ASC NULLS FIRST", "3"},
+		{"short-field", []string{"5", "-f", "salary"}, "salary DESC NULLS LAST", "5"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -378,7 +379,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							} else {
 								// Existing field - coerce to existing type if needed
 								var coerced bool
-								mut, coerced = applyValueToRecordWithTypeCheck(mut, upd.field, parsedValue, existingValue, existsInRecord)
+								mut, coerced = ssql.IntoColumn(mut, upd.field, parsedValue, existingValue, existsInRecord)
 								if coerced && !warnedFields[upd.field] {
 									fmt.Fprintf(ctx.Stderr(), "Warning: field %q value coerced to match existing type (use 'ssql cast' for explicit type conversion)\n", upd.field)
 									warnedFields[upd.field] = true
@@ -416,9 +417,16 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					for _, clause := range clauses {
 						for _, upd := range clause.updates {
 							if !outputSchema.HasField(upd.field) {
-								if upd.isExpr {
+								switch {
+								case upd.source != "":
+									// -set-field copies the source's value and its
+									// type; the header said string (from the empty
+									// literal) and a decimal came out as 9.5 for 9.50
+									// (DFC163 §7).
+									outputSchema.AddField(upd.field, copiedFieldType(schemaAndRecords.Schema, upd.source))
+								case upd.isExpr:
 									outputSchema.AddField(upd.field, lib.TypeString)
-								} else {
+								default:
 									outputSchema.AddField(upd.field, lib.InferTypeString(parseValue(upd.literal)))
 								}
 							}
@@ -671,7 +679,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		}
 		// Need frozen if there are expressions or field copies
 		for _, upd := range clause.updates {
-			if upd.isExpr || upd.isCopy {
+			if upd.isExpr || upd.isCopy || literalReadsRow(upd.field, upd.value, advisory) {
 				needsFrozen = true
 				break
 			}
@@ -858,6 +866,22 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 					parsedValue = upd.value
 				}
 
+				// Unless the column is known to be text, the library's rule
+				// types the literal like the row's value, as exec does: a json
+				// column takes [1] as JSON, a decimal column 9.75 at its scale
+				// (record codegen wrote the parsed token's own type until
+				// 2026-11-06; DFC163 §7).
+				if literalReadsRow(upd.field, upd.value, advisory) {
+					if src, ok := goLiteralSource(parsedValue); ok {
+						stmt = fmt.Sprintf("%smut = ssql.SetLiteral(mut, frozen, %q, %q, %s)", indent, upd.field, upd.value, src)
+						if _, isTime := parsedValue.(time.Time); isTime {
+							needsTime = true
+						}
+						noteAssign(upd.field, advisoryTypeOf(advisory, upd.field))
+						codeBody.WriteString(stmt + "\n")
+						continue
+					}
+				}
 				// ssql:domain fixed: a parsed -set literal (int, int128, float, bool, time, text)
 				switch v := parsedValue.(type) {
 				case int64:
@@ -1064,4 +1088,47 @@ func stopOnError(records iter.Seq[ssql.Record], failed *error) iter.Seq[ssql.Rec
 			}
 		}
 	}
+}
+
+// copiedFieldType is the header type of a column -set-field copies from
+// source: the source's own, or string when the input does not say.
+func copiedFieldType(in *lib.Schema, source string) string {
+	if in != nil {
+		if t, ok := in.Types[source]; ok && t != "" {
+			return t
+		}
+	}
+	return lib.TypeString
+}
+
+// literalReadsRow: a -set literal goes through ssql.SetLiteral, which
+// reads the row's value of the column, unless the column is known text.
+func literalReadsRow(field, literal string, advisory map[string]string) bool {
+	if advisoryTypeOf(advisory, field) == "string" {
+		return false
+	}
+	_, ok := goLiteralSource(parseValue(literal))
+	return ok
+}
+
+// goLiteralSource is a parsed -set literal as Go source of its own type,
+// for ssql.SetLiteral to type like the column.
+func goLiteralSource(v any) (string, bool) {
+	// ssql:domain fixed: a parsed -set literal (int, int128, float, bool, time, text)
+	switch x := v.(type) {
+	case int64:
+		return fmt.Sprintf("int64(%d)", x), true
+	case ssql.Int128:
+		return fmt.Sprintf("ssql.MustParseInt128(%q)", x.String()), true
+	case float64:
+		return fmt.Sprintf("float64(%s)", strconv.FormatFloat(x, 'g', -1, 64)), true
+	case bool:
+		return strconv.FormatBool(x), true
+	case time.Time:
+		return fmt.Sprintf("time.Date(%d, %d, %d, %d, %d, %d, %d, time.UTC)",
+			x.Year(), x.Month(), x.Day(), x.Hour(), x.Minute(), x.Second(), x.Nanosecond()), true
+	case string:
+		return strconv.Quote(x), true
+	}
+	return "", false
 }

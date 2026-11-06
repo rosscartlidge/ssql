@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`resample` and `bucket()` over int128 and decimal.** A decimal or int128 value is resampled as a float, as typed code already did; a decimal or int128 epoch axis keeps its type, and `bucket()` of one is exact at its own scale (a width finer than a decimal's scale is an error).
+- **Library:** `ssql.IntoColumn` and `ssql.SetLiteral` (update `-set`'s literal-into-column rule, shared by the interpreter and generated code), `ssql.TextOf`, `ssql.BucketInt128`, `ssql.BucketDecimal`, `ssql.WelfordOf`, `Welford.SampleVariance`, `ResampleConfig.CheckFields`.
+
+### Changed
+
+- **A `-lag-default`/`-lead-default` default fills only past the partition's edge,** as SQL's `LAG(x, n, d)` does: a neighbour that exists with a missing value stays missing (it took the default).
+- **Statistics match DuckDB's arithmetic to the bit:** `-percentile` and `-median` interpolate as `lo·(1−d) + hi·d`, `-variance` and `-stddev` are a plain Welford pass (the typed lane folds a group's values once rather than merging shard states), and a variance or deviation of one value has none, as SQL's `var_samp` is NULL (it was 0). Postgres and DataFusion compute some of these with other formulas and can differ in the last digit.
+- **SQL refuses a sum or average of a bool or a time, and a quantile or deviation of a non-number,** at generation, as the interpreter does; DuckDB answered them.
+- **A missing value sorts first ascending and last descending in every lane:** the SQL says `ASC NULLS FIRST` / `DESC NULLS LAST` in `sort`, `top`, `window -order` and `limit -last`, and generated Rust sorts the same way (the engines put NULL last ascending).
+- **`resample` skips a record with no timestamp** (counted on stderr; it was an error), as the SQL lane and pandas do, and refuses a `-value` that is the `-time` field.
+
+### Fixed
+
+- **SQL `group-by -first`/`-last`/`-any` skip a missing value,** as exec does; they took a NULL row's NULL. `-collect` skips one too, lists an empty group as `[]`, and lists an address as its text.
+- **SQL `-arg-max`/`-arg-min` skip a row with no BY** on Postgres and DataFusion, where DESC put the NULL first.
+- **`window -min` over a running or sliding frame was missing at a row whose own value was missing** in exec.
+- **SQL `bucket()` floored a negative epoch toward zero** (-3 s bucketed to 0, not -86400); float epochs follow exec's nanosecond arithmetic exactly, and resample's float or decimal axis no longer rounds 30.25 s to 30.
+- **`update -set` of a literal into a float column wrote text in SQL,** into a decimal or inet column was refused by typed code, and into a json column wrote text in record code; one library rule now types the literal by its column everywhere, and the optimiser no longer prunes away the source column that decides that type.
+- **`update -set-field` of a decimal** wrote a string header and dropped the scale (9.50 came out 9.5).
+- **`describe` of an int128 column** gave its max as -9223372036854775808; SQL called a decimal column float.
+- **SQL inet results of `window -mode`/`-arg-*` and `unpivot`** printed DuckDB's INET struct.
+- **`extract`** read a time or an address as text in exec but typed code refused it; its no-match error now starts `Error:`.
+- **`generate rust` reads a declared time as a timestamp,** so it sorts by instant, not by spelling (a pipeline zone other than UTC is refused).
+
 ## [4.140.0] - 2026-11-06
 
 ### Added

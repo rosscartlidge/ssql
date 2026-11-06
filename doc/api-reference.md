@@ -600,6 +600,9 @@ func GetOr[T any](record Record, key string, defaultValue T) T
 func Set[V Value](m MutableRecord, field string, value V) MutableRecord   // type-checked set, in place
 func SetImmutable[V Value](r Record, field string, value V) Record        // a new Record with the field set
 func SetValue(mut MutableRecord, field string, v any) MutableRecord      // a dynamically typed value by its own type: nil no value, a list or map nested JSON (generated update -set-expr)
+func IntoColumn(mut MutableRecord, field string, value, existing any, exists bool) (MutableRecord, bool) // update -set's rule: value typed like the column's current value (a json column takes [1] as JSON, a decimal its scale); true when a coercion changed its type
+func SetLiteral(mut MutableRecord, frozen Record, field, token string, value any) MutableRecord // IntoColumn for generated record code: text keeps the token as typed
+func TextOf(v any) string                                                  // a value's text as Get[string] reads it: a time in RFC 3339, else its String
 func Field[V Value](key string, value V) Record                           // a one-field Record
 func ValidateRecord(r Record) error                                       // every value is a Value
 ```
@@ -937,13 +940,17 @@ func (s *CompensatedSum) Add(x float64)
 func (s *CompensatedSum) Merge(o CompensatedSum)
 func (s CompensatedSum) Value() float64
 
-type Welford struct{ N int64 /* private mean, M2 */ }   // single-pass mean and variance
+type Welford struct{ N int64 /* private mean, M2 */ }   // single-pass mean and variance, DuckDB's arithmetic to the bit
+func WelfordOf(vals []float64) Welford      // the values folded in order (the typed lane folds a group's values once)
 func (w *Welford) Add(x float64)
 func (w *Welford) Merge(o Welford)          // Chan, Golub & LeVeque, for shard merges
 func (w Welford) MeanValue() float64
-func (w Welford) Variance() float64         // sample, n−1
+func (w Welford) SampleVariance() (float64, bool) // sample, n−1; false below two values (SQL's NULL)
+func (w Welford) Variance() float64         // SampleVariance, 0 below two values
+func (w Welford) VariancePtr() *float64     // nil below two values: the typed lane's nullable result
+func (w Welford) StdDevPtr() *float64
 
-func QuantileCont(sorted []float64, p float64) float64   // the continuous quantile every lane shares
+func QuantileCont(sorted []float64, p float64) float64   // the continuous quantile every lane shares: lo·(1−d) + hi·d, DuckDB's
 func DistinctKey(v any) any        // the key -count-distinct and -mode count a value under, shared by every lane
 func AggValueString(v any) string                        // StringAgg's text form: ints in full, floats shortest round-trip, times RFC 3339
 ```
@@ -1444,6 +1451,10 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 func ResampleFilter(cfg ResampleConfig) Filter[Record, Record]
 func SnapToBucket(ns int64, every time.Duration) int64     // epoch-aligned floor, correct before 1970
 func BucketValue(v any, every time.Duration) (any, error)  // the bucket() expression function; keeps the input's family
+func BucketInt128(v Int128, every time.Duration) Int128     // an int128 epoch, exactly; panics on overflow
+func BucketDecimal(d Decimal, every time.Duration) (Decimal, error) // a decimal epoch, exact at its scale
+func MustBucketDecimal(d Decimal, every time.Duration) Decimal
+func (cfg ResampleConfig) CheckFields() error               // a -value that is the -time field, or named twice, is an error
 ```
 
 `ResampleRecords` snaps to an epoch-aligned grid and emits one record per

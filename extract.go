@@ -64,7 +64,7 @@ func ExtractRecords(records iter.Seq[Record], cfg ExtractConfig) (iter.Seq[Recor
 				if cfg.Skip {
 					continue
 				}
-				fmt.Fprintf(os.Stderr, "extract: record %d: %q does not match %q (use -skip to drop non-matching records)\n", lineNo, text, cfg.Pattern)
+				fmt.Fprintf(os.Stderr, "Error: extract: record %d: %q does not match %q (use -skip to drop non-matching records)\n", lineNo, text, cfg.Pattern)
 				os.Exit(1)
 			}
 			mr := r.ToMutable()
@@ -87,7 +87,7 @@ func ExtractFilter(cfg ExtractConfig) Filter[Record, Record] {
 	return func(in iter.Seq[Record]) iter.Seq[Record] {
 		out, err := ExtractRecords(in, cfg)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}
 		return out

@@ -26,8 +26,19 @@ func TestStatisticsAggregates(t *testing.T) {
 	if got := StdDev("s")(recs).GetValue(); got != 8544.003745317532 {
 		t.Fatalf("StdDev = %v, want 8544.003745317532", got)
 	}
-	if got := Variance("s")(aggRecords("s", int64(5))).GetValue(); got != float64(0) {
-		t.Fatalf("Variance of one value = %v, want 0", got)
+	if got := Variance("s")(aggRecords("s", int64(5))).GetValue(); got != nil {
+		t.Fatalf("Variance of one value = %v, want nil (SQL's var_samp is NULL)", got)
+	}
+
+	// DuckDB's answers to the bit (DFC163 §7): its interpolation is
+	// lo·(1−d) + hi·d (lo + (hi−lo)·d gave 3.1999999999999997), and its
+	// Welford update in one pass (the typed lane's shard merge gave
+	// 2730.3333333333335).
+	if got := QuantileCont([]float64{-3.1, 9.5}, 0.5); got != 3.2 {
+		t.Fatalf("QuantileCont(-3.1, 9.5) = %v, want DuckDB's 3.2", got)
+	}
+	if got := WelfordOf([]float64{10, 100, 9}).Variance(); got != 2730.333333333333 {
+		t.Fatalf("variance of 10, 100, 9 = %v, want DuckDB's 2730.333333333333", got)
 	}
 	if got := Median("s")(aggRecords("s", nil)).GetValue(); got != nil {
 		t.Fatalf("Median of nothing = %v, want nil (no value)", got)

@@ -643,19 +643,37 @@ func bucketToSQL(tsNode, widthNode ast.Node) (string, error) {
 		}
 		return fmt.Sprintf("%s(%s, %s, %s)", fn, interval, ts, sqlEpochOrigin()), nil
 	}
-	// width in each unit; an integer literal when it divides evenly so an
-	// integer column stays integer (DuckDB's % keeps the operand type).
-	unit := func(nanosPerUnit int64) string {
-		if int64(every)%nanosPerUnit == 0 {
-			return fmt.Sprintf("%d", int64(every)/nanosPerUnit)
-		}
-		return fmt.Sprintf("%g", float64(every)/float64(nanosPerUnit))
+	// The snap is toward −∞ (exprfn.SnapNanos): SQL's % keeps the
+	// dividend's sign, so ts − (ts % n) moved a negative epoch UP, -3 to 0
+	// where exec says -86400 (DFC163 §7); ((ts % n) + n) % n is the floor
+	// remainder.
+	floorSnap := func(x, n string) string { return "(" + x + " - (((" + x + " % " + n + ") + " + n + ") % " + n + "))" }
+	cases := func(snap func(nanosPerUnit int64) string) string {
+		return "(CASE WHEN abs(" + ts + ") >= 1e17 THEN " + snap(1) +
+			" WHEN abs(" + ts + ") >= 1e14 THEN " + snap(1_000) +
+			" WHEN abs(" + ts + ") >= 1e11 THEN " + snap(1_000_000) +
+			" ELSE " + snap(1_000_000_000) + " END)"
 	}
-	snap := func(n string) string { return "(" + ts + " - (" + ts + " % " + n + "))" }
-	return "(CASE WHEN abs(" + ts + ") >= 1e17 THEN " + snap(unit(1)) +
-		" WHEN abs(" + ts + ") >= 1e14 THEN " + snap(unit(1_000)) +
-		" WHEN abs(" + ts + ") >= 1e11 THEN " + snap(unit(1_000_000)) +
-		" ELSE " + snap(unit(1_000_000_000)) + " END)", nil
+	if name, ok := ssql.ExprFieldName(tsNode); ok && sqlColumnKinds[name] == "float" {
+		// exprfn.BucketFloat64's own steps: the value in nanoseconds
+		// truncated to an integer, snapped, divided back — the same
+		// float64 operations, so the same bits.
+		return cases(func(u int64) string {
+			ns := fmt.Sprintf("CAST(trunc(%s * %d) AS BIGINT)", ts, u)
+			return fmt.Sprintf("(CAST(%s AS DOUBLE PRECISION) / %d)", floorSnap(ns, strconv.FormatInt(int64(every), 10)), u)
+		}), nil
+	}
+	// An integer, int128 or decimal column snaps in its own unit: the
+	// width there is an integer literal when it divides evenly, so an
+	// integer column stays integer (DuckDB's % keeps the operand type),
+	// and a decimal's remainder is exact.
+	return cases(func(u int64) string {
+		n := fmt.Sprintf("%g", float64(every)/float64(u))
+		if int64(every)%u == 0 {
+			n = fmt.Sprintf("%d", int64(every)/u)
+		}
+		return floorSnap(ts, n)
+	}), nil
 }
 
 // exprMemberToSQL translates member access on a nested value (DFC144

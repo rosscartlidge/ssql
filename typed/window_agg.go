@@ -48,13 +48,14 @@ func frameAggregate[T any](spec WindowSpec[T], all []T, idx []int, start, end in
 				w.Add(v)
 			}
 		}
-		if w.N == 0 {
+		v, ok := w.SampleVariance() // below two present values: SQL's NULL
+		if !ok {
 			return nil
 		}
 		if spec.Agg == WAggStdDev {
-			return math.Sqrt(w.Variance())
+			return math.Sqrt(v)
 		}
-		return w.Variance()
+		return v
 	case WAggCountDistinct:
 		seen := make(map[any]struct{})
 		for i := start; i <= end; i++ {

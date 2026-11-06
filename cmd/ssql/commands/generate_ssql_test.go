@@ -103,10 +103,21 @@ func TestCollectDownstreamFields_GroupByBarrier(t *testing.T) {
 			name: "update's unconditional targets are not source columns",
 			cmds: mkcmds(
 				"ssql from parquet shuffled.parquet",
+				"ssql update -set-field x b_kind -set-field y a_kind",
+				"ssql include x y",
+			),
+			want: []string{"a_kind", "b_kind"},
+		},
+		{
+			// A -set literal is typed by the source's column (IntoColumn),
+			// so a later reference to its target keeps the source whole.
+			name: "a -set literal's target referenced later is opaque",
+			cmds: mkcmds(
+				"ssql from parquet shuffled.parquet",
 				"ssql update -set x 1 -set-field y a_kind",
 				"ssql include x y",
 			),
-			want: []string{"a_kind"},
+			allOK: true,
 		},
 		{
 			name: "window results and rename's new names are not source columns",

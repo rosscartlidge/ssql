@@ -800,11 +800,11 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 			src = pos + spec.N
 		}
 		if src < 0 || src >= partLen {
-			return spec.Default
+			return spec.Default // only past the partition's edge, as SQL's LAG(x, n, d)
 		}
 		v, ok := spec.Val(all[idx[src]])
-		if !ok || v == nil {
-			return spec.Default
+		if !ok {
+			return nil // a neighbour with a missing value stays missing
 		}
 		return v
 	case WFirst:

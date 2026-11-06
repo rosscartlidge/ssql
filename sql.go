@@ -2571,25 +2571,22 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 		return v
 
 	case wLagDefault:
+		// The default fills only past the partition's edge, as SQL's
+		// LAG(x, n, d) does: a neighbour that exists with a missing value
+		// stays missing (Ross, DFC163 §7).
 		srcPos := pos - f.Offset
 		if srcPos < 0 || srcPos >= partLen {
-			return f.Default
+			return windowDefaultLike(f.Default, all[indices[pos]], f.Field)
 		}
-		v, ok := Get[any](all[indices[srcPos]], f.Field)
-		if !ok || v == nil {
-			return f.Default
-		}
+		v, _ := Get[any](all[indices[srcPos]], f.Field)
 		return v
 
 	case wLeadDefault:
 		srcPos := pos + f.Offset
 		if srcPos < 0 || srcPos >= partLen {
-			return f.Default
+			return windowDefaultLike(f.Default, all[indices[pos]], f.Field)
 		}
-		v, ok := Get[any](all[indices[srcPos]], f.Field)
-		if !ok || v == nil {
-			return f.Default
-		}
+		v, _ := Get[any](all[indices[srcPos]], f.Field)
 		return v
 
 	case wNthValue:
@@ -2678,6 +2675,9 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 		var minVal any
 		for i := start; i <= end; i++ {
 			v, _ := Get[any](all[indices[i]], f.Field)
+			if v == nil {
+				continue // a missing value is no candidate: CompareAny orders it first
+			}
 			if minVal == nil || CompareAny(v, minVal) < 0 {
 				minVal = v
 			}
@@ -2690,6 +2690,9 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 		var maxVal any
 		for i := start; i <= end; i++ {
 			v, _ := Get[any](all[indices[i]], f.Field)
+			if v == nil {
+				continue
+			}
 			if maxVal == nil || CompareAny(v, maxVal) > 0 {
 				maxVal = v
 			}
@@ -3049,7 +3052,7 @@ type swRunningMin struct {
 
 func (s *swRunningMin) update(record Record, _ int, _ []OrderField, _ *Record) any {
 	v, _ := Get[any](record, s.field)
-	if s.minVal == nil || CompareAny(v, s.minVal) < 0 {
+	if v != nil && (s.minVal == nil || CompareAny(v, s.minVal) < 0) {
 		s.minVal = v
 	}
 	return s.minVal
@@ -3065,7 +3068,7 @@ type swRunningMax struct {
 
 func (s *swRunningMax) update(record Record, _ int, _ []OrderField, _ *Record) any {
 	v, _ := Get[any](record, s.field)
-	if s.maxVal == nil || CompareAny(v, s.maxVal) > 0 {
+	if v != nil && (s.maxVal == nil || CompareAny(v, s.maxVal) > 0) {
 		s.maxVal = v
 	}
 	return s.maxVal
@@ -3087,15 +3090,19 @@ type swSlidingMin struct {
 }
 
 func (s *swSlidingMin) update(record Record, pos int, _ []OrderField, _ *Record) any {
-	v, _ := Get[any](record, s.field)
-	// Pop back entries >= new value (maintain ascending order)
-	for len(s.deque) > 0 && CompareAny(s.deque[len(s.deque)-1].val, v) >= 0 {
-		s.deque = s.deque[:len(s.deque)-1]
+	if v, _ := Get[any](record, s.field); v != nil { // a missing value is no candidate
+		// Pop back entries >= new value (maintain ascending order)
+		for len(s.deque) > 0 && CompareAny(s.deque[len(s.deque)-1].val, v) >= 0 {
+			s.deque = s.deque[:len(s.deque)-1]
+		}
+		s.deque = append(s.deque, dequeEntry{pos: pos, val: v})
 	}
-	s.deque = append(s.deque, dequeEntry{pos: pos, val: v})
 	// Pop front entries outside frame
 	for len(s.deque) > 0 && s.deque[0].pos <= pos-s.size {
 		s.deque = s.deque[1:]
+	}
+	if len(s.deque) == 0 {
+		return nil // no value in the frame
 	}
 	return s.deque[0].val
 }
@@ -3110,15 +3117,19 @@ type swSlidingMax struct {
 }
 
 func (s *swSlidingMax) update(record Record, pos int, _ []OrderField, _ *Record) any {
-	v, _ := Get[any](record, s.field)
-	// Pop back entries <= new value (maintain descending order)
-	for len(s.deque) > 0 && CompareAny(s.deque[len(s.deque)-1].val, v) <= 0 {
-		s.deque = s.deque[:len(s.deque)-1]
+	if v, _ := Get[any](record, s.field); v != nil { // a missing value is no candidate
+		// Pop back entries <= new value (maintain descending order)
+		for len(s.deque) > 0 && CompareAny(s.deque[len(s.deque)-1].val, v) <= 0 {
+			s.deque = s.deque[:len(s.deque)-1]
+		}
+		s.deque = append(s.deque, dequeEntry{pos: pos, val: v})
 	}
-	s.deque = append(s.deque, dequeEntry{pos: pos, val: v})
 	// Pop front entries outside frame
 	for len(s.deque) > 0 && s.deque[0].pos <= pos-s.size {
 		s.deque = s.deque[1:]
+	}
+	if len(s.deque) == 0 {
+		return nil // no value in the frame
 	}
 	return s.deque[0].val
 }
@@ -3437,12 +3448,9 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 				// order, DFC163 §6.5).
 				for _, ls := range leadSpecs {
 					lookIdx := bufIdx + ls.offset
-					var v any
+					v := windowDefaultLike(ls.def, pr.record, ls.field) // past the edge: LEAD's default, or nil → absent
 					if lookIdx < bufLen {
 						v, _ = Get[any](buf[lookIdx].record, ls.field)
-					}
-					if v == nil {
-						v = ls.def // LEAD's default, or nil → absent
 					}
 					pr.aggValues[ls.resultName] = v
 				}

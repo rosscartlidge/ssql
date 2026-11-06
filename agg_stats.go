@@ -49,23 +49,24 @@ func Percentile(field string, p float64) AggregateFunc {
 }
 
 // QuantileCont interpolates the p-quantile of an already SORTED slice —
-// the one formula the exec and typed lanes share. n must be ≥ 1.
+// the one formula the exec and typed lanes share, and DuckDB's to the
+// bit (Ross, DFC163 §7): position RN = (n−1)·p, and between its
+// neighbours lo·(1−d) + hi·d. Postgres computes lo + (hi−lo)·d, which can
+// differ in the last digit (3.1999999999999997 for 3.2). n must be ≥ 1.
 func QuantileCont(sorted []float64, p float64) float64 {
 	n := len(sorted)
-	if n == 1 {
-		return sorted[0]
+	rn := float64(n-1) * p
+	lo, hi := math.Floor(rn), math.Ceil(rn)
+	if lo == hi {
+		return sorted[int(lo)]
 	}
-	idx := p * float64(n-1)
-	lo := int(math.Floor(idx))
-	hi := lo + 1
-	if hi >= n {
-		return sorted[n-1]
-	}
-	return sorted[lo] + (sorted[hi]-sorted[lo])*(idx-float64(lo))
+	d := rn - lo
+	return sorted[int(lo)]*(1-d) + sorted[int(hi)]*d
 }
 
-// Variance is the sample variance (n−1) of a numeric field; one value →
-// 0, none → the empty string. See Median for the algorithm.
+// Variance is the sample variance (n−1) of a numeric field; fewer than
+// two values have none, as SQL's var_samp is NULL. See Median for the
+// algorithm.
 func Variance(field string) AggregateFunc {
 	context := fmt.Sprintf("Variance(%q)", field)
 	return func(records []Record) AggregateResult {
@@ -73,10 +74,10 @@ func Variance(field string) AggregateFunc {
 		for _, v := range numericValues(context, records, field) {
 			w.Add(v)
 		}
-		if w.N == 0 {
-			return aggNoValue{}
+		if v, ok := w.SampleVariance(); ok {
+			return AggResult[float64]{val: v}
 		}
-		return AggResult[float64]{val: w.Variance()}
+		return aggNoValue{}
 	}
 }
 
@@ -88,33 +89,37 @@ func StdDev(field string) AggregateFunc {
 		for _, v := range numericValues(context, records, field) {
 			w.Add(v)
 		}
-		if w.N == 0 {
-			return aggNoValue{}
+		if v, ok := w.SampleVariance(); ok {
+			return AggResult[float64]{val: math.Sqrt(v)}
 		}
-		return AggResult[float64]{val: math.Sqrt(w.Variance())}
+		return aggNoValue{}
 	}
 }
 
-// Welford is the running mean / M2 state for a single-pass variance.
-// Both running quantities are CompensatedSum accumulators (Neumaier), so
-// the mean update and the M2 update do not drift over long groups.
-// Generated typed code embeds this type and calls Add/Merge/Variance, so
-// the lanes share one arithmetic.
+// Welford is the running mean / M2 state for a single-pass variance, in
+// DuckDB's arithmetic to the bit (and DataFusion's, which is the same):
+// the update and the merge below are theirs, so a variance agrees with
+// the engines' in the last digit (Ross, DFC163 §7). It carried Neumaier
+// compensation until 2026-11-06, which no engine does. Postgres uses
+// another update (Youngs–Cramer) and can differ in the last digit.
+// Generated typed code embeds this type and calls Add/Merge/
+// SampleVariance, so the lanes share one arithmetic.
 type Welford struct {
 	N    int64
-	mean CompensatedSum
-	m2   CompensatedSum
+	mean float64
+	m2   float64
 }
 
 // Add folds one value into the state.
 func (w *Welford) Add(x float64) {
 	w.N++
-	delta := x - w.mean.Value()
-	w.mean.Add(delta / float64(w.N))
-	w.m2.Add(delta * (x - w.mean.Value()))
+	newMean := w.mean + (x-w.mean)/float64(w.N)
+	w.m2 += (x - newMean) * (x - w.mean)
+	w.mean = newMean
 }
 
-// Merge folds another state in (Chan, Golub & LeVeque), for shard merges.
+// Merge folds another state in (Chan, Golub & LeVeque, as DuckDB
+// combines), for shard merges.
 func (w *Welford) Merge(o Welford) {
 	if o.N == 0 {
 		return
@@ -124,22 +129,59 @@ func (w *Welford) Merge(o Welford) {
 		return
 	}
 	n := float64(w.N + o.N)
-	delta := o.mean.Value() - w.mean.Value()
-	w.mean.Add(delta * float64(o.N) / n)
-	w.m2.Merge(o.m2)
-	w.m2.Add(delta * delta * float64(w.N) * float64(o.N) / n)
+	mean := (float64(o.N)*o.mean + float64(w.N)*w.mean) / n
+	delta := o.mean - w.mean
+	w.m2 = o.m2 + w.m2 + delta*delta*float64(o.N)*float64(w.N)/n
+	w.mean = mean
 	w.N += o.N
 }
 
 // MeanValue is the running mean.
-func (w Welford) MeanValue() float64 { return w.mean.Value() }
+func (w Welford) MeanValue() float64 { return w.mean }
 
-// Variance is the sample variance of the state (0 for a single value).
+// Variance is the sample variance of the state (0 below two values; see
+// SampleVariance for SQL's NULL).
 func (w Welford) Variance() float64 {
+	v, _ := w.SampleVariance()
+	return v
+}
+
+// SampleVariance is the sample variance and true, or false below two
+// values, where every SQL engine's var_samp is NULL.
+func (w Welford) SampleVariance() (float64, bool) {
 	if w.N < 2 {
-		return 0
+		return 0, false
 	}
-	return w.m2.Value() / float64(w.N-1)
+	return w.m2 / float64(w.N-1), true
+}
+
+// WelfordOf folds values into a state in their order: the typed lane
+// keeps a group's values and folds them once, so its answer is exec's
+// one pass to the bit, however the shards split.
+func WelfordOf(vals []float64) Welford {
+	var w Welford
+	for _, v := range vals {
+		w.Add(v)
+	}
+	return w
+}
+
+// VariancePtr is the sample variance, or nil below two values: the typed
+// lane's nullable result (SQL's NULL).
+func (w Welford) VariancePtr() *float64 {
+	if v, ok := w.SampleVariance(); ok {
+		return &v
+	}
+	return nil
+}
+
+// StdDevPtr is the sample standard deviation, or nil below two values.
+func (w Welford) StdDevPtr() *float64 {
+	if v, ok := w.SampleVariance(); ok {
+		sd := math.Sqrt(v)
+		return &sd
+	}
+	return nil
 }
 
 // Mode is the most frequent present value of field, keeping its type;

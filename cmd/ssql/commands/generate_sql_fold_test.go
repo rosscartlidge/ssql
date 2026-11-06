@@ -40,7 +40,7 @@ func TestWindowFoldSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`SELECT s.dept AS __p0, list(s ORDER BY s.salary DESC) AS __xs FROM __src s GROUP BY s.dept`,
+		`SELECT s.dept AS __p0, list(s ORDER BY s.salary DESC NULLS LAST) AS __xs FROM __src s GROUP BY s.dept`,
 		`__fold(__p0, __i, __xs, __st0_s)`,
 		`(__st0_s + __xs[__i + 1].salary)`,
 	} {

@@ -113,7 +113,7 @@ func TestDialectDuckDBUnchanged(t *testing.T) {
 		"ssql exclude m",
 	)
 	wantAll(t, sql, "(dialect: duckdb)", "FROM read_csv('data.csv', header=true, quote='\"', escape='\"', delim=',', auto_type_candidates=['BIGINT', 'DOUBLE', 'BOOLEAN', 'VARCHAR']) USING SAMPLE 5 ROWS (reservoir)", "regexp_matches(name, '^A')",
-		"median(salary)", "first(name)", "LIST(level)", "arg_max(name, salary)", "mode(level)", "string_agg(name, ',')", "* EXCLUDE (m)")
+		"median(salary)", "first(name) FILTER (WHERE name IS NOT NULL)", "LIST(level)", "arg_max(name, salary)", "mode(level)", "string_agg(name, ',')", "* EXCLUDE (m)")
 	wantNone(t, sql, `"dept"`, "AS __q", "\\copy")
 }
 
@@ -134,12 +134,12 @@ func TestDialectPostgres(t *testing.T) {
 			`("Name" ~ '^A')`,
 			`percentile_cont(0.5) WITHIN GROUP (ORDER BY "score") AS "med"`,
 			`percentile_cont(0.9) WITHIN GROUP (ORDER BY "score") AS "p90"`,
-			`(array_agg("Name"))[1] AS "f"`,
-			`(array_agg("Name"))[cardinality(array_agg("Name"))] AS "l"`,
+			`(array_agg("Name") FILTER (WHERE "Name" IS NOT NULL))[1] AS "f"`,
+			`(array_agg("Name") FILTER (WHERE "Name" IS NOT NULL))[cardinality(array_agg("Name") FILTER (WHERE "Name" IS NOT NULL))] AS "l"`,
 			`any_value("Name") AS "a"`,
-			`array_agg("age") AS "ages"`,
-			`(array_agg("Name" ORDER BY "score" DESC))[1] AS "top"`,
-			`(array_agg("Name" ORDER BY "score" ASC))[1] AS "bottom"`,
+			`COALESCE(array_agg("age") FILTER (WHERE "age" IS NOT NULL), '{}') AS "ages"`,
+			`(array_agg("Name" ORDER BY "score" DESC NULLS LAST) FILTER (WHERE "score" IS NOT NULL))[1] AS "top"`,
+			`(array_agg("Name" ORDER BY "score" ASC NULLS LAST) FILTER (WHERE "score" IS NOT NULL))[1] AS "bottom"`,
 			`mode() WITHIN GROUP (ORDER BY "note") AS "m"`,
 			`string_agg(CAST("age" AS TEXT), ',') AS "agelist"`,
 			`GROUP BY "flag"`,
@@ -235,9 +235,9 @@ func TestDialectDataFusion(t *testing.T) {
 		`regexp_like("Name", '^A')`,
 		`median("score") AS "med"`,
 		`percentile_cont(0.9) WITHIN GROUP (ORDER BY "score") AS "p90"`,
-		`first_value("Name") AS "f"`, `last_value("Name") AS "l"`, `first_value("Name") AS "a"`,
-		`array_agg("age") AS "ages"`,
-		`first_value("Name" ORDER BY "score" DESC) AS "top"`,
+		`first_value("Name") FILTER (WHERE "Name" IS NOT NULL) AS "f"`, `last_value("Name") FILTER (WHERE "Name" IS NOT NULL) AS "l"`, `first_value("Name") FILTER (WHERE "Name" IS NOT NULL) AS "a"`,
+		`COALESCE(array_agg("age") FILTER (WHERE "age" IS NOT NULL), make_array()) AS "ages"`,
+		`first_value("Name" ORDER BY "score" DESC NULLS LAST) FILTER (WHERE "score" IS NOT NULL) AS "top"`,
 		`string_agg("age", ',') AS "agelist"`,
 		`* EXCLUDE ("f")`,
 	)
@@ -434,4 +434,28 @@ func TestUpdateCannotReadItsOwnNewField(t *testing.T) {
 		mustDialect(t, d, src, "ssql update -set age 12 -set-expr age 'age * 2'")
 		mustDialect(t, d, src, "ssql update -set-expr age 'age + len(\"s\")' -set-expr len 'age'")
 	}
+}
+
+// TestSQLRefusesArithmeticOnNonNumbers: a sum, average, quantile or
+// deviation of a column the assembler knows is not a number is refused at
+// generation, as exec refuses it (noArithmetic); DuckDB
+// summed bools and took medians of times (DFC163 §7). Decimal and int128
+// quantiles are cast to a float, as exec interpolates them.
+func TestSQLRefusesArithmeticOnNonNumbers(t *testing.T) {
+	// DataFusion refuses a declared source type at all (its file table
+	// infers the columns), so it never reaches these.
+	for _, d := range []sqlDialect{dialectDuckDB, dialectPostgres} {
+		for _, stage := range []string{
+			"ssql group-by g -sum b r", "ssql group-by g -avg t r", "ssql group-by g -median t r",
+			"ssql group-by g -percentile ip 0.5 r", "ssql group-by g -stddev s r",
+			"ssql window -order k -sum b r", "ssql window -order k -variance t r",
+		} {
+			_, err := assembleDialect(t, d, "ssql from csv data.csv -type b bool -type t time -type ip inet -type s string", stage)
+			if err == nil || !strings.Contains(err.Error(), "is not a number") {
+				t.Errorf("%s %s: err = %v, want a refusal", d, stage, err)
+			}
+		}
+	}
+	sql := mustDialect(t, dialectDuckDB, "ssql from csv data.csv -type d decimal:2 -type w int128", "ssql group-by g -median d md -percentile w 0.9 p")
+	wantAll(t, sql, "median(CAST(d AS DOUBLE PRECISION))", "quantile_cont(CAST(w AS DOUBLE PRECISION), 0.9)")
 }

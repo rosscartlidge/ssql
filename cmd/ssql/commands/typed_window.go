@@ -450,7 +450,11 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, in *lib.Type
 			if defGo != base {
 				return "", "", "", "", fmt.Sprintf("window: %s default %v is %s but field %q is %s — stays on the record path", d.Kind, d.Default, defGo, f.Name, f.GoType)
 			}
-			return d.Kind, base, read(base), of(k, strconv.Itoa(d.N)) + ".WithDefault(" + goLiteralOf(d.Default) + ")", ""
+			lit := of(k, strconv.Itoa(d.N)) + ".WithDefault(" + goLiteralOf(d.Default) + ")"
+			if ptr { // the default fills only past the edge: a missing neighbour stays missing
+				return d.Kind, "*" + base, readPtr(base), lit, ""
+			}
+			return d.Kind, base, read(base), lit, ""
 		}
 		return d.Kind, "*" + base, readPtr(base), of(k, strconv.Itoa(d.N)), ""
 	}

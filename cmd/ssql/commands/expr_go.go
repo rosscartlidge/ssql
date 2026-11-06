@@ -964,7 +964,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
-		// ssql:domain fixed: a bucket axis is an int, float or time
+		// ssql:domain fixed: a bucket axis is an int, int128, decimal, float or time
 		switch arg.Type {
 		case exprGoInt:
 			res := exprGo{Src: fmt.Sprintf("exprfn.BucketInt64(%s, %d)", arg.Src, int64(d)), Type: exprGoInt, Imports: []string{exprfnImport}}
@@ -974,6 +974,12 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 			return mergeMeta(res, arg), nil
 		case exprGoTime:
 			res := exprGo{Src: fmt.Sprintf("ssql.BucketTime(%s, %d)", arg.Src, int64(d)), Type: exprGoTime, Imports: []string{ssqlImport}}
+			return mergeMeta(res, arg), nil
+		case exprGoInt128:
+			res := exprGo{Src: fmt.Sprintf("ssql.BucketInt128(%s, %d)", arg.Src, int64(d)), Type: exprGoInt128, Imports: []string{ssqlImport}}
+			return mergeMeta(res, arg), nil
+		case exprGoDecimal:
+			res := exprGo{Src: fmt.Sprintf("ssql.MustBucketDecimal(%s, %d)", arg.Src, int64(d)), Type: exprGoDecimal, Scale: arg.Scale, Imports: []string{ssqlImport}}
 			return mergeMeta(res, arg), nil
 		}
 		return exprGo{}, fmt.Errorf("bucket() on %s not transpilable (string timestamps use the VM fallback)", arg.Type)

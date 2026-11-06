@@ -83,6 +83,35 @@ func sqlSumArg(qf string) string {
 	return qf
 }
 
+// sqlAggNotANumber refuses, at generation, an aggregate that needs a
+// number over a column the assembler knows holds something else: exec
+// refuses a sum or average of a bool or a time (noArithmetic) and a
+// quantile or deviation of a non-number, and DuckDB answered them (it
+// sums bools, and orders times for a median; Ross, DFC163 §7).
+func sqlAggNotANumber(fn, field string) error {
+	switch fn {
+	case "sum", "avg", "median", "percentile", "stddev", "variance":
+	default:
+		return nil
+	}
+	// ssql:domain fixed: the wire kinds with no arithmetic; numbers (int, int128, float, decimal:S) pass
+	switch kind := sqlColumnKinds[field]; kind {
+	case "bool", "time", "string", "inet", "json":
+		return fmt.Errorf("-%s of %q: a %s is not a number, which has no arithmetic (count, min, max and group-by work on it)", fn, field, kind)
+	}
+	return nil
+}
+
+// sqlQuantileArg is a quantile's column as the engine must see it: exec
+// interpolates in float64, and DuckDB's quantile of a DECIMAL is a
+// DECIMAL at the column's scale (55.125 came back 55.12; DFC163 §7).
+func sqlQuantileArg(qf string) string {
+	if kind := sqlColumnKinds[strings.Trim(qf, `"`)]; kind == "int128" || strings.HasPrefix(kind, "decimal") {
+		return "CAST(" + qf + " AS DOUBLE PRECISION)"
+	}
+	return qf
+}
+
 // sqlCall renders FN("field") for the plain one-field aggregates.
 func sqlCall(fn string) func(string, string) string {
 	return func(qf, _ string) string { return fmt.Sprintf("%s(%s)", fn, qf) }
@@ -103,7 +132,7 @@ const (
 	typedKindSet        = "set"          // map[T]struct{} → count
 	typedKindStringList = "string-list"  // []string → join
 	typedKindQuantile   = "quantile"     // []float64 → sort → interpolate (median, percentile)
-	typedKindWelford    = "welford"      // n, mean, M2 → variance / stddev
+	typedKindWelford    = "welford"      // []float64 in arrival order → one Welford pass → variance / stddev
 	typedKindCounts     = "counts"       // map[T]count + first index → mode
 	typedKindPaired     = "paired"       // best BY + carried FIELD → arg-max / arg-min
 )

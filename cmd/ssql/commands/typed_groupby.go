@@ -421,7 +421,11 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		case "median", "percentile":
 			st.stateType = "[]float64" // sorted in Result; the group's values
 		case "stddev", "variance":
-			st.stateType = "ssql.Welford" // n, mean, M2 — the library's own state
+			// The group's values in arrival order, folded once in Result:
+			// shard states merged by Chan's formula round differently from
+			// one pass, and exec and DuckDB make one pass (DFC163 §7). The
+			// cost is median's: the group's values in memory.
+			st.stateType = "[]float64"
 		case "mode":
 			st.stateType = fmt.Sprintf("map[%s]*typedModeEntry", f.GoType)
 		case "arg-max", "arg-min":
@@ -504,11 +508,23 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 			d.WriteString("\t}\n")
 		case "first", "any":
-			fmt.Fprintf(&d, "\tif !a.%s_have {\n", s.stateName)
+			// A missing value is skipped, as in exec (DFC163 §7).
+			cond := "!a." + s.stateName + "_have"
+			if p := presentCond(s.fieldGoT, s.fieldGo); p != "" {
+				cond += " && " + p
+			}
+			fmt.Fprintf(&d, "\tif %s {\n", cond)
 			fmt.Fprintf(&d, "\t\ta.%s = r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 			d.WriteString("\t}\n")
 		case "last":
+			if cond := presentCond(s.fieldGoT, s.fieldGo); cond != "" {
+				fmt.Fprintf(&d, "\tif %s {\n", cond)
+				fmt.Fprintf(&d, "\t\ta.%s = r.%s\n", s.stateName, s.fieldGo)
+				fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
+				d.WriteString("\t}\n")
+				break
+			}
 			fmt.Fprintf(&d, "\ta.%s = r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\ta.%s_have = true\n", s.stateName)
 		case "count-distinct":
@@ -519,7 +535,7 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		case "median", "percentile":
 			fmt.Fprintf(&d, "\ta.%s = append(a.%s, %s)\n", s.stateName, s.stateName, floatOf(s.fieldGoT, "r."+s.fieldGo))
 		case "stddev", "variance":
-			fmt.Fprintf(&d, "\ta.%s.Add(%s)\n", s.stateName, floatOf(s.fieldGoT, "r."+s.fieldGo))
+			fmt.Fprintf(&d, "\ta.%s = append(a.%s, %s)\n", s.stateName, s.stateName, floatOf(s.fieldGoT, "r."+s.fieldGo))
 		case "mode":
 			fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
 			fmt.Fprintf(&d, "\tif e, ok := a.%s[r.%s]; ok {\n\t\te.N++\n\t} else {\n\t\ta.%s[r.%s] = &typedModeEntry{N: 1, First: a.%s_seen}\n\t}\n", s.stateName, s.fieldGo, s.stateName, s.fieldGo, s.stateName)
@@ -590,10 +606,10 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			}
 			fmt.Fprintf(&d, "\t\t%s: func() float64 { if len(a.%s) == 0 { return 0 }; sort.Float64s(a.%s); return ssql.QuantileCont(a.%s, %v) }(),\n",
 				lib.GoNameFromColumn(s.spec.result), s.stateName, s.stateName, s.stateName, p)
-		case "variance":
-			fmt.Fprintf(&d, "\t\t%s: a.%s.Variance(),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
+		case "variance": // nil below two values, as SQL's var_samp is NULL
+			fmt.Fprintf(&d, "\t\t%s: ssql.WelfordOf(a.%s).VariancePtr(),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
 		case "stddev":
-			fmt.Fprintf(&d, "\t\t%s: math.Sqrt(a.%s.Variance()),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
+			fmt.Fprintf(&d, "\t\t%s: ssql.WelfordOf(a.%s).StdDevPtr(),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
 		case "mode":
 			fmt.Fprintf(&d, "\t\t%s: func() %s { var best *typedModeEntry; var bv %s; for k, e := range a.%s { if best == nil || e.N > best.N || (e.N == best.N && e.First < best.First) { best, bv = e, k } }; return bv }(),\n",
 				lib.GoNameFromColumn(s.spec.result), s.fieldGoT, s.fieldGoT, s.stateName)
@@ -668,8 +684,8 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
 			case "median", "percentile":
 				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
-			case "stddev", "variance":
-				fmt.Fprintf(&d, "\ta.%s.Merge(o.%s)\n", s.stateName, s.stateName)
+			case "stddev", "variance": // shard order is arrival order
+				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
 			case "arg-max":
 				// Receiver is the earlier shard: the peer replaces only when strictly better.
 				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || %s) {\n\t\ta.%s_by = o.%s_by\n\t\ta.%s = o.%s\n\t\ta.%s_have = true\n\t}\n",
@@ -810,6 +826,15 @@ func typedAggAccepts(fn, field string, f lib.TypedSchemaField) error {
 	return nil
 }
 
+// presentCond is "r.F != nil" for a nullable (*T) field, else "": the
+// guard first/last/any put on a row so a missing value is skipped.
+func presentCond(goType, goName string) string {
+	if strings.HasPrefix(goType, "*") {
+		return "r." + goName + " != nil"
+	}
+	return ""
+}
+
 // orderedLess emits the Go expression "a < b" for the field's type: a
 // type `<` cannot compare goes through its three-way form, and a bool
 // is `!a && b` (false < true, DFC163 §7).
@@ -890,8 +915,10 @@ func aggResultGoType(s aggSpec, in *lib.TypedSchema) string {
 	switch s.function {
 	case "count", "count-distinct":
 		return "int64"
-	case "avg", "median", "percentile", "stddev", "variance":
+	case "avg", "median", "percentile":
 		return "float64"
+	case "stddev", "variance": // none below two values (SQL's NULL)
+		return "*float64"
 	case "string-agg":
 		return "string"
 	}
@@ -941,8 +968,10 @@ func aggResultGoTypeForState(fn, fieldGoType string) string {
 	switch fn {
 	case "count", "count-distinct":
 		return "int64"
-	case "avg", "median", "percentile", "stddev", "variance":
+	case "avg", "median", "percentile":
 		return "float64"
+	case "stddev", "variance":
+		return "*float64"
 	case "string-agg":
 		return "string"
 	case "sum":
@@ -978,10 +1007,8 @@ func typedAggImports(specs []aggSpec, in *lib.TypedSchema) []string {
 			out = append(out, "sort", "github.com/rosscartlidge/ssql/v4")
 		case "sum", "avg":
 			out = append(out, "github.com/rosscartlidge/ssql/v4") // CompensatedSum, or the exact Int128 (DFC155 C)
-		case "variance":
+		case "variance", "stddev":
 			out = append(out, "github.com/rosscartlidge/ssql/v4")
-		case "stddev":
-			out = append(out, "math", "github.com/rosscartlidge/ssql/v4")
 		}
 	}
 	return out

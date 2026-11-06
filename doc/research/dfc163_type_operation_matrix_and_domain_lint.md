@@ -2,7 +2,7 @@
 
 Reference: DFC163
 Created: 2026-11-04
-Last modified: 2026-11-05
+Last modified: 2026-11-06
 
 [Back to Index](./README.md)
 
@@ -503,6 +503,63 @@ seven. Its reach is the next work (TODO):
 - two-stage cells (operation, then a consumer of the result);
 - source cells over every reader with `-type`;
 - the flags the spec marks as modes (`-spill`).
+
+### 7.7 Built: the decisions and the bugs (2026-11-06)
+
+Ross: "build them all, then fix the bugs." Every §7.3 decision is
+built and every §7.5 bug fixed, each with an equivalence case watched to
+fail without its fix. The full matrix with its known gaps run went from
+329 known cells to the time-text cells and `top`'s ties.
+
+**The decisions:**
+- **Lag/lead `-default`** fills only past the edge in exec's per-row,
+  running and streaming forms and in typed code (a nullable field keeps
+  a nullable result). A text default in a json column is that column's
+  JSON (`windowDefaultLike`).
+- **`-first`/`-last`/`-any` skip a missing value** in every SQL dialect
+  and in rust (`FILTER (WHERE x IS NOT NULL)`), and typed code skips a
+  nil. `window -first/-last` already took the row's NULL in exec and SQL
+  alike, so it was left as SQL's.
+- **Statistics in DuckDB's arithmetic.** Measured over 300 random
+  groups, the three engines disagree in the last digit:
+  | | variance | percentile |
+  |---|---|---|
+  | DuckDB | Welford, plain | lo·(1−d) + hi·d |
+  | DataFusion | the same as DuckDB | another formula |
+  | Postgres | Youngs–Cramer | lo + (hi−lo)·d (exec's before) |
+
+  Byte-exact against all three is impossible; ssql matches DuckDB, the
+  oracle every run has. The Neumaier compensation in `Welford` went (no
+  engine does it), and the typed lane keeps a group's values and folds
+  them once, because a merge of shard states rounds differently from one
+  pass. A variance of one value has none (SQL's NULL; exec said 0).
+- **resample and `bucket()` over int128 and decimal**: values as floats,
+  axes keeping their type, `bucket()` exact at a decimal's scale.
+- **The SQL lanes refuse** a sum or average of a bool or time and a
+  quantile or deviation of a non-number, at generation, by the column's
+  kind (`sqlAggNotANumber`).
+
+**Found on the way and fixed:**
+- SQL `bucket()` truncated toward zero, so a negative epoch bucketed up
+  (-3 s to 0, not -86400); floats now follow exec's nanosecond steps.
+- resample's float or decimal axis in SQL rounded `CAST(30.25 AS
+  BIGINT)` to a grid point; it now runs on exec's nanoseconds, and the
+  grid bounds snap in integers.
+- `-arg-max`/`-arg-min` on Postgres and DataFusion picked a row with no
+  BY (their DESC puts NULL first).
+- `update -set-field` of a decimal wrote a string header; the matrix's
+  decimal list was a hand-kept flag list that missed it, and is now read
+  from exec's own header (`matrixDecimalColumns`).
+- The optimiser pruned a `-set` literal's target column, though the
+  literal takes its type from it.
+
+**Open (TODO):**
+- **The text of a time** is a decision: exec keeps each value's source
+  offset, a TIMESTAMPTZ only the instant, so `-string-agg` and
+  `-collect` of a time differ from every SQL lane.
+- **Order after a parallel typed segment:** a record-path stage after an
+  unordered `Serial()` sees shard-interleaved rows (`-collect` has no
+  typed form).
 
 ## 8. Related
 

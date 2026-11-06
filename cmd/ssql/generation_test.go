@@ -590,7 +590,9 @@ func TestUpdateGeneration(t *testing.T) {
 				`"type":"stmt"`,
 				`"var":"updated"`,
 				`ssql.Update`,
-				`mut = mut.String(\"status\", \"processed\")`,
+				// A column of unknown type: the library types the literal by
+				// the row's value, as exec does (ssql.SetLiteral, DFC163 §7).
+				`mut = ssql.SetLiteral(mut, frozen, \"status\", \"processed\", \"processed\")`,
 			},
 		},
 		{
@@ -599,22 +601,22 @@ func TestUpdateGeneration(t *testing.T) {
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
-				`mut = mut.String(\"status\", \"done\")`,
-				`mut = mut.Int(\"count\", int64(42))`,
+				`mut = ssql.SetLiteral(mut, frozen, \"status\", \"done\", \"done\")`,
+				`mut = ssql.SetLiteral(mut, frozen, \"count\", \"42\", int64(42))`,
 			},
 		},
 		{
 			name:    "type inference - bool",
 			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -set active true`,
 			wantStrs: []string{
-				`mut = mut.Bool(\"active\", true)`,
+				`mut = ssql.SetLiteral(mut, frozen, \"active\", \"true\", true)`,
 			},
 		},
 		{
 			name:    "type inference - float",
 			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -set price 99.99`,
 			wantStrs: []string{
-				`mut = mut.Float(\"price\", 99.9`,
+				`mut = ssql.SetLiteral(mut, frozen, \"price\", \"99.99\", float64(99.99))`,
 			},
 		},
 	}
@@ -699,7 +701,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 				`ssql.Update`,
 				`tier`,
 				`Gold`,
-				`mut.Float`,
+				`float64(0.2)`,
 				`discount`,
 			},
 		},

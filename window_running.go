@@ -163,7 +163,7 @@ func runningFrameValues(fn WindowFunc, all []Record, indices []int) []any {
 		var minVal any
 		for pos, idx := range indices {
 			v, _ := Get[any](all[idx], f.Field)
-			if minVal == nil || CompareAny(v, minVal) < 0 {
+			if v != nil && (minVal == nil || CompareAny(v, minVal) < 0) { // a missing value is no candidate
 				minVal = v
 			}
 			vals[pos] = minVal
@@ -172,7 +172,7 @@ func runningFrameValues(fn WindowFunc, all []Record, indices []int) []any {
 		var maxVal any
 		for pos, idx := range indices {
 			v, _ := Get[any](all[idx], f.Field)
-			if maxVal == nil || CompareAny(v, maxVal) > 0 {
+			if v != nil && (maxVal == nil || CompareAny(v, maxVal) > 0) {
 				maxVal = v
 			}
 			vals[pos] = maxVal

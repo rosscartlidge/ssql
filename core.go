@@ -1382,6 +1382,15 @@ func convertToString(val any) (string, bool) {
 	}
 }
 
+// TextOf is a value's text as Get[string] reads it: a time in RFC 3339,
+// any other value its String (or %v). Generated typed code calls it where
+// the interpreter reads a non-text field as text (extract over a number,
+// a time or an address; DFC163 §7).
+func TextOf(v any) string {
+	s, _ := convertToString(v)
+	return s
+}
+
 // convertToBool only handles conversions from canonical types
 func convertToBool(val any) (bool, bool) {
 	// ssql:domain numeric+string+bool

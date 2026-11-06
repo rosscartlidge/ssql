@@ -2751,7 +2751,6 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv -type t time {{.data}}/zone_times.csv | {{.bin}} sort t`,
 		Ordered:  true,
 		Golden:   []map[string]any{{"k": 3, "t": "2026-01-01T12:00:00-05:00"}, {"k": 1, "t": "2026-01-02T09:00:00+11:00"}, {"k": 2, "t": "2026-01-01T23:30:00Z"}},
-		Skip:     map[string]string{"rust": "generate rust reads a declared time as text (rustSourceSchema) and sorts its spelling — TODO, DFC163 §7.5"},
 	},
 	{
 		// An empty cell in a column declared time is missing, as it is in
@@ -2956,6 +2955,117 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/big.csv -type amt decimal:2 | {{.bin}} group-by k -sum amt t`,
 		Decimals: []string{"t"},
 		Golden:   []map[string]any{{"k": "x", "t": json.Number("90071992547409.94")}},
+	},
+	{
+		// resample carries a decimal or an int128 value as a float, as the
+		// typed lane did (exec refused them; Ross, DFC163 §7); a missing
+		// value is skipped, and so is a record with no time (an error in
+		// exec, dropped by the SQL's WHERE ts IS NOT NULL, as pandas drops
+		// NaT).
+		Name:     "resample_wide_values_and_missing_time",
+		Pipeline: `{{.bin}} from csv -type t time -type v decimal:2 -type w int128 {{.data}}/resample_wide.csv | {{.bin}} resample -time t -every 10s -value v -value w -fill linear`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"t": "2026-01-01T00:00:10Z", "v": 1.5, "w": 1e20},
+			{"t": "2026-01-01T00:00:20Z", "v": 1.75, "w": 6.666666666666667e19},
+			{"t": "2026-01-01T00:00:30Z", "v": 2, "w": 3.3333333333333336e19},
+			{"t": "2026-01-01T00:00:40Z", "v": 2.25, "w": 40},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// A decimal epoch axis keeps its type, and the SQL works in exec's
+		// nanoseconds: CAST(30.25 AS BIGINT) was 30, a grid point, so the
+		// 30 s point took v 3 where exec, at 30.25 s, still says 1.
+		Name:     "resample_decimal_axis",
+		Pipeline: `{{.bin}} from csv -type e decimal:2 {{.data}}/resample_axis.csv | {{.bin}} resample -time e -every 10s -value v`,
+		Ordered:  true,
+		Decimals: []string{"e"},
+		Golden: []map[string]any{
+			{"e": json.Number("10"), "v": 1},
+			{"e": json.Number("20"), "v": 1},
+			{"e": json.Number("30"), "v": 1},
+		},
+	},
+	{
+		// The same over a float axis.
+		Name:     "resample_float_axis_in_nanoseconds",
+		Pipeline: `{{.bin}} from csv -type e float {{.data}}/resample_axis.csv | {{.bin}} resample -time e -every 10s -value v`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"e": 10, "v": 1},
+			{"e": 20, "v": 1},
+			{"e": 30, "v": 1},
+		},
+	},
+	{
+		// describe keeps an int128's extremes exact (its max of 1e20 went
+		// through int64() as -9223372036854775808 in exec and record code)
+		// and calls a decimal column a decimal in SQL too (it said float;
+		// DFC163 §7).
+		Name:     "describe_int128_and_decimal",
+		Pipeline: `{{.bin}} from csv -type w int128 -type d decimal:2 {{.data}}/wide_decimal.csv | {{.bin}} describe | {{.bin}} include field type min max`,
+		Golden: []map[string]any{
+			{"field": "w", "type": "int", "min": -5, "max": json.Number("100000000000000000000")},
+			{"field": "d", "type": "decimal", "min": -3.1, "max": 10.25},
+		},
+	},
+	{
+		// An `update -set` literal takes its column's type in every lane,
+		// by one library rule (ssql.IntoColumn): a float column a DOUBLE
+		// (DuckDB wrote 9.75 as the DECIMAL literal's text), a decimal
+		// column its scale, rounded half away (typed refused it), an inet
+		// column an address (DuckDB printed its INET struct; DFC163 §7).
+		Name:     "update_set_literal_takes_the_column_type",
+		Pipeline: `{{.bin}} from csv -type f float -type d decimal:2 -type ip inet {{.data}}/set_typed.csv | {{.bin}} update -set f 9.75 -set d 9.755 -set ip 10.0.0.0/8 | {{.bin}} include k f d ip | {{.bin}} sort k`,
+		Ordered:  true,
+		Decimals: []string{"d"},
+		Golden: []map[string]any{
+			{"k": 1, "f": 9.75, "d": json.Number("9.76"), "ip": "10.0.0.0/8"},
+			{"k": 2, "f": 9.75, "d": json.Number("9.76"), "ip": "10.0.0.0/8"},
+		},
+	},
+	{
+		// …and a json column the literal's JSON: record codegen wrote the
+		// text "[1]" (a json column has no SQL translation yet).
+		Name:     "update_set_literal_into_json",
+		Pipeline: `{{.bin}} from csv -type j json {{.data}}/set_typed.csv | {{.bin}} update -set j [1] | {{.bin}} include k j | {{.bin}} sort k`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"k": 1, "j": []any{1}},
+			{"k": 2, "j": []any{1}},
+		},
+		Skip: equivNoSQL("a declared json column has no SQL translation yet"),
+	},
+	{
+		// -set-field copies a decimal as a decimal (the header called the
+		// copy a string, and 2.75's copy of 0.50 came out 0.5), and
+		// bucket() of a decimal epoch is exact at its scale and floors
+		// toward −∞: -0.49 is in the bucket of -1, as exprfn.SnapNanos
+		// floors an int (SQL's ts − (ts % n) gave 0; DFC163 §7).
+		Name:     "decimal_set_field_and_bucket",
+		Pipeline: `{{.bin}} from csv -type amt decimal:2 {{.data}}/fractions.csv | {{.bin}} update -set-field c amt | {{.bin}} update -set-bucket b amt 1s | {{.bin}} sort k`,
+		Ordered:  true,
+		Decimals: []string{"amt", "c", "b"},
+		Golden: []map[string]any{
+			{"k": "a", "amt": json.Number("2.75"), "c": json.Number("2.75"), "b": json.Number("2")},
+			{"k": "b", "amt": json.Number("-2.75"), "c": json.Number("-2.75"), "b": json.Number("-3")},
+			{"k": "c", "amt": json.Number("-0.49"), "c": json.Number("-0.49"), "b": json.Number("-1")},
+			{"k": "d", "amt": json.Number("0.5"), "c": json.Number("0.5"), "b": json.Number("0")},
+		},
+	},
+	{
+		// An int epoch floors toward −∞ in SQL too: -3 s is in the bucket
+		// of -86400 (a day), where ts − (ts % n) said 0.
+		Name:     "bucket_negative_epoch_floors",
+		Pipeline: `{{.bin}} from csv {{.data}}/fractions.csv | {{.bin}} update -set-expr s 'int(amt * 100)' | {{.bin}} update -set-bucket b s 24h | {{.bin}} include k s b | {{.bin}} sort k`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"k": "a", "s": 275, "b": 0},
+			{"k": "b", "s": -275, "b": -86400},
+			{"k": "c", "s": -49, "b": -86400},
+			{"k": "d", "s": 50, "b": 0},
+		},
 	},
 	{
 		// Text cast to decimal:2 rounds half away from zero in every lane
@@ -3557,6 +3667,210 @@ var equivCases = []EquivCase{
 			{"s": "192.168.0.2;10.0.0.0/16;::1.2.3.4;9.0.0.1;2001:db8::1;10.0.0.1/24;fe80::1;10.0.0.1;::1;10.0.0.0/8;::ffff:1.2.3.4;10.0.0.9;::1;10.0.0.1"},
 		},
 		Skip: equivInetPending(),
+	},
+	{
+		// Statistics in DuckDB's arithmetic to the bit (Ross, DFC163 §7);
+		// the Golden is DuckDB's own output. Its interpolation is
+		// lo·(1−d) + hi·d (exec's lo + (hi−lo)·d gave x's median as
+		// 3.1999999999999997), its variance a plain Welford pass (the typed
+		// lane's shard merge rounds differently; y's values arrive 9, 0.3,
+		// 100, 10, and the order is in the last digit), and a variance of
+		// one value is NULL (exec said 0).
+		Name:     "groupby_statistics_match_duckdb",
+		Pipeline: `{{.bin}} from csv {{.data}}/stats_floats.csv | {{.bin}} group-by g -variance v va -stddev v sd -median v md -percentile v 0.9 p9`,
+		// The engines' formulas differ from each other in the last digit
+		// (measured over 300 random groups, 2026-11-06): Postgres's
+		// percentile is lo + (hi−lo)·d and its variance Youngs–Cramer,
+		// DataFusion's percentile neither. ssql matches DuckDB, the oracle
+		// every run has (Ross: "match the engines' formulas").
+		Skip: map[string]string{
+			"postgres":   "percentile_cont is lo + (hi−lo)·d and var_samp Youngs–Cramer: the last digit differs from DuckDB's, which ssql matches",
+			"datafusion": "percentile_cont interpolates by another formula: the last digit differs from DuckDB's, which ssql matches",
+			"rust":       "DataFusion's percentile_cont, as the datafusion lane: the last digit differs from DuckDB's, which ssql matches",
+		},
+		Golden: []map[string]any{
+			{"g": "x", "va": 79.38000000000001, "sd": 8.909545442950499, "md": 3.2, "p9": 8.24},
+			{"g": "y", "va": 2207.6558333333337, "sd": 46.9856981786302, "md": 9.5, "p9": 73.00000000000001},
+			{"g": "z", "md": 7, "p9": 7},
+		},
+	},
+	{
+		// The same over a running frame, DuckDB's output again.
+		Name:     "window_statistics_match_duckdb",
+		Pipeline: `{{.bin}} from csv {{.data}}/stats_floats.csv | {{.bin}} window -partition g -order k -variance v va -percentile v 0.9 p9 | {{.bin}} sort k`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"k": 1, "g": "x", "v": -3.1, "p9": -3.1},
+			{"k": 2, "g": "y", "v": 10, "p9": 10},
+			{"k": 3, "g": "y", "v": 100, "va": 4050, "p9": 91},
+			{"k": 4, "g": "x", "v": 9.5, "va": 79.38000000000001, "p9": 8.24},
+			{"k": 5, "g": "y", "v": 9, "va": 2730.333333333333, "p9": 82},
+			{"k": 6, "g": "z", "v": 7, "p9": 7},
+			{"k": 7, "g": "y", "v": 0.3, "va": 2207.655833333333, "p9": 73.00000000000001},
+		},
+	},
+	{
+		// A missing value is the smallest in every lane, as exec's
+		// CompareAny orders it: first ascending, last descending. The SQL
+		// says ASC NULLS FIRST / DESC NULLS LAST, where the engines'
+		// default put it last ascending (DFC163 §7).
+		Name:     "sort_missing_first_ascending",
+		Pipeline: `{{.bin}} from csv {{.data}}/first_last_missing.csv | {{.bin}} sort v id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "g": "a"}, {"id": 3, "g": "a"}, {"id": 5, "g": "b"}, {"id": 6, "g": "c"},
+			{"id": 2, "g": "a", "v": 3}, {"id": 4, "g": "b", "v": 5},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		Name:     "sort_missing_last_descending",
+		Pipeline: `{{.bin}} from csv {{.data}}/first_last_missing.csv | {{.bin}} sort -desc v id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 4, "g": "b", "v": 5}, {"id": 2, "g": "a", "v": 3},
+			{"id": 6, "g": "c"}, {"id": 5, "g": "b"}, {"id": 3, "g": "a"}, {"id": 1, "g": "a"},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// The window's order and limit -last's reversal place it the same.
+		Name:     "window_order_and_limit_last_missing",
+		Pipeline: `{{.bin}} from csv {{.data}}/first_last_missing.csv | {{.bin}} window -order v -desc -order id -row-number rn | {{.bin}} sort v id | {{.bin}} limit -last 3`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 6, "g": "c", "rn": 3}, {"id": 2, "g": "a", "v": 3, "rn": 2}, {"id": 4, "g": "b", "v": 5, "rn": 1},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// A window min or max skips a missing value, as SQL's MIN does: the
+		// interpreter's running and sliding min took a row's missing value
+		// as the smallest (CompareAny orders it first), so id 3's running
+		// min was missing (DFC163 §7). The Golden is DuckDB's output.
+		Name:     "window_min_max_skip_missing",
+		Pipeline: `{{.bin}} from csv {{.data}}/first_last_missing.csv | {{.bin}} window -partition g -order id -min v mn -max v mx + -partition g -order id -preceding 1 -min v m1 | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "g": "a"},
+			{"id": 2, "g": "a", "v": 3, "mn": 3, "mx": 3, "m1": 3},
+			{"id": 3, "g": "a", "mn": 3, "mx": 3, "m1": 3},
+			{"id": 4, "g": "b", "v": 5, "mn": 5, "mx": 5, "m1": 5},
+			{"id": 5, "g": "b", "mn": 5, "mx": 5, "m1": 5},
+			{"id": 6, "g": "c"},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// The same over the streaming window.
+		Name:     "window_min_max_skip_missing_presorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/first_last_missing.csv | {{.bin}} sort g id | {{.bin}} window -presorted -partition g -order id -min v mn -max v mx + -partition g -order id -preceding 1 -min v m1 | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "g": "a"},
+			{"id": 2, "g": "a", "v": 3, "mn": 3, "mx": 3, "m1": 3},
+			{"id": 3, "g": "a", "mn": 3, "mx": 3, "m1": 3},
+			{"id": 4, "g": "b", "v": 5, "mn": 5, "mx": 5, "m1": 5},
+			{"id": 5, "g": "b", "mn": 5, "mx": 5, "m1": 5},
+			{"id": 6, "g": "c"},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// extract reads a field that is not text as its text, in typed
+		// code too (ssql.TextOf, as exec's Get[string]): typed refused an
+		// address (DFC163 §7).
+		Name:     "extract_from_an_inet",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} where -if n le 5 | {{.bin}} extract -field ip -keep -skip -re '^(?P<oct>[0-9]+)\.' | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"ip": "192.168.0.2", "n": 1, "oct": "192"},
+			{"ip": "10.0.0.0/16", "n": 2, "oct": "10"},
+			{"ip": "9.0.0.1", "n": 4, "oct": "9"},
+		},
+		Skip: equivNoSQL("extract has no SQL translation"),
+	},
+	{
+		// arg-max/arg-min skip a row with no BY, as exec and DuckDB's
+		// arg_max do: Postgres's and DataFusion's DESC put a NULL first,
+		// so arg-max answered that row (the SQL says NULLS LAST now;
+		// DFC163 §7).
+		Name:     "groupby_arg_extremes_skip_missing_by",
+		Pipeline: `{{.bin}} from csv {{.data}}/first_last_missing.csv | {{.bin}} group-by g -arg-max id v mx -arg-min id v mn`,
+		Golden: []map[string]any{
+			{"g": "a", "mx": 2, "mn": 2},
+			{"g": "b", "mx": 4, "mn": 4},
+			{"g": "c"},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// -collect lists the present values, as exec does: LIST kept a NULL
+		// as a null element, and a group with none was NULL, not [] (DFC163
+		// §7).
+		Name:     "groupby_collect_skips_missing",
+		Pipeline: `{{.bin}} from csv {{.data}}/first_last_missing.csv | {{.bin}} group-by g -collect v c`,
+		Golden: []map[string]any{
+			{"g": "a", "c": []any{3}},
+			{"g": "b", "c": []any{5}},
+			{"g": "c", "c": []any{}},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// …and an address as its text, not DuckDB's INET struct.
+		Name:     "groupby_collect_inet_as_text",
+		Pipeline: `{{.bin}} from csv -type ip inet {{.data}}/ips.csv | {{.bin}} where -if n le 3 | {{.bin}} group-by n -collect ip c`,
+		Golden: []map[string]any{
+			{"n": 1, "c": []any{"192.168.0.2"}},
+			{"n": 2, "c": []any{"10.0.0.0/16"}},
+			{"n": 3, "c": []any{"::1.2.3.4"}},
+		},
+	},
+	{
+		// group-by -first/-last/-any skip a missing value, as exec always
+		// did (Ross, DFC163 §7); the engines' first/last took the NULL of
+		// the group's first or last row until 2026-11-06 (FILTER (WHERE x
+		// IS NOT NULL) in every dialect). Group a's missing values are its
+		// first and last rows, group c has no value at all.
+		Name:     "groupby_first_last_skip_missing",
+		Pipeline: `{{.bin}} from csv {{.data}}/first_last_missing.csv | {{.bin}} group-by g -first v f -last v l -any v a`,
+		Golden: []map[string]any{
+			{"g": "a", "f": 3, "l": 3, "a": 3},
+			{"g": "b", "f": 5, "l": 5, "a": 5},
+			{"g": "c"},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// A LAG/LEAD default fills only past the partition's edge, as SQL's
+		// LAG(x, n, d): a neighbour that exists with a missing value stays
+		// missing (Ross, DFC163 §7). Exec filled it with the default until
+		// 2026-11-06, so ids 2 and 3 had nx 9 and id 4 had p 0.
+		Name:     "lag_lead_default_only_past_the_edge",
+		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} window -order id -lag-default v 1 0 p -lead-default v 1 9 nx | {{.bin}} include id v p nx | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "v": 1, "p": 0, "nx": 3},
+			{"id": 2, "v": 3, "p": 1},
+			{"id": 3, "p": 3},
+			{"id": 4, "nx": 9},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// The same over the streaming window (-presorted), whose lag is a
+		// ring and whose lead a delayed emission.
+		Name:     "lag_lead_default_only_past_the_edge_presorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} sort id | {{.bin}} window -presorted -order id -lag-default v 1 0 p -lead-default v 1 9 nx | {{.bin}} include id v p nx`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "v": 1, "p": 0, "nx": 3},
+			{"id": 2, "v": 3, "p": 1},
+			{"id": 3, "p": 3},
+			{"id": 4, "nx": 9},
+		},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
 		// A window function whose value is a field's value keeps the

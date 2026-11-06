@@ -247,11 +247,7 @@ func lowerSQLFold(q *sqlQuery, spec streamExprSpec, idx int) (sqlFoldPlan, error
 func foldOrderTerms(q *sqlQuery, orderBy []string, desc bool) []string {
 	var terms []string
 	for _, f := range orderBy {
-		t := "s." + quoteIdent(f)
-		if desc {
-			t += " DESC"
-		}
-		terms = append(terms, t)
+		terms = append(terms, sqlOrderTerm("s."+quoteIdent(f), desc))
 	}
 	if len(terms) == 0 && q.rangeColumn != "" && (q.columns == nil || slices.Contains(q.columns, q.rangeColumn)) {
 		terms = append(terms, "s."+quoteIdent(q.rangeColumn))

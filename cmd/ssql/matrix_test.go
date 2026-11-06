@@ -96,27 +96,10 @@ func TestTypeOperationMatrix(t *testing.T) {
 // SSQL_MATRIX_KNOWN=1 runs them anyway, to find the entries a fix has
 // made stale; delete an entry with its fix.
 var matrixKnown = []struct{ pattern, why string }{
-	// SQL lanes: refusals the interpreter makes and DuckDB does not.
-	{`^(group-by|window)_(sum|avg)_(b|t)(_empties)?$`, "SQL answers a sum or average of a bool or a time; every lane must refuse (Ross, DFC163 §7)"},
-	{`^(group-by|window)_(median|percentile)_(b|ip|s|t)(_empties)?$`, "SQL answers a median or percentile of a non-number; exec refuses (DFC163 §7)"},
 	// SQL lanes: a value's text or kind.
-	{`^(window_(mode|arg-max|arg-min)|unpivot_value|update_set)_ip(_empties)?$`, "SQL: an inet result of -mode, -arg-*, unpivot or update -set prints DuckDB's INET struct (its kind is not recorded)"},
-	{`^(group-by|window)_string-agg_t(_empties)?$`, "SQL: string-agg of a time uses the engine's text, not RFC 3339"},
-	{`^group-by_collect_`, "SQL: -collect lists a time, an inet or a decimal in the engine's own form"},
-	{`^describe_FIELDS_(w|d)(_empties)?$`, "describe: an int128's max is wrong in every lane; SQL calls a decimal float"},
-	{`^update_set_f(_empties)?$`, "SQL: update -set of a literal into a float column writes text"},
-	// Missing values.
-	{`^(sort_FIELDS|window_order)_.*_empties$`, "a missing value orders first in exec and last in SQL (NULLS LAST)"},
-	{`^window_min_.*_empties$`, "window -min over a running frame is missing at a row whose own value is missing"},
-	{`^window_(lag|lead)-default_`, "lag/lead -default where the neighbour exists but is missing: exec fills the default; Ross chose SQL's (default only past the edge, DFC163 §7)"},
-	{`^(group-by|window)_(first|last)_.*_empties$`, "first/last skip a missing value in exec; Ross chose that, and the SQL lanes take the last row's NULL (DFC163 §7)"},
-	// Floats.
-	{`^(group-by|window)_(variance|stddev|median|percentile)_(i|f|d|w)(_empties)?$`, "variance, stddev and percentile interpolation differ from DuckDB in the last digit; Ross chose to adopt the engines' formulas (DFC163 §7)"},
+	{`^(group-by|window)_string-agg_t(_empties)?$`, "SQL: string-agg of a time uses the engine's text; exec keeps each value's own offset, which a TIMESTAMPTZ does not (a decision: the text of a time)"},
+	{`^group-by_collect_t(_empties)?$`, "SQL: -collect lists a time as the engine's text; exec keeps each value's own offset, which a TIMESTAMPTZ does not (a decision: the text of a time)"},
 	// Commands with several gaps.
-	{`^extract_field_`, "extract: exec's error has no Error: prefix; typed refuses a non-string field exec reads as text"},
-	{`^resample_`, "resample: int128/decimal values and axes (Ross: support both), a missing timestamp exec refuses, typed -time i does not compile"},
-	{`^update_set-bucket_`, "bucket over int128/decimal (Ross: support), numeric widths, SQL answers where exec refuses"},
-	{`^update_set_(d|ip|j)(_empties)?$`, "update -set literal: record codegen ignores the column's declared type; typed refuses a decimal or inet column"},
 	// The harness.
 	{`^top_field_(b|s)(_empties)?$`, "top over ties: which tied rows win is arbitrary"},
 }
@@ -493,15 +476,11 @@ func runMatrixCell(t *testing.T, bin, pipeline string, c matrixCell) string {
 			ec.Skip[lane] = why
 		}
 	}
-	// The decimal column passes through every cell (unless the stage
-	// retypes it); in a decimal cell, the results that keep a value's type
-	// and an unpivot's value column are decimals too.
-	if !(c.cmd == "cast" && c.typ.col == "d") { // cast -type d string makes it text
-		ec.Decimals = []string{"d"}
-	}
-	if c.typ.col == "d" && matrixKeepsType[strings.TrimPrefix(c.flag, "-")] {
-		ec.Decimals = append(ec.Decimals, append([]string{"value"}, c.results...)...)
-	}
+	// The output's decimal columns, by exec's own header: the decimal
+	// column where it passes through, and every result the stage made a
+	// decimal (a sum, an extreme, a bucket, an unpivot's value). A list of
+	// the flags that keep a value's type missed bucket().
+	ec.Decimals = matrixDecimalColumns(stdout)
 	// A stage with no SQL translation skips the SQL lanes, as a case's
 	// Skip["duckdb"] does: that is a known gap, not this oracle's.
 	if _, se, err := matrixShell("export SSQL_MODE=record && "+pipeline+" | "+bin+" to jsonl | "+bin+" generate sql", env); err != nil {
@@ -516,12 +495,25 @@ func runMatrixCell(t *testing.T, bin, pipeline string, c matrixCell) string {
 	return "pass"
 }
 
-// matrixKeepsType: the flags whose result is one of the field's values,
-// or a sum of them (a decimal's sum is a decimal).
-var matrixKeepsType = map[string]bool{
-	"sum": true, "min": true, "max": true, "first": true, "last": true, "any": true, "mode": true,
-	"lag": true, "lead": true, "lag-default": true, "lead-default": true, "nth-value": true,
-	"arg-max": true, "arg-min": true, "value": true, "set-field": true, "as": true,
+// matrixDecimalColumns are the columns exec's _schema header says are
+// decimals.
+func matrixDecimalColumns(out string) []string {
+	line, _, _ := strings.Cut(out, "\n")
+	var hdr struct {
+		Schema struct {
+			Types map[string]string `json:"types"`
+		} `json:"_schema"`
+	}
+	var cols []string
+	if json.Unmarshal([]byte(line), &hdr) == nil {
+		for col, typ := range hdr.Schema.Types {
+			if strings.HasPrefix(typ, "decimal") {
+				cols = append(cols, col)
+			}
+		}
+	}
+	slices.Sort(cols)
+	return cols
 }
 
 // matrixTypesSurvive: every input column still in the stage's output,

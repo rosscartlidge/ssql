@@ -610,36 +610,53 @@ func sqlStringType() string {
 // Aggregate spellings that differ between engines (DFC132 §3 table). Each
 // takes the quoted field and renders the whole aggregate expression.
 
+// sqlAggCollect lists a group's present values, as exec's Collect does:
+// a NULL is skipped (DuckDB's LIST kept it as a null element), a group
+// with none is the empty list, and an address is listed as its text
+// (DuckDB listed INET structs; DFC163 §7).
 func sqlAggCollect(qf string) string {
-	if sqlDialectCur == dialectDuckDB {
-		return "LIST(" + qf + ")"
+	elem := qf
+	if sqlColumnKinds[strings.Trim(qf, `"`)] == "inet" {
+		elem = sqlInetText(qf)
 	}
-	return "array_agg(" + qf + ")"
+	present := " FILTER (WHERE " + qf + " IS NOT NULL)"
+	switch sqlDialectCur {
+	case dialectDuckDB:
+		return "COALESCE(LIST(" + elem + ")" + present + ", [])"
+	case dialectPostgres:
+		return "COALESCE(array_agg(" + elem + ")" + present + ", '{}')"
+	}
+	return "COALESCE(array_agg(" + elem + ")" + present + ", make_array())"
 }
 
+// sqlAggFirst and sqlAggLast skip a missing value, as exec does (Ross,
+// DFC163 §7): the engines' first/last take a NULL row's NULL.
 func sqlAggFirst(qf string) string {
+	present := " FILTER (WHERE " + qf + " IS NOT NULL)"
 	switch sqlDialectCur {
 	case dialectPostgres:
-		return "(array_agg(" + qf + "))[1]"
+		return "(array_agg(" + qf + ")" + present + ")[1]"
 	case dialectDataFusion:
-		return "first_value(" + qf + ")"
+		return "first_value(" + qf + ")" + present
 	}
-	return "first(" + qf + ")"
+	return "first(" + qf + ")" + present
 }
 
 func sqlAggLast(qf string) string {
+	present := " FILTER (WHERE " + qf + " IS NOT NULL)"
 	switch sqlDialectCur {
 	case dialectPostgres:
-		return "(array_agg(" + qf + "))[cardinality(array_agg(" + qf + "))]"
+		agg := "array_agg(" + qf + ")" + present
+		return "(" + agg + ")[cardinality(" + agg + ")]"
 	case dialectDataFusion:
-		return "last_value(" + qf + ")"
+		return "last_value(" + qf + ")" + present
 	}
-	return "last(" + qf + ")"
+	return "last(" + qf + ")" + present
 }
 
 func sqlAggAny(qf string) string {
-	if sqlDialectCur == dialectDataFusion {
-		return "first_value(" + qf + ")"
+	if sqlDialectCur == dialectDataFusion { // any_value skips a NULL; first_value does not
+		return "first_value(" + qf + ") FILTER (WHERE " + qf + " IS NOT NULL)"
 	}
 	return "any_value(" + qf + ")"
 }
@@ -657,6 +674,7 @@ func sqlAggMode(qf string) string {
 // double for integer input (DataFusion 54 averages the two middle values);
 // Postgres has only the ordered-set form.
 func sqlAggMedian(qf string) string {
+	qf = sqlQuantileArg(qf)
 	if sqlDialectCur == dialectPostgres {
 		return "percentile_cont(0.5) WITHIN GROUP (ORDER BY " + qf + ")"
 	}
@@ -665,6 +683,7 @@ func sqlAggMedian(qf string) string {
 
 func sqlAggPercentile(qf, p string) string {
 	p = strings.TrimSpace(p)
+	qf = sqlQuantileArg(qf)
 	if sqlDialectCur == dialectDuckDB {
 		return fmt.Sprintf("quantile_cont(%s, %s)", qf, p)
 	}
@@ -684,18 +703,22 @@ func sqlAggStringAgg(qf, sep string) string {
 }
 
 // sqlAggArgExtreme renders arg_max (desc=true) / arg_min: the value of qf
-// on the row where qby is largest/smallest.
+// on the row where qby is largest/smallest. A row with no qby is no
+// candidate, as in exec and DuckDB's arg_max: NULLS LAST in both
+// directions, where Postgres's and DataFusion's DESC default put the NULL
+// first and arg-max answered that row's value (DFC163 §7).
 func sqlAggArgExtreme(qf, qby string, desc bool) string {
-	dir := "ASC"
+	dir := "ASC NULLS LAST"
 	name := "arg_min"
 	if desc {
-		dir, name = "DESC", "arg_max"
+		dir, name = "DESC NULLS LAST", "arg_max"
 	}
+	present := " FILTER (WHERE " + qby + " IS NOT NULL)" // a group with no BY has no value
 	switch sqlDialectCur {
 	case dialectPostgres:
-		return fmt.Sprintf("(array_agg(%s ORDER BY %s %s))[1]", qf, qby, dir)
+		return fmt.Sprintf("(array_agg(%s ORDER BY %s %s)%s)[1]", qf, qby, dir, present)
 	case dialectDataFusion:
-		return fmt.Sprintf("first_value(%s ORDER BY %s %s)", qf, qby, dir)
+		return fmt.Sprintf("first_value(%s ORDER BY %s %s)%s", qf, qby, dir, present)
 	}
 	return fmt.Sprintf("%s(%s, %s)", name, qf, qby)
 }

@@ -171,8 +171,28 @@ type swLagDefault struct {
 
 func (s *swLagDefault) update(record Record, pos int, order []OrderField, prev *Record) any {
 	v := s.swLag.update(record, pos, order, prev)
-	if v == nil {
-		return s.def
+	if s.filled <= s.offset {
+		return windowDefaultLike(s.def, record, s.field) // past the partition's edge; a missing neighbour stays missing
 	}
 	return v
 }
+
+// windowDefaultLike is a LAG/LEAD default as the field's column holds it:
+// the flag's literal is an int, float, bool or text, and text standing in
+// for a json column is that column's JSON (the typed lane's reading; it
+// was the string "[1]" beside nested values, DFC163 §7). row is the row
+// the default is written on, its field the column's kind.
+func windowDefaultLike(def any, row Record, field string) any {
+	text, ok := def.(string)
+	if !ok {
+		return def
+	}
+	if v, _ := Get[any](row, field); isJSONValue(v) {
+		if out, ok := CastValue(text, FieldTypeJSON); ok {
+			return out
+		}
+	}
+	return def
+}
+
+func isJSONValue(v any) bool { _, ok := v.(JSONString); return ok }

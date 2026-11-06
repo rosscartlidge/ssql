@@ -406,7 +406,7 @@ seconds), so an untyped CSV column works in exec; typed programs and
 | `tz(ts, zone)` | time | The same instant, read in another zone by the functions around it | `hour(tz(ts, "America/New_York"))` |
 | `strftime(ts, pattern)` | string | Format on the pipeline zone's wall clock with strftime directives (`%Y %m %d %H %M %S %f %p %b %B %a %A %j %z %Z %G %V %u %%`, and `%-d`/`%-m` unpadded) — DuckDB's and Python's language | `strftime(ts, "%Y-%m-%d %H:%M")` → `2026-01-05 10:30` |
 | `strptime(text, pattern)` | time | Parse text with a strftime pattern; text with no zone of its own is a wall clock in the pipeline zone (an ISO export through `date(v)` is UTC) | `strptime(when, "%d/%m/%Y")` |
-| `bucket(ts, "5m")` | same as in | Snap down to an epoch-aligned bucket of a fixed width (int/float epochs with the unit read from magnitude, RFC 3339 strings, or a `time`); zone-free | `bucket(ts, "1m")` |
+| `bucket(ts, "5m")` | same as in | Snap down (toward −∞) to an epoch-aligned bucket of a fixed width (int, int128, decimal or float epochs with the unit read from magnitude — a decimal exact at its scale — RFC 3339 strings, or a `time`); zone-free | `bucket(ts, "1m")` |
 | `duration(str)` | duration | Parse a Go duration (ns, us, ms, s, m, h) | `ts + duration("1h30m")` |
 
 The names and argument orders are DuckDB's (`date_trunc`, `date_add`,

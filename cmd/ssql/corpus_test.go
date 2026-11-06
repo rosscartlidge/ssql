@@ -267,15 +267,21 @@ func corpusData(t *testing.T) string {
 			// DFC155 E: money, shuffled, with values a float sum gets wrong
 			// and ones a declared scale must round; a decimal key beside
 			// an integer key.
-			"money.csv":          "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
-			"fractions.csv":      "k,amt\nb,-2.75\nd,0.50\na,2.75\nc,-0.49\n",
-			"matrix.csv":         matrixCSV, // DFC163 §2.1: a column per declarable type
-			"matrix_empties.csv": matrixEmptiesCSV,
-			"empty_time.csv":     "k,v\n2,2026-01-02\n1,\n3,2026-01-01\n",
-			"zone_times.csv":     "k,t\n1,2026-01-02T09:00:00+11:00\n2,2026-01-01T23:30:00Z\n3,2026-01-01T12:00:00-05:00\n",
-			"dec.csv":            "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
-			"big.csv":            "k,amt\nx,90071992547409.92\nx,0.01\nx,0.01\n",
-			"ids.csv":            "id,n\n1,one\n5,five\n",
+			"money.csv":              "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
+			"fractions.csv":          "k,amt\nb,-2.75\nd,0.50\na,2.75\nc,-0.49\n",
+			"matrix.csv":             matrixCSV, // DFC163 §2.1: a column per declarable type
+			"matrix_empties.csv":     matrixEmptiesCSV,
+			"empty_time.csv":         "k,v\n2,2026-01-02\n1,\n3,2026-01-01\n",
+			"stats_floats.csv":       "k,g,v\n5,y,9\n1,x,-3.1\n7,y,0.3\n3,y,100\n6,z,7\n2,y,10\n4,x,9.5\n",
+			"resample_wide.csv":      "t,v,w\n2026-01-01T00:00:40Z,2.25,40\n,9.99,7\n2026-01-01T00:00:10Z,1.50,100000000000000000000\n2026-01-01T00:00:20Z,,\n",
+			"resample_axis.csv":      "e,v\n30.25,3\n10.50,1\n",
+			"set_typed.csv":          "k,f,d,ip,j\n2,3,4.10,::1,{}\n1,1.5,2.25,10.0.0.1,[2]\n",
+			"wide_decimal.csv":       "w,d\n9,9.50\n100000000000000000000,10.25\n-5,-3.10\n",
+			"first_last_missing.csv": "id,g,v\n1,a,\n2,a,3\n3,a,\n4,b,5\n5,b,\n6,c,\n",
+			"zone_times.csv":         "k,t\n1,2026-01-02T09:00:00+11:00\n2,2026-01-01T23:30:00Z\n3,2026-01-01T12:00:00-05:00\n",
+			"dec.csv":                "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
+			"big.csv":                "k,amt\nx,90071992547409.92\nx,0.01\nx,0.01\n",
+			"ids.csv":                "id,n\n1,one\n5,five\n",
 			// DFC162: addresses whose text order is not their inet order,
 			// shuffled, with spellings of one value (10.0.0.1 and /32; ::1
 			// and 0:0:0:0:0:0:0:1), an IPv4-compatible and a v4-mapped one.

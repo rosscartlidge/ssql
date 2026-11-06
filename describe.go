@@ -34,6 +34,10 @@ type fieldStats struct {
 	hasStr   bool
 	hasBool  bool
 	nums     []float64 // numeric values, for min/max/mean/median
+	// The exact integer extremes: through nums a float64 past 2^63 came
+	// back from int64() as -2^63, an int128 max of 1e20 described as
+	// -9223372036854775808 (DFC163 §7).
+	minInt, maxInt Int128
 }
 
 // DescribeRecords profiles a record stream: one output record per
@@ -134,7 +138,7 @@ func DescribeRecords(records iter.Seq[Record], cfg DescribeConfig) iter.Seq[Reco
 				if s.hasFloat || s.hasDec {
 					m = m.Float("min", s.nums[0]).Float("max", s.nums[n-1])
 				} else {
-					m = m.Int("min", int64(s.nums[0])).Int("max", int64(s.nums[n-1]))
+					m = SetValue(SetValue(m, "min", narrowInt128(s.minInt)), "max", narrowInt128(s.maxInt))
 				}
 				m = m.Float("mean", sum/float64(n)).Float("median", median)
 			}
@@ -160,15 +164,15 @@ func (s *fieldStats) observe(v any) {
 		s.hasStr = true
 		s.distinct[x] = struct{}{}
 	case int64:
-		s.hasInt = true
+		s.observeInt(Int128From(x))
 		s.nums = append(s.nums, float64(x))
 		s.distinct["i:"+strconv.FormatInt(x, 10)] = struct{}{}
 	case Int128:
-		s.hasInt = true
+		s.observeInt(x)
 		s.nums = append(s.nums, x.Float64())
 		s.distinct["i:"+x.String()] = struct{}{}
 	case int:
-		s.hasInt = true
+		s.observeInt(Int128From(int64(x)))
 		s.nums = append(s.nums, float64(x))
 		s.distinct["i:"+strconv.Itoa(x)] = struct{}{}
 	case float64:
@@ -193,6 +197,17 @@ func (s *fieldStats) observe(v any) {
 	s.count++
 }
 
+// observeInt notes an integer and its exact extremes.
+func (s *fieldStats) observeInt(x Int128) {
+	if !s.hasInt || x.Cmp(s.minInt) < 0 {
+		s.minInt = x
+	}
+	if !s.hasInt || x.Cmp(s.maxInt) > 0 {
+		s.maxInt = x
+	}
+	s.hasInt = true
+}
+
 func (s *fieldStats) typeName() string {
 	switch {
 	case s.hasStr:
@@ -215,4 +230,12 @@ func DescribeFilter(cfg DescribeConfig) Filter[Record, Record] {
 	return func(in iter.Seq[Record]) iter.Seq[Record] {
 		return DescribeRecords(in, cfg)
 	}
+}
+
+// narrowInt128 is x as an int64 when it fits, else the Int128 itself.
+func narrowInt128(x Int128) any {
+	if i, ok := x.Int64(); ok {
+		return i
+	}
+	return x
 }

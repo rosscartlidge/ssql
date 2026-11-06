@@ -1316,6 +1316,34 @@ func sqlLiteralFor(field, value string) string {
 	return sqlLiteral(value)
 }
 
+// sqlSetLiteral renders an `update -set` literal as the value exec's
+// ssql.IntoColumn writes, and its kind: into a decimal column at the
+// column's scale, into an int column truncated, and a float as a DOUBLE —
+// a bare 9.75 is a DECIMAL literal to DuckDB and Postgres, and DuckDB
+// printed the float column's new value as the text "9.75" (DFC163 §7).
+func sqlSetLiteral(field, value string) (sqlText, kind string) {
+	col := sqlColumnKinds[field]
+	if base, scale := ssql.ParseWireType(col); base == "decimal" && scale >= 0 {
+		if _, err := strconv.ParseFloat(value, 64); err == nil {
+			return "CAST('" + escapeSQL(value) + "' AS " + sqlDecimalType(scale) + ")", col
+		}
+	}
+	lit := sqlLiteralFor(field, value)
+	if col == "inet" || col == "string" { // sqlLiteralFor cast or quoted it as the column
+		return lit, col
+	}
+	if _, err := strconv.ParseInt(lit, 10, 64); err == nil {
+		return lit, "int"
+	}
+	if f, err := strconv.ParseFloat(lit, 64); err == nil && !math.IsInf(f, 0) && !math.IsNaN(f) {
+		if col == "int" {
+			return "CAST(trunc(" + lit + ") AS BIGINT)", "int" // coerceToInt64 truncates
+		}
+		return "CAST(" + lit + " AS DOUBLE PRECISION)", "float"
+	}
+	return lit, ""
+}
+
 // sqlLiteral renders a CLI value token as a SQL literal. Numeric and boolean
 // tokens stay bare — quoting them as strings is semantically fragile ('9' >
 // '15' is true as strings, false as numbers; DuckDB happens to coerce by
@@ -1373,6 +1401,11 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 			if i+n < len(args) {
 				if err := aggDialectRefusal(d.fn, false, false); err != nil {
 					return err
+				}
+				if d.hasField {
+					if err := sqlAggNotANumber(d.fn, args[i+1]); err != nil {
+						return fmt.Errorf("group-by %w", err)
+					}
 				}
 				qf, extra := "", ""
 				if d.hasField {
@@ -1604,11 +1637,7 @@ func translateSort(q *sqlQuery, args []string) error {
 	var entries []string
 	for _, c := range clauses {
 		for _, f := range c.fields {
-			entry := quoteIdent(f)
-			if c.desc {
-				entry += " DESC"
-			}
-			entries = append(entries, entry)
+			entries = append(entries, sqlOrderTerm(quoteIdent(f), c.desc))
 		}
 	}
 	// A later `sort` re-sorts stably: its keys take precedence and any
@@ -1651,14 +1680,9 @@ func translateLimit(q *sqlQuery, args []string) error {
 	original := append([]string(nil), q.orderBy...)
 	reversed := make([]string, len(original))
 	for i, e := range original {
-		switch {
-		case strings.HasSuffix(e, " DESC"):
-			reversed[i] = strings.TrimSuffix(e, " DESC") + " ASC"
-		case strings.HasSuffix(e, " ASC"):
-			reversed[i] = strings.TrimSuffix(e, " ASC") + " DESC"
-		default:
-			reversed[i] = e + " DESC" // bare entry sorts ASC by default
-		}
+		// The whole order backwards, the place of a missing value with it.
+		term, desc, _ := splitSortTerm(e)
+		reversed[i] = sqlOrderTerm(term, !desc)
 	}
 	q.orderBy = reversed
 	q.limit = n
@@ -1740,11 +1764,7 @@ func translateTop(q *sqlQuery, args []string) error {
 		q.limit = limit
 	}
 	if field != "" {
-		dir := "DESC"
-		if asc {
-			dir = "ASC"
-		}
-		q.orderBy = append(q.orderBy, quoteIdent(field)+" "+dir)
+		q.orderBy = append(q.orderBy, sqlOrderTerm(quoteIdent(field), !asc))
 	}
 	return nil
 }
@@ -2342,6 +2362,9 @@ func translateWindow(q *sqlQuery, args []string) error {
 				if d.extraArg != "" {
 					extra = args[i+2]
 				}
+				if err := sqlAggNotANumber(d.fn, args[i+1]); err != nil {
+					return fmt.Errorf("window %w", err)
+				}
 				cur.registryFns = append(cur.registryFns, d.fn)
 				cur.frameFns = append(cur.frameFns, d.flag)
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s AS %s", d.sql(quoteIdent(args[i+1]), extra), quoteIdent(args[i+n])))
@@ -2537,6 +2560,9 @@ func translateWindow(q *sqlQuery, args []string) error {
 				} else {
 					cur.frameFns = append(cur.frameFns, args[i])
 				}
+				if err := sqlAggNotANumber(args[i][1:], args[i+1]); err != nil {
+					return fmt.Errorf("window %w", err)
+				}
 				sqlFunc := windowSQLFunc(args[i])
 				arg := quoteIdent(args[i+1])
 				if args[i] == "-sum" {
@@ -2577,6 +2603,18 @@ func translateWindow(q *sqlQuery, args []string) error {
 				fa := c.fargs[j]
 				if kind := sqlColumnKinds[fa[0]]; kind != "" {
 					sqlColumnKinds[fa[len(fa)-1]] = kind
+				}
+			default:
+				// A registry aggregate over the frame: its result's kind by
+				// the registry's own rule, as group-by records it (a -mode or
+				// -arg-max of an inet is an inet; DFC163 §7).
+				if d, ok := isWindowRegistryFlag(flag); ok && d.hasField {
+					fa := c.fargs[j]
+					if in := sqlColumnKinds[fa[0]]; in != "" {
+						if wt := d.wireType(in); wt != "" {
+							sqlColumnKinds[fa[len(fa)-1]] = wt
+						}
+					}
 				}
 			}
 		}
@@ -2659,9 +2697,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 				default:
 					quoted[j] = quoteIdent(f)
 				}
-				if c.desc {
-					quoted[j] += " DESC"
-				}
+				quoted[j] = sqlOrderTerm(quoted[j], c.desc)
 			}
 			overOrder = quoted
 			overParts = append(overParts, "ORDER BY "+strings.Join(quoted, ", "))
@@ -2732,14 +2768,23 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if sqlTimeColumns[f] {
 				o = sqlTimeColumnRef(f)
 			}
-			if last.desc {
-				o += " DESC"
-			}
-			order = append(order, o)
+			order = append(order, sqlOrderTerm(o, last.desc))
 		}
 		q.orderBy = order
 	}
 	return nil
+}
+
+// sqlOrderTerm renders one ORDER BY term with exec's place for a missing
+// value, the smallest (CompareAny): first ascending, last descending. The
+// engines' defaults put NULL last ascending (DuckDB, Postgres, DataFusion)
+// and Postgres puts it first descending, so `sort` and `window -order`
+// ordered the rows with a missing key differently (DFC163 §7).
+func sqlOrderTerm(expr string, desc bool) string {
+	if desc {
+		return expr + " DESC NULLS LAST"
+	}
+	return expr + " ASC NULLS FIRST"
 }
 
 func windowSQLFunc(flag string) string {
@@ -3077,11 +3122,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			if i+2 >= len(args) {
 				return fmt.Errorf("incomplete -set in update")
 			}
-			valueSQL := sqlLiteralFor(args[i+1], args[i+2])
-			kind := ""
-			if _, err := strconv.ParseInt(valueSQL, 10, 64); err == nil {
-				kind = "int"
-			}
+			valueSQL, kind := sqlSetLiteral(args[i+1], args[i+2])
 			assignments = append(assignments, assignment{
 				clause:   clauseIdx,
 				field:    args[i+1],
@@ -3766,16 +3807,13 @@ func rustSourceSchema(cols []string, overrides map[string]string) []sqlPair {
 	schema := make([]sqlPair, 0, len(cols))
 	for _, c := range cols {
 		kind := sqlColumnKinds[c]
-		switch {
-		case kind == "":
-			kind = "string"
-		case kind == "time":
-			// ssql reads a time cell by its own rules (zones, -tz, the
-			// formats it accepts); DataFusion's CSV timestamp parser has
-			// others. Read it as text: a later cast or expression sees the
-			// same string the record path holds until it is cast.
+		if kind == "" {
 			kind = "string"
 		}
+		// A time stays a time: the reader takes it as text and the
+		// program casts it with to_timestamp (rustGen.source), which
+		// honours each value's offset. Read as text alone, a sort or a
+		// comparison ordered the spelling (DFC163 §7).
 		schema = append(schema, sqlPair{c, kind})
 	}
 	return schema
@@ -4048,6 +4086,23 @@ func buildResampleSQL(q *sqlQuery, timeField string, everyNs int64, values []str
 	if fill == "" {
 		fill = "previous"
 	}
+	// The kinds exec refuses, refused here rather than cast: DuckDB made a
+	// bool value 1.0 (DFC163 §7). A text axis is RFC 3339 text, which the
+	// Go lanes format back into its layout.
+	// ssql:domain fixed: the kinds with no place on an axis or in a value
+	switch sqlColumnKinds[timeField] {
+	case "string":
+		return fmt.Errorf("resample over string timestamps has no SQL translation — numeric epochs only; use generate go")
+	case "bool", "inet", "json":
+		return fmt.Errorf("resample: timestamp field %q is a %s (want an int, int128, decimal, float, string or time)", timeField, sqlColumnKinds[timeField])
+	}
+	for _, v := range values {
+		// ssql:domain fixed: the kinds that are not numbers
+		switch kind := sqlColumnKinds[v]; kind {
+		case "bool", "string", "time", "inet", "json":
+			return fmt.Errorf("resample: value field %q is a %s, want a numeric field", v, kind)
+		}
+	}
 
 	// The epoch unit (in ns): pinned by -time-unit, else detected from
 	// the data by magnitude — Go's exact thresholds.
@@ -4085,25 +4140,48 @@ func buildResampleSQL(q *sqlQuery, timeField string, everyNs int64, values []str
 		tsNum, gridOut = "epoch_us("+tsCol+")", "make_timestamp(__grid.__g)"
 		unitExpr, timeUnit = "1000", "us"
 	}
+	// A float or decimal epoch runs on exec's own integer, nanoseconds
+	// truncated toward zero (tsCodec.toNanos), and comes back the way
+	// fromNanos divides it: CAST(… AS BIGINT) in the column's unit rounded
+	// 30.25 s to 30 where exec kept 30.25 s, and the grid then took the
+	// other neighbour (DFC163 §7).
+	kind := sqlColumnKinds[timeField]
+	inNanos := kind == "float" || strings.HasPrefix(kind, "decimal")
+	if inNanos {
+		tsNum = "CAST(trunc(" + tsCol + " * (SELECT u FROM __unit)) AS BIGINT)"
+		gridOut = "(CAST(__grid.__g AS DOUBLE) / (SELECT u FROM __unit))"
+		if base, scale := ssql.ParseWireType(kind); base == "decimal" {
+			gridOut = "CAST(" + gridOut + " AS " + sqlDecimalType(scale) + ")"
+		}
+	}
 
 	var sb strings.Builder
 	sb.WriteString("(\n  WITH __base AS (SELECT * FROM " + src + " WHERE " + tsCol + " IS NOT NULL),\n")
 	// step in SOURCE units; error() if -every is finer than the unit
 	// (sub-unit grids are unrepresentable in source-unit integers).
-	if timeUnit != "" {
+	switch {
+	case timeUnit != "":
 		// Pinned unit: a bare one-row CTE. (Deriving it FROM __base
 		// without an aggregate yields one row PER BASE ROW and the
 		// cross-join multiplies the grid — caught by the linear
 		// equivalence case.)
 		sb.WriteString("  __unit AS (SELECT " + unitExpr + " AS u),\n")
-	} else {
+	case inNanos:
+		sb.WriteString(fmt.Sprintf("  __unit AS (SELECT %s AS u FROM (SELECT %s AS __ts FROM __base)),\n", unitExpr, tsCol))
+	default:
 		sb.WriteString(fmt.Sprintf("  __unit AS (SELECT %s AS u FROM (SELECT CAST(%s AS BIGINT) AS __ts FROM __base)),\n",
 			unitExpr, tsNum))
 	}
-	sb.WriteString(fmt.Sprintf("  __step AS (SELECT CASE WHEN %d %% u != 0 THEN CAST(error('resample: -every is finer than the epoch unit — use generate go') AS BIGINT) ELSE %d // u END AS s FROM __unit),\n",
-		everyNs, everyNs))
+	if inNanos {
+		sb.WriteString(fmt.Sprintf("  __step AS (SELECT %d AS s),\n", everyNs)) // the axis is in nanoseconds
+	} else {
+		sb.WriteString(fmt.Sprintf("  __step AS (SELECT CASE WHEN %d %% u != 0 THEN CAST(error('resample: -every is finer than the epoch unit — use generate go') AS BIGINT) ELSE %d // u END AS s FROM __unit),\n",
+			everyNs, everyNs))
+	}
 	sb.WriteString(fmt.Sprintf("  __mm AS (SELECT min(%s) AS mn, max(%s) AS mx FROM __base),\n", tsNum, tsNum))
-	sb.WriteString("  __bounds AS (SELECT CAST(floor(mn * 1.0 / s) * s AS BIGINT) AS lo, CAST(floor(mx * 1.0 / s) * s AS BIGINT) AS hi, s FROM __mm, __step),\n")
+	// The bounds snap toward −∞ in integers (SnapToBucket): floor(mn·1.0/s)
+	// is a float, which loses digits at a nanosecond epoch's 1.7e18.
+	sb.WriteString("  __bounds AS (SELECT mn - (((mn % s) + s) % s) AS lo, mx - (((mx % s) + s) % s) AS hi, s FROM __mm, __step),\n")
 	sb.WriteString("  __grid AS (SELECT __g FROM __bounds, generate_series(lo, hi, s) __t(__g)),\n")
 	for i, v := range values {
 		sb.WriteString(fmt.Sprintf("  __s%d AS (SELECT CAST(%s AS BIGINT) AS __ts, max(CAST(%s AS DOUBLE)) AS v FROM __base WHERE %s IS NOT NULL GROUP BY __ts),\n",
@@ -4210,7 +4288,9 @@ func translateDescribe(q *sqlQuery, op *lib.Op, args []string) error {
 			sb.WriteString("\n  UNION ALL SELECT ")
 		}
 		fmt.Fprintf(&sb, "%d AS __ord, '%s' AS \"field\",\n", i, escapeSQL(f))
-		fmt.Fprintf(&sb, "    CASE WHEN %s THEN 'int' WHEN %s THEN 'float' WHEN %s = 'BOOLEAN' THEN 'bool' ELSE 'string' END AS \"type\",\n", isInt, isNum, ty)
+		// A DECIMAL column is exec's "decimal" (fieldStats.typeName); it
+		// was described as float (DFC163 §7).
+		fmt.Fprintf(&sb, "    CASE WHEN %s THEN 'int' WHEN %s LIKE 'DECIMAL%%' THEN 'decimal' WHEN %s THEN 'float' WHEN %s = 'BOOLEAN' THEN 'bool' ELSE 'string' END AS \"type\",\n", isInt, ty, isNum, ty)
 		fmt.Fprintf(&sb, "    count(%s) AS \"count\", count(*) - count(%s) AS \"missing\",\n", present, present)
 		fmt.Fprintf(&sb, "    count(DISTINCT %s) FILTER (WHERE %s IS NOT NULL) AS \"distinct\",\n", c, present)
 		fmt.Fprintf(&sb, "    CASE WHEN %s THEN CAST(min(%s) AS DOUBLE) END AS \"min\", CASE WHEN %s THEN CAST(max(%s) AS DOUBLE) END AS \"max\",\n", isNum, c, isNum, c)
@@ -4318,6 +4398,21 @@ func translateUnpivot(q *sqlQuery, op *lib.Op, args []string) error {
 	})
 	sqlOnlyReset(q, append(append([]string(nil), ids...), col, val))
 	q.hatch = &sqlHatch{unpivot: &sqlUnpivot{ids: ids, values: values, col: col, val: val}}
+	// The value column holds the folded columns' values: their kind when
+	// they share one (an inet's, cast to text at the output; unrecorded it
+	// printed DuckDB's INET struct, DFC163 §7), else unknown.
+	kind := sqlColumnKinds[values[0]]
+	for _, v := range values[1:] {
+		if sqlColumnKinds[v] != kind {
+			kind = ""
+		}
+	}
+	sqlColumnKinds[col] = "string"
+	if kind != "" {
+		sqlColumnKinds[val] = kind
+	} else {
+		delete(sqlColumnKinds, val)
+	}
 	return nil
 }
 

@@ -173,7 +173,24 @@ func assembleRust(input io.Reader, funcName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if sqlZone != "UTC" && rustDeclaresTime(q) {
+		return "", dialectRefuse("a declared time in zone "+sqlZone, "DataFusion reads a time with no offset as UTC; run the pipeline with -tz UTC")
+	}
 	return renderRust(q, funcName), nil
+}
+
+// rustDeclaresTime reports whether a source of q declares a time column.
+func rustDeclaresTime(q *sqlQuery) bool {
+	for ; q != nil; q = q.inner {
+		if q.source != nil {
+			for _, c := range q.source.schema {
+				if c.val == "time" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // rustGen accumulates the pipeline function's body.
@@ -462,7 +479,11 @@ func (g *rustGen) source(s *sqlSource, name string) {
 		// text-to-decimal cast — round half away from zero (12.35). Found
 		// by the rust lane's decimal cases on the day the read was lifted
 		// (2026-10-30).
-		var decimals []sqlPair
+		// A declared time is read as text too and becomes a timestamp
+		// after the read, each value at its own offset (DataFusion's CSV
+		// timestamp parser has its own rules; assembleRust refuses a
+		// pipeline zone other than UTC, which a zone-less time would need).
+		var decimals, times []sqlPair
 		if len(s.schema) > 0 {
 			schema := name + "_schema"
 			g.line("let %s = Schema::new(vec![", schema)
@@ -472,6 +493,9 @@ func (g *rustGen) source(s *sqlSource, name string) {
 					decimals = append(decimals, sqlPair{c.col, arrow})
 					arrow = "DataType::Utf8"
 				}
+				if c.val == "time" {
+					times = append(times, c)
+				}
 				g.line("    Field::new(%s, %s, true),", rustStr(c.col), arrow)
 			}
 			g.line("]);")
@@ -480,6 +504,9 @@ func (g *rustGen) source(s *sqlSource, name string) {
 		g.line("let %s = ctx.read_csv(%s, %s).await?;", name, paths, opts)
 		for _, d := range decimals {
 			g.line("let %s = %s.with_column(%s, cast(col(%s), %s))?;", name, name, rustStr(d.col), rustStr(d.col), d.val)
+		}
+		for _, t := range times {
+			g.line("let %s = %s.with_column(%s, to_timestamp(vec![col(%s)]))?;", name, name, rustStr(t.col), rustStr(t.col))
 		}
 	}
 	if len(s.columns) > 0 {
@@ -769,9 +796,9 @@ func (g *rustGen) clauses(q *sqlQuery, name string, next *sqlQuery) {
 	if len(q.orderBy) > 0 && !sortIsDead(q, next) {
 		var sorts []string
 		for _, o := range q.orderBy {
-			term, desc := splitSortTerm(o)
+			term, desc, nullsFirst := splitSortTerm(o)
 			e := g.bind(name, rustTerm(name, term))
-			sorts = append(sorts, fmt.Sprintf("%s.sort(%v, %v)", e, !desc, desc))
+			sorts = append(sorts, fmt.Sprintf("%s.sort(%v, %v)", e, !desc, nullsFirst))
 		}
 		g.line("let %s = %s.sort(vec![%s])?;", name, name, strings.Join(sorts, ", "))
 	}
@@ -937,11 +964,12 @@ func (g *rustGen) agg(a sqlAgg, name string) string {
 		}
 		e = "coalesce(vec![agg::sum(" + c + "), lit(0i64)])"
 	case "collect":
-		e = "agg::array_agg(" + c + ")"
-	case "first", "any":
-		e = "agg::first_value(" + c + ", vec![])"
-	case "last":
-		e = "agg::last_value(" + c + ", vec![])"
+		// The dialect's text (sqlAggCollect): NULLs skipped, an empty group
+		// the empty list.
+	case "first", "any", "last":
+		// A NULL is skipped (the dialect's FILTER, sqlAggFirst).
+		k := map[string]string{"first": "first_value", "any": "first_value", "last": "last_value"}[a.fn]
+		e = fmt.Sprintf("agg::%s(%s, vec![]).filter(%s.is_not_null()).build()?", k, c, c)
 	case "string-agg":
 		e = "string_agg(" + c + ", lit(" + rustStr(a.extra) + "))"
 	case "stddev":
@@ -954,10 +982,14 @@ func (g *rustGen) agg(a sqlAgg, name string) string {
 			e = fmt.Sprintf("agg::percentile_cont(%s.sort(true, false), lit(%sf64))", c, strconv.FormatFloat(p, 'f', -1, 64))
 		}
 	case "arg-max", "arg-min":
-		// first_value(field ORDER BY by DESC|ASC), the dialect's form;
-		// nulls sort as the largest value, as in the SQL.
+		// first_value(field ORDER BY by DESC|ASC NULLS LAST), the
+		// dialect's form: a row with no BY is no candidate.
 		desc := a.fn == "arg-max"
-		e = fmt.Sprintf("agg::first_value(%s, vec![%s.sort(%v, %v)])", c, rustCol(a.extra), !desc, desc)
+		by := rustCol(a.extra)
+		// The order rides on the builder: .build() rebuilds the aggregate
+		// from the builder's own order_by, and first_value(c, order)'s
+		// was lost (the lanes found every arg-max answering the first row).
+		e = fmt.Sprintf("agg::first_value(%s, vec![]).order_by(vec![%s.sort(%v, false)]).filter(%s.is_not_null()).build()?", c, by, !desc, by)
 	}
 	if e == "" {
 		return g.bind(name, rustParse(name, a.expr+" AS "+quoteIdent(a.name)))
@@ -989,12 +1021,12 @@ func (g *rustGen) window(w sqlWin, name string) string {
 	if len(w.orderTerms) > 0 {
 		var sorts []string
 		for _, o := range w.orderTerms {
-			term, desc := splitSortTerm(o)
+			term, desc, nullsFirst := splitSortTerm(o)
 			e := rustTerm(name, term)
 			if strings.Contains(e, "parse_sql_expr") {
 				return text()
 			}
-			sorts = append(sorts, fmt.Sprintf("%s.sort(%v, %v)", e, !desc, desc))
+			sorts = append(sorts, fmt.Sprintf("%s.sort(%v, %v)", e, !desc, nullsFirst))
 		}
 		parts = append(parts, ".order_by(vec!["+strings.Join(sorts, ", ")+"])")
 	}
@@ -1162,15 +1194,22 @@ func rustScalar(v any) (string, bool) {
 	return "", false
 }
 
-// splitSortTerm splits an ORDER BY term into its expression and direction.
-func splitSortTerm(o string) (term string, desc bool) {
+// splitSortTerm splits an ORDER BY term into its expression, its
+// direction and where its NULLs go: as sqlOrderTerm spelled them, else
+// the engine's default for a bare term (last ascending, first
+// descending).
+func splitSortTerm(o string) (term string, desc, nullsFirst bool) {
 	switch {
+	case strings.HasSuffix(o, " ASC NULLS FIRST"):
+		return strings.TrimSuffix(o, " ASC NULLS FIRST"), false, true
+	case strings.HasSuffix(o, " DESC NULLS LAST"):
+		return strings.TrimSuffix(o, " DESC NULLS LAST"), true, false
 	case strings.HasSuffix(o, " DESC"):
-		return strings.TrimSuffix(o, " DESC"), true
+		return strings.TrimSuffix(o, " DESC"), true, true
 	case strings.HasSuffix(o, " ASC"):
-		return strings.TrimSuffix(o, " ASC"), false
+		return strings.TrimSuffix(o, " ASC"), false, false
 	}
-	return o, false
+	return o, false, false
 }
 
 // rustTerm renders a SQL term that is either a quoted column or an

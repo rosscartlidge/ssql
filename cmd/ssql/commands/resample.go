@@ -67,7 +67,7 @@ func RegisterResample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Done().
 			Global().
 			Required().
-			Help("Timestamp field: int64/float64 epoch (unit auto-detected loudly), RFC3339/SQL datetime strings, or a time column (after `cast -type F time`) — the output keeps the input's form").
+			Help("Timestamp field: an int, int128, decimal or float epoch (unit auto-detected loudly), RFC3339/SQL datetime strings, or a time column (after `cast -type F time`) — the output keeps the input's form; a record with no timestamp is skipped").
 			Done().
 
 		Flag("-every").
@@ -151,6 +151,9 @@ func RegisterResample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("resample: -every must be a positive Go duration (5s, 1m, …), got %q", everyStr)
 			}
 			cfg.Every = every
+			if err := cfg.CheckFields(); err != nil { // before generating: every lane refuses alike
+				return err
+			}
 
 			var generate bool
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
@@ -282,12 +285,12 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'resample' references unknown field %q", cfg.TimeField))
 	}
-	// ssql:domain fixed: a resample axis is an int, float, string or time
+	// ssql:domain fixed: a resample axis is an int, int128, decimal, float, string or time
 	switch tsField.GoType {
-	case "int64", "float64", "string", "time.Time":
+	case "int64", "float64", "string", "time.Time", "ssql.Int128", "ssql.Decimal":
 	default:
 		return lib.WriteErrorAndExit(getCommandString(),
-			fmt.Errorf("ssql generate go -typed: 'resample' time field %q has type %s (need int64/float64/string/time.Time)", cfg.TimeField, tsField.GoType))
+			fmt.Errorf("ssql generate go -typed: 'resample' time field %q has type %s (need an int, int128, decimal, float, string or time)", cfg.TimeField, tsField.GoType))
 	}
 	var valFields []lib.TypedSchemaField
 	for _, v := range cfg.Values {
@@ -317,7 +320,7 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 	def.WriteString("}")
 	// Shim in: T → Record with just the fields resample needs.
 	var shimSets strings.Builder
-	// ssql:domain fixed: a resample axis is an int, float, string or time
+	// ssql:domain fixed: a resample axis is an int, int128, decimal, float, string or time
 	switch tsField.GoType {
 	case "int64":
 		fmt.Fprintf(&shimSets, ".Int(%q, r.%s)", cfg.TimeField, tsField.GoName)
@@ -327,6 +330,10 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		fmt.Fprintf(&shimSets, ".String(%q, r.%s)", cfg.TimeField, tsField.GoName)
 	case "time.Time":
 		fmt.Fprintf(&shimSets, ".Time(%q, r.%s)", cfg.TimeField, tsField.GoName)
+	case "ssql.Int128":
+		fmt.Fprintf(&shimSets, ".Int128(%q, r.%s)", cfg.TimeField, tsField.GoName)
+	case "ssql.Decimal":
+		fmt.Fprintf(&shimSets, ".Decimal(%q, r.%s)", cfg.TimeField, tsField.GoName)
 	}
 	for i, f := range valFields {
 		// ssql:domain fixed: a resample value is a float; int128 and decimal widen
@@ -341,7 +348,7 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 	}
 	// Shim out: Record → synthesized struct.
 	var outSets strings.Builder
-	// ssql:domain fixed: a resample axis is an int, float, string or time
+	// ssql:domain fixed: a resample axis is an int, int128, decimal, float, string or time
 	switch tsField.GoType {
 	case "int64":
 		fmt.Fprintf(&outSets, "%s: ssql.GetOr(rec, %q, int64(0)),", tsField.GoName, cfg.TimeField)
@@ -351,6 +358,10 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		fmt.Fprintf(&outSets, "%s: ssql.GetOr(rec, %q, \"\"),", tsField.GoName, cfg.TimeField)
 	case "time.Time":
 		fmt.Fprintf(&outSets, "%s: ssql.GetOr(rec, %q, time.Time{}),", tsField.GoName, cfg.TimeField)
+	case "ssql.Int128":
+		fmt.Fprintf(&outSets, "%s: ssql.GetOr(rec, %q, ssql.Int128{}),", tsField.GoName, cfg.TimeField)
+	case "ssql.Decimal":
+		fmt.Fprintf(&outSets, "%s: ssql.GetOr(rec, %q, ssql.Decimal{}),", tsField.GoName, cfg.TimeField)
 	}
 	for i, f := range valFields {
 		fmt.Fprintf(&outSets, " %s: ssql.GetOr(rec, %q, float64(0)),", f.GoName, cfg.Values[i])
@@ -377,7 +388,7 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 
 	outSchema := &lib.TypedSchema{TypeName: typeName}
 	outSchema.Fields = append(outSchema.Fields, lib.TypedSchemaField{
-		Name: cfg.TimeField, GoName: tsField.GoName, GoType: tsField.GoType,
+		Name: cfg.TimeField, GoName: tsField.GoName, GoType: tsField.GoType, Scale: tsField.Scale,
 	})
 	for i, f := range valFields {
 		outSchema.Fields = append(outSchema.Fields, lib.TypedSchemaField{

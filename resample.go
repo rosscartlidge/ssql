@@ -57,6 +57,24 @@ type ResampleConfig struct {
 	Warn       io.Writer
 }
 
+// CheckFields refuses a -value that is the -time field (or named twice):
+// the output has one column per name, and exec wrote the key twice where
+// typed code did not compile (DFC163 §7). The command calls it at parse
+// time, so every lane refuses alike.
+func (cfg ResampleConfig) CheckFields() error {
+	seen := map[string]bool{cfg.TimeField: true}
+	for _, v := range cfg.Values {
+		if v == cfg.TimeField {
+			return fmt.Errorf("resample: -value %q is the -time field", v)
+		}
+		if seen[v] {
+			return fmt.Errorf("resample: -value %q is named twice", v)
+		}
+		seen[v] = true
+	}
+	return nil
+}
+
 // SnapToBucket floors an epoch-nanosecond timestamp to its
 // epoch-aligned bucket start for the given period. Euclidean floor:
 // correct for pre-1970 timestamps too.
@@ -67,9 +85,10 @@ func SnapToBucket(ns int64, every time.Duration) int64 {
 // tsCodec converts between the input's timestamp representation and
 // epoch nanoseconds, preserving the family on output.
 type tsCodec struct {
-	kind   string // "int", "float", "string", "time"
+	kind   string // "int", "int128", "decimal", "float", "string", "time"
 	unit   time.Duration
 	layout string
+	scale  int // a decimal axis's
 }
 
 func detectEpochUnit(v float64) time.Duration {
@@ -124,7 +143,7 @@ func noteEpochUnit(warn io.Writer, u time.Duration) {
 }
 
 func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error) {
-	// ssql:domain fixed: a resample axis is an int, float, string or time
+	// ssql:domain fixed: a resample axis is an int, int128, decimal, float, string or time
 	switch v := sample.(type) {
 	case int64:
 		u := time.Second
@@ -173,12 +192,33 @@ func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error
 		// DFC128 D1): time in, time out. No layout to preserve, no unit to
 		// detect.
 		return &tsCodec{kind: "time"}, nil
+	case Int128, Decimal:
+		// A wide or decimal epoch (Ross, DFC163 §7): the unit as for an
+		// int, the grid points back in the column's own type.
+		kind, scale := "int128", 0
+		mag := 0.0
+		if d, ok := v.(Decimal); ok {
+			kind, scale, mag = "decimal", d.Scale(), d.Float64()
+		} else {
+			mag = v.(Int128).Float64()
+		}
+		u := time.Second
+		if cfg.TimeUnit != "" {
+			var err error
+			if u, err = unitFromName(cfg.TimeUnit); err != nil {
+				return nil, err
+			}
+		} else {
+			u = detectEpochUnit(mag)
+			noteEpochUnit(warn, u)
+		}
+		return &tsCodec{kind: kind, unit: u, scale: scale}, nil
 	}
-	return nil, fmt.Errorf("resample: timestamp field has unsupported type %T (want int64, float64, string or time)", sample)
+	return nil, fmt.Errorf("resample: timestamp field has unsupported type %T (want an int, int128, decimal, float, string or time)", sample)
 }
 
 func (c *tsCodec) toNanos(v any) (int64, error) {
-	// ssql:domain fixed: a resample axis is an int, float, string or time
+	// ssql:domain fixed: a resample axis is an int, int128, decimal, float, string or time
 	switch x := v.(type) {
 	case int64:
 		if c.kind != "int" && c.kind != "float" {
@@ -195,6 +235,21 @@ func (c *tsCodec) toNanos(v any) (int64, error) {
 			return 0, fmt.Errorf("resample: mixed timestamp types (%T after %s)", v, c.kind)
 		}
 		return x.UnixNano(), nil
+	case Int128:
+		if c.kind != "int128" {
+			return 0, fmt.Errorf("resample: mixed timestamp types (%T after %s)", v, c.kind)
+		}
+		return c.wideNanos(x.CheckedMul(Int128From(int64(c.unit))))
+	case Decimal:
+		if c.kind != "decimal" {
+			return 0, fmt.Errorf("resample: mixed timestamp types (%T after %s)", v, c.kind)
+		}
+		// units·unit / 10^S, truncated toward zero as a float epoch is.
+		ns, err := x.Units().CheckedMul(Int128From(int64(c.unit)))
+		if err != nil {
+			return c.wideNanos(ns, err)
+		}
+		return c.wideNanos(ns.Quo(pow10Int128[x.Scale()]), nil)
 	case string:
 		if c.kind == "time" {
 			// A -from/-to bound against a time column: any form ParseTime reads.
@@ -216,10 +271,28 @@ func (c *tsCodec) toNanos(v any) (int64, error) {
 	return 0, fmt.Errorf("resample: unsupported timestamp value %T", v)
 }
 
+// wideNanos is an int128 or decimal axis value's nanoseconds, which must
+// fit an int64: the grid is int64 nanoseconds, as every engine's is.
+func (c *tsCodec) wideNanos(ns Int128, err error) (int64, error) {
+	if err == nil {
+		if n, ok := ns.Int64(); ok {
+			return n, nil
+		}
+	}
+	return 0, fmt.Errorf("resample: the %s timestamp is out of range: past ±292 years of nanoseconds from the epoch", c.kind)
+}
+
 func (c *tsCodec) fromNanos(ns int64) any {
+	// ssql:domain fixed: a resample axis is an int, int128, decimal, float, string or time
 	switch c.kind {
 	case "int":
 		return ns / int64(c.unit)
+	case "int128":
+		return Int128From(ns / int64(c.unit))
+	case "decimal":
+		// ns·10^S / unit: exact for a grid point at any width the scale holds.
+		units := Int128From(ns).Mul(pow10Int128[c.scale]).Quo(Int128From(int64(c.unit)))
+		return MustNewDecimal(units, c.scale)
 	case "float":
 		return float64(ns) / float64(c.unit)
 	case "time":
@@ -253,6 +326,9 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 	if len(cfg.Values) == 0 {
 		return nil, fmt.Errorf("resample: at least one -value field is required")
 	}
+	if err := cfg.CheckFields(); err != nil {
+		return nil, err
+	}
 	fill := cfg.Fill
 	if fill == "" {
 		fill = FillPrevious
@@ -267,11 +343,14 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 	var codec *tsCodec
 	series := make(map[string][]tsPoint, len(cfg.Values))
 	var minNS, maxNS int64
-	n := 0
+	n, untimed := 0, 0
 	for r := range records {
 		tv, ok := Get[any](r, cfg.TimeField)
-		if !ok {
-			return nil, fmt.Errorf("resample: record missing time field %q", cfg.TimeField)
+		if !ok || tv == nil {
+			// No place on the axis: skipped, as SQL's WHERE ts IS NOT NULL
+			// and pandas drop it, and counted (it was an error).
+			untimed++
+			continue
 		}
 		if codec == nil {
 			var err error
@@ -292,20 +371,33 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 		n++
 		for _, f := range cfg.Values {
 			v, ok := Get[any](r, f)
-			if !ok {
-				continue // ragged: this record has no such field
+			if !ok || v == nil {
+				continue // ragged: this record has no such value
 			}
 			var fv float64
+			// ssql:domain fixed: a resample value is a number, carried as a float
 			switch x := v.(type) {
 			case int64:
 				fv = float64(x)
 			case float64:
 				fv = x
+			case Int128:
+				fv = x.Float64()
+			case Decimal:
+				fv = x.Float64()
 			default:
 				return nil, fmt.Errorf("resample: value field %q is %T, want a numeric field", f, v)
 			}
 			series[f] = append(series[f], tsPoint{ns: ns, val: fv})
 		}
+	}
+	if n == 0 && untimed > 0 {
+		// No record has one: a field the input does not have, which the
+		// CLI's schema check names too; never an empty grid in silence.
+		return nil, fmt.Errorf("resample: no record has time field %q", cfg.TimeField)
+	}
+	if untimed > 0 {
+		fmt.Fprintf(warn, "resample: skipped %d record(s) with no %s\n", untimed, cfg.TimeField)
 	}
 	if n == 0 {
 		return func(yield func(Record) bool) {}, nil // a grid over nothing is invention
@@ -380,7 +472,7 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 	var out []Record
 	for gp := gridFrom; gp <= gridTo; gp += e {
 		m := MakeMutableRecordWithCapacity(1 + len(cfg.Values))
-		// ssql:domain fixed: a resample axis is an int, float, string or time
+		// ssql:domain fixed: a resample axis is an int, int128, decimal, float, string or time
 		switch tv := codec.fromNanos(gp).(type) {
 		case int64:
 			m = m.Int(cfg.TimeField, tv)
@@ -390,6 +482,10 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 			m = m.String(cfg.TimeField, tv)
 		case time.Time:
 			m = m.Time(cfg.TimeField, tv)
+		case Int128:
+			m = m.Int128(cfg.TimeField, tv)
+		case Decimal:
+			m = m.Decimal(cfg.TimeField, tv)
 		}
 		for _, f := range cfg.Values {
 			pts := series[f]
@@ -507,10 +603,16 @@ func parseBoundLiteral(s string) any {
 // snap with ResampleRecords so downsampling (bucket + group-by) and
 // resampling land on the SAME grid.
 func BucketValue(v any, every time.Duration) (any, error) {
-	// ssql:domain fixed: a bucket axis is an int, float, string or time
+	// ssql:domain fixed: a bucket axis is an int, int128, decimal, float, string or time
 	switch x := v.(type) {
+	case nil:
+		return nil, nil // a missing value has no bucket (SQL's NULL)
 	case int64:
 		return exprfn.BucketInt64(x, int64(every)), nil
+	case Int128:
+		return checkedBucket(func() any { return BucketInt128(x, every) })
+	case Decimal:
+		return BucketDecimal(x, every)
 	case float64:
 		return exprfn.BucketFloat64(x, int64(every)), nil
 	case time.Time:
@@ -525,6 +627,64 @@ func BucketValue(v any, every time.Duration) (any, error) {
 		return nil, fmt.Errorf("bucket: cannot parse timestamp %q", x)
 	}
 	return nil, fmt.Errorf("bucket: unsupported timestamp type %T", v)
+}
+
+// checkedBucket turns BucketInt128's overflow panic into the error the
+// VM reports.
+func checkedBucket(f func() any) (v any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			e, ok := r.(error)
+			if !ok {
+				panic(r)
+			}
+			v, err = nil, fmt.Errorf("bucket: %w", e)
+		}
+	}()
+	return f(), nil
+}
+
+// floorSnap128 floors v to a multiple of step (step > 0), toward −∞ as
+// exprfn.SnapNanos does.
+func floorSnap128(v, step Int128) Int128 {
+	q := v.Quo(step)
+	if !v.Rem(step).IsZero() && v.Sign() < 0 {
+		q = q.Sub(Int128From(1))
+	}
+	return q.Mul(step)
+}
+
+// BucketInt128 is exprfn.BucketInt64 for an int128 epoch, in int128's
+// exact arithmetic (the unit read from the magnitude, the snap toward
+// −∞), so a value past int64 buckets as the engines' HUGEINT does (Ross,
+// DFC163 §7). It panics on an overflow, as Int128's operators do.
+func BucketInt128(v Int128, every time.Duration) Int128 {
+	u := Int128From(exprfn.DetectEpochUnitNanos(v.Float64()))
+	return floorSnap128(v.Mul(u), Int128From(int64(every))).Quo(u)
+}
+
+// BucketDecimal is bucket() for a decimal epoch, exact at the value's
+// own scale: the width in the decimal's units (1/10^S of the epoch unit
+// its magnitude says) and the snap toward −∞, the result at the same
+// scale. A width finer than the scale can hold is an error (Ross,
+// DFC163 §7).
+func BucketDecimal(d Decimal, every time.Duration) (Decimal, error) {
+	u := exprfn.DetectEpochUnitNanos(d.Float64())
+	w := Int128From(int64(every)).Mul(pow10Int128[d.Scale()])
+	if !w.Rem(Int128From(u)).IsZero() {
+		return Decimal{}, fmt.Errorf("bucket: a width of %s is finer than decimal:%d holds", every, d.Scale())
+	}
+	return NewDecimal(floorSnap128(d.Units(), w.Quo(Int128From(u))), d.Scale())
+}
+
+// MustBucketDecimal is BucketDecimal for transpiled code: it panics with
+// the error, as the Int128 and Decimal operators do.
+func MustBucketDecimal(d Decimal, every time.Duration) Decimal {
+	out, err := BucketDecimal(d, every)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // BucketTime snaps a time to its epoch-aligned bucket of width every

@@ -204,8 +204,16 @@ func generateExtractCode(cfg ssql.ExtractConfig, names []string) error {
 		if !ok {
 			return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: 'extract' references unknown field %q", cfg.Field))
 		}
+		// A field that is not text is read as its text, as exec's
+		// Get[string] reads it (ssql.TextOf): typed refused a time or an
+		// address that exec matched (DFC163 §7). A nullable one has no
+		// value to read.
+		text := "r." + src.GoName
 		if src.GoType != "string" {
-			return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: 'extract' field %q has type %s (need string)", cfg.Field, src.GoType))
+			if strings.HasPrefix(src.GoType, "*") {
+				return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: 'extract' field %q has type %s (need a non-nullable field)", cfg.Field, src.GoType))
+			}
+			text = "ssql.TextOf(r." + src.GoName + ")"
 		}
 		typeName := fmt.Sprintf("Extracted%d", len(fragments))
 		out := &lib.TypedSchema{TypeName: typeName}
@@ -241,16 +249,19 @@ func generateExtractCode(cfg ssql.ExtractConfig, names []string) error {
 		var body strings.Builder
 		fmt.Fprintf(&body, "%s := func(yield func(%s) bool) {\n", outputVar, typeName)
 		fmt.Fprintf(&body, "\t\tre := regexp.MustCompile(%q)\n\t\tfor r := range %s {\n", namedOnlyPattern(cfg.Pattern), inputVar)
-		fmt.Fprintf(&body, "\t\t\tm := re.FindStringSubmatch(r.%s)\n\t\t\tif m == nil {\n", src.GoName)
+		fmt.Fprintf(&body, "\t\t\tm := re.FindStringSubmatch(%s)\n\t\t\tif m == nil {\n", text)
 		if cfg.Skip {
 			body.WriteString("\t\t\t\tcontinue\n")
 		} else {
-			fmt.Fprintf(&body, "\t\t\t\tpanic(fmt.Errorf(\"extract: %%q does not match %%q (use -skip to drop non-matching records)\", r.%s, re.String()))\n", src.GoName)
+			fmt.Fprintf(&body, "\t\t\t\tpanic(fmt.Errorf(\"extract: %%q does not match %%q (use -skip to drop non-matching records)\", %s, re.String()))\n", text)
 		}
 		fmt.Fprintf(&body, "\t\t\t}\n\t\t\tif !yield(%s{%s%s}) {\n\t\t\t\treturn\n\t\t\t}\n\t\t}\n\t}", typeName, copyFields.String(), capSets.String())
 		imports := []string{"regexp"}
 		if !cfg.Skip {
 			imports = append(imports, "fmt")
+		}
+		if src.GoType != "string" {
+			imports = append(imports, "github.com/rosscartlidge/ssql/v4")
 		}
 		frag := lib.NewStmtFragment(outputVar, inputVar, body.String(), imports, getCommandString())
 		frag.StructDefs = []string{def.String()}
