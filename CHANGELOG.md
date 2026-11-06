@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.141.0] - 2026-11-06
+
 ### Added
 
 - **`resample` and `bucket()` over int128 and decimal.** A decimal or int128 value is resampled as a float, as typed code already did; a decimal or int128 epoch axis keeps its type, and `bucket()` of one is exact at its own scale (a width finer than a decimal's scale is an error).
