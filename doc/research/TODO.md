@@ -94,6 +94,10 @@ Tracked issues and feature gaps discovered during development.
   translation yet); `resample -time X -value X` is now refused in every
   lane, so the resample time cells test only the refusal (an override
   naming another value column would test the axes).
+- [ ] **The full cmd/ssql suite slowed from ~450 s to ~1,350 s** around
+  v4.138.0 (1342 s in the inet gate, 1374 s on 2026-11-06, against ~450 s
+  under `make lanes` the same hours). Not investigated; time the slowest
+  tests (`go test -json` elapsed) against a v4.137.2 worktree (DFC164 §5.2).
 - [ ] **Declared types in DFC133's random differential** (DFC163 §2.3):
   the generator declares `-type col decimal:2|int128|time|inet` per
   column, with one typed program per run over a sample.
