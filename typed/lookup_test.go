@@ -2,8 +2,10 @@ package typed
 
 import (
 	"fmt"
+	"iter"
 	"slices"
 	"testing"
+	"time"
 )
 
 type lkLeft struct {
@@ -34,5 +36,32 @@ func TestLookupJoin(t *testing.T) {
 	}
 	if !slices.Equal(par, want) {
 		t.Fatalf("LookupJoinParallel = %q, want %q", par, want)
+	}
+}
+
+// TestStreamInOrderIsShardOrder: a join's right side comes back in shard order
+// however the shards finish. Serial fans in as they come, so a side with a where
+// gave one left row its matches in a different order from run to run (2026-11-07).
+func TestStreamInOrderIsShardOrder(t *testing.T) {
+	shard := func(delay time.Duration, rows ...int) iter.Seq[int] {
+		return func(yield func(int) bool) {
+			time.Sleep(delay)
+			for _, r := range rows {
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}
+	s := Stream[int]{
+		shards: []iter.Seq[int]{shard(20*time.Millisecond, 1, 2), shard(10*time.Millisecond, 3), shard(0, 4, 5)},
+		n:      3,
+	}
+	if got := slices.Collect(s.InOrder()); !slices.Equal(got, []int{1, 2, 3, 4, 5}) {
+		t.Errorf("InOrder = %v", got)
+	}
+	// The contrast that makes it a test: Serial gives the last shard first.
+	if got := slices.Collect(s.Serial()); slices.Equal(got, []int{1, 2, 3, 4, 5}) {
+		t.Errorf("Serial kept shard order, so the delays prove nothing: %v", got)
 	}
 }

@@ -289,7 +289,9 @@ func emitTypedAsofJoin(inputVar, funcName string, leftSchema, rightSchema *lib.T
 	merge := fmt.Sprintf("func(l %s, r %s) %s {\n\t\t\treturn %s{\n\t\t\t\t%s,\n\t\t\t}\n\t\t}",
 		leftSchema.TypeName, rightSchema.TypeName, mergedSchema.TypeName, mergedSchema.TypeName, strings.Join(assigns, ",\n\t\t\t\t"))
 
-	if err := lib.WriteCodeFragment(lib.NewFuncFragment(funcName, rightFragments, subCommandStr)); err != nil {
+	funcFrag := lib.NewFuncFragment(funcName, rightFragments, subCommandStr)
+	funcFrag.SideOrder = true // a tie goes to the last row in the side's order
+	if err := lib.WriteCodeFragment(funcFrag); err != nil {
 		return fmt.Errorf("writing func fragment: %w", err)
 	}
 	args := strings.Join([]string{funcName + "()", leftKey, rightKey, leftTime, rightTime, optsGo, merge}, ",\n\t\t")

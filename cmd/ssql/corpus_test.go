@@ -198,6 +198,10 @@ func corpusData(t *testing.T) string {
 			// matches multiply; rank is a right column no clause copies.
 			"lookup_links.csv": "link,a_kind,z_kind\nl3,K2,K1\nl1,K1,K2\nl5,K9,K1\nl2,K1,K1\nl4,K1,K8\nl6,K3,K2\n",
 			"lookup_kinds.csv": "kind,kind_name,rank\nK2,two,20\nK1,one,10\nK3,three,30\nK2,deux,21\n",
+			// A second table for a chain of joins, and a link whose keys both
+			// match two rows, so a split lookup must keep the row order.
+			"lookup_groups.csv":      "link,grp\nl3,g1\nl1,g1\nl6,g2\nl2,g2\n",
+			"lookup_links_multi.csv": "link,a_kind,z_kind\nl8,K1,K2\nl7,K2,K2\n",
 			// A left row whose key cell is empty: absent in ssql, NULL in
 			// SQL; both match nothing. Typed structs cannot hold absence.
 			"setops_absent.csv": "id,name\n1,alice\n,nobody\n4,dan\n",
@@ -267,16 +271,16 @@ func corpusData(t *testing.T) string {
 			// DFC155 E: money, shuffled, with values a float sum gets wrong
 			// and ones a declared scale must round; a decimal key beside
 			// an integer key.
-			"money.csv":              "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
-			"fractions.csv":          "k,amt\nb,-2.75\nd,0.50\na,2.75\nc,-0.49\n",
-			"matrix.csv":             matrixCSV, // DFC163 §2.1: a column per declarable type
-			"matrix_empties.csv":     matrixEmptiesCSV,
-			"empty_time.csv":         "k,v\n2,2026-01-02\n1,\n3,2026-01-01\n",
-			"stats_floats.csv":       "k,g,v\n5,y,9\n1,x,-3.1\n7,y,0.3\n3,y,100\n6,z,7\n2,y,10\n4,x,9.5\n",
-			"resample_wide.csv":      "t,v,w\n2026-01-01T00:00:40Z,2.25,40\n,9.99,7\n2026-01-01T00:00:10Z,1.50,100000000000000000000\n2026-01-01T00:00:20Z,,\n",
-			"resample_axis.csv":      "e,v\n30.25,3\n10.50,1\n",
-			"set_typed.csv":          "k,f,d,ip,j\n2,3,4.10,::1,{}\n1,1.5,2.25,10.0.0.1,[2]\n",
-			"wide_decimal.csv":       "w,d\n9,9.50\n100000000000000000000,10.25\n-5,-3.10\n",
+			"money.csv":          "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
+			"fractions.csv":      "k,amt\nb,-2.75\nd,0.50\na,2.75\nc,-0.49\n",
+			"matrix.csv":         matrixCSV, // DFC163 §2.1: a column per declarable type
+			"matrix_empties.csv": matrixEmptiesCSV,
+			"empty_time.csv":     "k,v\n2,2026-01-02\n1,\n3,2026-01-01\n",
+			"stats_floats.csv":   "k,g,v\n5,y,9\n1,x,-3.1\n7,y,0.3\n3,y,100\n6,z,7\n2,y,10\n4,x,9.5\n",
+			"resample_wide.csv":  "t,v,w\n2026-01-01T00:00:40Z,2.25,40\n,9.99,7\n2026-01-01T00:00:10Z,1.50,100000000000000000000\n2026-01-01T00:00:20Z,,\n",
+			"resample_axis.csv":  "e,v\n30.25,3\n10.50,1\n",
+			"set_typed.csv":      "k,f,d,ip,j\n2,3,4.10,::1,{}\n1,1.5,2.25,10.0.0.1,[2]\n",
+			"wide_decimal.csv":   "w,d\n9,9.50\n100000000000000000000,10.25\n-5,-3.10\n",
 			// A time's text (DFC164 §7): offsets the pipeline zone does not
 			// have, a fraction, both sides of a DST change.
 			"time_text.csv":          "k,g,t\n1,a,2026-01-01T09:00:00+11:00\n2,a,2025-12-31T20:00:00.5-05:00\n3,b,2026-07-01T01:00:00.12Z\n4,b,2026-03-15T12:30:00+05:30\n",

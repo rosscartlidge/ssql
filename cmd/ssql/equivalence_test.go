@@ -4551,6 +4551,169 @@ var equivCases = []EquivCase{
 		Skip: map[string]string{"go-typed": "an unmatched row's right fields are absent, which a typed struct cannot hold (DFC124 §3); typed refuses -type left", "go-parallel": "same as go-typed"},
 	},
 	{
+		// Only clause 1 takes the filter: the table is shared, and restricting clause 2 too would lose l1/two and l1/deux.
+		Name:     "where_pushdown_lookup_first_clause",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if a_name eq one | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l1", "a_name": "one", "z_name": "two"},
+			{"link": "l1", "a_name": "one", "z_name": "deux"},
+			{"link": "l2", "a_name": "one", "z_name": "one"},
+		},
+	},
+	{
+		// Only clause 2 takes the filter.
+		Name:     "where_pushdown_lookup_second_clause",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if z_name eq deux | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l1", "a_name": "one", "z_name": "deux"},
+			{"link": "l6", "a_name": "three", "z_name": "deux"},
+		},
+	},
+	{
+		// A different filter on each clause of one table.
+		Name:     "where_pushdown_lookup_both_clauses",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if a_name eq one -if z_name eq deux | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l1", "a_name": "one", "z_name": "deux"},
+		},
+	},
+	{
+		// The where is past an include that keeps its column.
+		Name:     "where_pushdown_past_include",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} include link a_name z_name | {{.bin}} where -if a_name eq two`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l3", "a_name": "two", "z_name": "one"},
+		},
+	},
+	{
+		// One condition moves left and one into the table.
+		Name:     "where_pushdown_left_and_right",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if link ne l1 -if a_name eq one | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l2", "a_name": "one", "z_name": "one"},
+		},
+	},
+	{
+		// relationship_name goes into the last join; a_name crosses it into the first.
+		Name:     "where_pushdown_chain",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name | {{.bin}} join {{.data}}/lookup_groups.csv -using link | {{.bin}} include link a_name grp | {{.bin}} where -if a_name eq one -if grp eq g2`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l2", "a_name": "one", "grp": "g2"},
+		},
+	},
+	{
+		// A negated condition keeps its sense in the table.
+		Name:     "where_pushdown_negated",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where +if a_name eq one | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l3", "a_name": "two", "z_name": "one"},
+			{"link": "l3", "a_name": "deux", "z_name": "one"},
+			{"link": "l6", "a_name": "three", "z_name": "two"},
+			{"link": "l6", "a_name": "three", "z_name": "deux"},
+		},
+	},
+	{
+		// An OR spans both clauses, so it stays after the join.
+		Name:     "where_pushdown_or_stays",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if a_name eq one + -if z_name eq one | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l3", "a_name": "two", "z_name": "one"},
+			{"link": "l3", "a_name": "deux", "z_name": "one"},
+			{"link": "l1", "a_name": "one", "z_name": "two"},
+			{"link": "l1", "a_name": "one", "z_name": "deux"},
+			{"link": "l2", "a_name": "one", "z_name": "one"},
+		},
+	},
+	{
+		// The renamed column compares as the table column's type.
+		Name:     "where_pushdown_numeric_type",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as rank a_rank | {{.bin}} where -if a_rank gt 15 | {{.bin}} include link a_rank`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l3", "a_rank": 20},
+			{"link": "l3", "a_rank": 21},
+			{"link": "l6", "a_rank": 30},
+		},
+	},
+	{
+		// A left join keeps unmatched rows, so the filter cannot go into the table: l5 must not come back.
+		Name: "where_pushdown_left_join_stays",
+		Skip: map[string]string{
+			"go-typed":    "join -type left has no typed form (DFC124 §3)",
+			"go-parallel": "join -type left has no typed form (DFC124 §3)",
+			"go-lib":      "join -type left has no typed form (DFC124 §3)",
+		},
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -type left | {{.bin}} where -if kind_name eq one | {{.bin}} include link kind_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l1", "kind_name": "one"},
+			{"link": "l2", "kind_name": "one"},
+			{"link": "l4", "kind_name": "one"},
+		},
+	},
+	{
+		// An update between the join and the where changes the column, so the where must not cross it.
+		Name:     "where_pushdown_after_update_stays",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name | {{.bin}} update -set a_name Q -if link eq l1 | {{.bin}} where -if a_name eq Q | {{.bin}} include link a_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l1", "a_name": "Q"},
+		},
+	},
+	{
+		// A side that is one file's read splits like the file.
+		Name:     "where_pushdown_procsub_side",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join <({{.bin}} from csv {{.data}}/lookup_kinds.csv) -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if a_name eq one | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l1", "a_name": "one", "z_name": "two"},
+			{"link": "l1", "a_name": "one", "z_name": "deux"},
+			{"link": "l2", "a_name": "one", "z_name": "one"},
+		},
+	},
+	{
+		// A side with its own pipeline is not split; the result is the same.
+		Name:     "where_pushdown_filtered_side_no_split",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join <({{.bin}} from csv {{.data}}/lookup_kinds.csv | {{.bin}} where -if rank lt 30) -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if a_name eq one | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"link": "l1", "a_name": "one", "z_name": "two"},
+			{"link": "l1", "a_name": "one", "z_name": "deux"},
+			{"link": "l2", "a_name": "one", "z_name": "one"},
+		},
+	},
+	{
+		// Nothing matches: the empty right side must give no rows in every lane.
+		Name:     "where_pushdown_no_match",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links.csv | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if a_name eq nothing | {{.bin}} include link a_name z_name`,
+		Ordered:  false,
+		Golden:   []map[string]any{},
+	},
+	{
+		// Both keys of l7 match two rows. A split lookup must give the rows in
+		// the order the one stage does: the sort fixes the links, the table the rest.
+		Name:     "where_pushdown_split_keeps_order",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_links_multi.csv | {{.bin}} sort link | {{.bin}} join {{.data}}/lookup_kinds.csv -on a_kind kind -as kind_name a_name - -on z_kind kind -as kind_name z_name | {{.bin}} where -if z_name ne nothing | {{.bin}} include link a_name z_name`,
+		Ordered:  true,
+		Skip:     equivNoSQL("a join does not keep a sort's order in SQL; the order under test is the Go lanes' split"),
+		Golden: []map[string]any{
+			{"link": "l7", "a_name": "two", "z_name": "two"},
+			{"link": "l7", "a_name": "two", "z_name": "deux"},
+			{"link": "l7", "a_name": "deux", "z_name": "two"},
+			{"link": "l7", "a_name": "deux", "z_name": "deux"},
+			{"link": "l8", "a_name": "one", "z_name": "two"},
+			{"link": "l8", "a_name": "one", "z_name": "deux"},
+		},
+	},
+	{
 		// One clause with -as over a <(pipeline)> side: the side drops K3,
 		// so l6 goes too; the side is read once for the clause.
 		Name: "lookup_join_procsub_one_clause",

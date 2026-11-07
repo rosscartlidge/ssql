@@ -687,6 +687,7 @@ func emitTypedJoin(
 
 	// Func fragment carrying the right side.
 	funcFrag := lib.NewFuncFragment(funcName, rightFragments, subCommandStr)
+	funcFrag.SideOrder = true // the matches of one left row come in the side's order
 	if err := lib.WriteCodeFragment(funcFrag); err != nil {
 		return fmt.Errorf("writing func fragment: %w", err)
 	}
@@ -958,6 +959,7 @@ func emitTypedLookupJoin(c sideCtx, rightSchema *lib.TypedSchema, rightFragments
 	}
 
 	funcFrag := lib.NewFuncFragment(c.funcName, rightFragments, subCommandStr)
+	funcFrag.SideOrder = true // the matches of one left row come in the side's order
 	if err := lib.WriteCodeFragment(funcFrag); err != nil {
 		return true, fmt.Errorf("writing func fragment: %w", err)
 	}

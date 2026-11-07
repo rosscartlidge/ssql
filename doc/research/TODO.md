@@ -97,7 +97,9 @@ Tracked issues and feature gaps discovered during development.
   7.2 s: string copies for the 99.3% of rows the filter drops. Options, largest
   first: move a `where` on a lookup's column into the lookup table (DuckDB does; the
   optimiser applied no rule here, and `-columns` did not fire through the join);
-  decode strings after the filter; a GC floor while the live heap is small,
+  decode strings after the filter (the first is BUILT, DFC165 §9: 15.5 → 13.3 s, less
+  than the hand-edited 12.1 s because the rows still reach the first lookup; skipping a
+  split whose filter drops nothing remains, it costs 11% more CPU and 700 MB); a GC floor while the live heap is small,
   not a fixed `GOGC`, which would multiply a sort's or window's multi-GB heap.
   `GOGC=off` is slower than 1600 (0.87 against 0.73 s; sys 1.7 s against 0.4 s).
 - [ ] **File sinks outside DuckDB** (2026-11-07): `generate sql` writes a

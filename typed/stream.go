@@ -91,6 +91,21 @@ func Parallel[T any](in iter.Seq[T], n int) Stream[T] {
 	return Stream[T]{shards: shards, n: n}
 }
 
+// InOrder collects a Stream into a single iter.Seq[T] in shard order, which for
+// a source whose shards are runs of the file is the file's order. The shards
+// still run concurrently, each into its own slice, so it holds every row: it is
+// for a consumer that holds them anyway, such as a join's right side, where the
+// order of rows with one key decides the order of a left row's matches.
+func (s Stream[T]) InOrder() iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for _, v := range materialise(s) {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+
 // Serial collects a Stream back into a single iter.Seq[T]. By default
 // the output is unordered: each shard runs in its own goroutine and
 // values arrive on a fan-in channel in whatever order the workers

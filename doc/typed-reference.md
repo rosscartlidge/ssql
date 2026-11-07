@@ -319,6 +319,7 @@ func (s Stream[T]) Where(pred func(T) bool) Stream[T]           // filters every
 func StreamSelect[T, U any](s Stream[T], fn func(T) U) Stream[U] // Select over a Stream (a free function: methods cannot add type parameters)
 func DistinctParallel[T any, K comparable](in Stream[T], key func(T) K) iter.Seq[T]  // per-shard dedupe, then a serial merge
 func (s Stream[T]) Serial() iter.Seq[T]                         // fan the shards back into one sequence; unordered
+func (s Stream[T]) InOrder() iter.Seq[T]                        // the rows in shard order, shards still concurrent; holds every row (a join's right side)
 func (s Stream[T]) SerialCount() int64                          // drain every shard concurrently and count, no fan-in channel
 func (s Stream[T]) Shards() int
 ```

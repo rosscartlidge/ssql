@@ -6,9 +6,9 @@ Last modified: 2026-11-07
 
 [Back to Index](./README.md)
 
-Status: **measurement, 2026-11-07; nothing built.** Every variant below is a
-hand-edited copy of a generated program, so it shows the size of a win and is
-not a design. §6 ranks what to build; Ross has not chosen. Follows
+Status: **measurement, 2026-11-07; §6's first item built, see §8.** Every variant in §3 to
+§5 is a hand-edited copy of a generated program, so it shows the size of a win and is
+not a design. §6 ranks what to build. Follows
 [DFC158 §3.15](./dfc158_performance_measured_fixed_next.md), which introduced
 this pipeline.
 
@@ -278,7 +278,98 @@ benchmark, and non-ASCII whitespace must still reach `TrimSpace`.
   on an earlier build; the difference was not investigated, so do not read 0.81 s as a
   change to DFC158's table.
 
-## 8. References
+## 8. Built: the where moves into the side table (2026-11-07)
+
+Ross: "build the where pushdown into the lookup table and benchmark it".
+`ruleJoinPredicatePushdown` already existed and missed this pipeline four ways: an
+`include` sat between the join and the where; it did not understand `-as`; it knew
+only the source file's columns, so a column from an earlier join could not move left;
+and one filter cannot serve two clauses over one table. The rewrite
+(`commands/generate_ssql_join_pushdown.go`) produces:
+
+```bash
+ssql from csv shuffled.csv \
+  | ssql join <(ssql from kind.csv | ssql where -if kind_name eq EK_PORT) -on a_kind kind -as kind_name a_kind_name \
+  | ssql join kind.csv -on z_kind kind -as kind_name z_kind_name \
+  | ssql join <(ssql from relationship.csv | ssql where -if relationship_name eq RK_TRAVERSES) -using relationship \
+  | ssql include a_name a_kind_name relationship_name z_kind_name z_name
+```
+
+Exec does not run the optimiser, so exec against the generated lanes is the
+differential that checks it.
+
+| Question | Decision |
+|---|---|
+| Which columns a join brings in | read from its arguments, clause by clause (`parseJoinShape`) |
+| Columns before the join | walked from the source through each stage's schema op (`columnsThrough`); not knowing means no rewrite |
+| What a condition crosses | `include` and `exclude`, if the column survives them; never `update`, `rename`, `limit` or `sort` |
+| A multi-clause lookup | one join per clause, in clause order, so the columns keep their order |
+| A `<(…)` side | split only if it is one file's read; a side with its own stages is not run twice |
+| What stays put | an OR, an expression, a `-using` key, a right column under `-type left` or ASOF, and any join with `-suffix` or `-exclude-*` |
+
+### 8.1 What it found
+
+- **The old rule hid errors.** `join k.csv -on a kind -as kind_name x | where -if kind_name
+  eq Y` fails in exec, because `kind_name` never comes in. The old rule saw the name in the
+  right file and pushed it there, and the rewrite ran. `-suffix` and `-exclude-right` did the
+  same. A condition now moves only if its column reaches the where
+  (`TestJoinPushdownKeepsTheError`).
+- **A side with a where had no stable order.** It is a parallel read, and `return
+  filtered.Serial()` fans in as shards finish, so one key's matches changed order between
+  runs: 2 distinct outputs in 40 runs over 200,000 rows after a sort, 1 in 60 after the fix.
+  Any hand-written `<(from | where)` side had this; the rule would have added it to pipelines
+  that never asked. `Stream.InOrder()` runs the shards concurrently and yields them in shard
+  order. A JSON array side, whose shards are batches, is read serially.
+
+### 8.2 The benchmark
+
+Medians of seven, generated programs, 14.6 M rows. The load average was 16 and falling when it
+began, from the test run before it; the no-rule row matches §4's idle run. The four Go and
+DuckDB outputs of the first table were identical to exec's as sorted files.
+
+| Program | Wall | User | Sys | RSS |
+|---|---:|---:|---:|---:|
+| Go, no rule (`+O`) | 1.02 s | 15.50 s | 0.81 s | 1232 MB |
+| **Go, rule** | **0.90 s** | **13.28 s** | 0.73 s | 1234 MB |
+| Go, no rule, `GOGC=800` | 0.74 s | 13.76 s | 0.42 s | 1384 MB |
+| **Go, rule, `GOGC=800`** | **0.64 s** | 11.53 s | 0.40 s | 1452 MB |
+| DuckDB, no rule | 0.80 s | 4.17 s | 0.77 s | 784 MB |
+| DuckDB, rule | 0.79 s | 4.21 s | 0.75 s | 649 MB |
+
+| Pinned | Go, no rule | Go, rule | DuckDB, rule |
+|---|---:|---:|---:|
+| One P-core, wall | 7.31 s | 5.99 s | 4.07 s |
+| One P-core, user | 7.24 s | 5.91 s | 3.30 s |
+| 8 P-cores, wall | 1.12 s | 0.96 s | 0.90 s |
+| 8 P-cores, user | 8.17 s | 6.85 s | 3.28 s |
+
+- On one core the rule removes 1.3 s of 7.2 s of real work. All 14.6 M rows are still read and
+  decoded.
+- It is worth less than §4's hand-edited filter (13.3 s against 12.1 s), as §6 expected. That
+  filter ran before any join; here the rows still reach the first lookup, and the relationship
+  filter acts only at the third join.
+- DuckDB gains nothing: it already pushes these predicates down itself.
+- The rule alone leaves Go behind DuckDB (0.90 s against 0.79 s). With `GOGC=800` it is ahead
+  (0.64 s), but that setting is not built, and §6 item 3 says why not to fix it at 800.
+
+**The cost when the filter drops nothing.** With `ne NOTHING` on both columns, all 14.6 M rows
+survive:
+
+| | Wall | User | Sys | RSS |
+|---|---:|---:|---:|---:|
+| No rule | 2.58 s | 22.38 s | 3.50 s | 4239 MB |
+| Rule | 2.60 s | 24.87 s | 3.64 s | 4938 MB |
+
+Wall is unchanged, but it costs 2.5 s of CPU (11%) and 700 MB. The likely cause is the extra row
+copy per split, which was not measured. The rule does not know selectivity. It could look, since
+generation already reads these files, but that is open, in TODO.
+
+### 8.3 Watched fail
+
+Filtering the whole shared table, forgetting the rename, pushing through a left join, and fanning
+a side in with `Serial()` were each put in and caught.
+
+## 9. References
 
 - [DFC158](./dfc158_performance_measured_fixed_next.md) §3.15, the pipeline and the engine table
 - [DFC164](./dfc164_type_correctness_week_retrospective.md) §7, the serial rule the bare `limit` did not trigger

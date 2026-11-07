@@ -76,6 +76,9 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 			// adapters before it (the body compiled a typed Stream into
 			// a record stage until 2026-10-09).
 			tagRecordModeFragments(frag.FuncBody)
+			if frag.SideOrder {
+				markSideOrder(frag.FuncBody)
+			}
 			frag.FuncBody = applyPlannerBoundaries(frag.FuncBody)
 			seen := make(map[string]bool)
 			frag.Imports = frag.Imports[:0]
@@ -367,6 +370,21 @@ func collectTypedStructs(fragments []*CodeFragment) []string {
 // for a process-sub source, mirroring generateSubprocessFunction but
 // with typed-mode return types derived from the func body's
 // OutputTypedSchema.
+// markSideOrder says that a join's right side reads the source's order: a
+// parallel source whose shards are runs keeps it through InOrder, and one whose
+// shards are batches has no order to keep, so the planner reads it serially.
+func markSideOrder(body []*CodeFragment) {
+	if len(body) == 0 || body[len(body)-1].Capabilities == nil {
+		return
+	}
+	for _, f := range body {
+		if f.Capabilities != nil && f.Capabilities.UnorderedShards {
+			body[len(body)-1].Capabilities.ShardOrder = true
+			return
+		}
+	}
+}
+
 func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 	var b strings.Builder
 	if funcFrag.Command != "" {
@@ -425,7 +443,11 @@ func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 	if lastVar != "" {
 		needsSerial := lastFrag != nil && lastFrag.Capabilities != nil && lastFrag.Capabilities.Produces == ShapeStream
 		if needsSerial {
-			fmt.Fprintf(&b, "\treturn %s.Serial()\n", lastVar)
+			if funcFrag.SideOrder {
+				fmt.Fprintf(&b, "\treturn %s.InOrder()\n", lastVar)
+			} else {
+				fmt.Fprintf(&b, "\treturn %s.Serial()\n", lastVar)
+			}
 		} else {
 			fmt.Fprintf(&b, "\treturn %s\n", lastVar)
 		}

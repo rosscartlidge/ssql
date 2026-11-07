@@ -70,8 +70,9 @@ type CodeFragment struct {
 	Params  []CodeParam `json:"params,omitempty"` // Parameterizable values for flag generation
 
 	// For "func" type fragments (subprocess functions from process substitution)
-	FuncName string          `json:"func_name,omitempty"` // Function name (e.g., "rightSource1")
-	FuncBody []*CodeFragment `json:"func_body,omitempty"` // Fragments that make up the function body
+	FuncName  string          `json:"func_name,omitempty"`  // Function name (e.g., "rightSource1")
+	SideOrder bool            `json:"side_order,omitempty"` // A func whose consumer holds its rows and whose result reads their order (a join's right side)
+	FuncBody  []*CodeFragment `json:"func_body,omitempty"`  // Fragments that make up the function body
 
 	// Phase 2 typed-mode (SSQLGO=typed): schema-flow info populated by
 	// commands that support typed-mode emission. Empty/nil for the
