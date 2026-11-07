@@ -109,11 +109,12 @@ func TestDialectDuckDBUnchanged(t *testing.T) {
 	sql := assembleFromCommands(t,
 		"ssql from csv data.csv -sample 5",
 		"ssql where -if name regex ^A",
+		"ssql sort salary",
 		"ssql group-by dept -median salary med -first name f -collect level lv -arg-max name salary top -mode level m -string-agg name , names",
 		"ssql exclude m",
 	)
 	wantAll(t, sql, "(dialect: duckdb)", "FROM read_csv('data.csv', header=true, quote='\"', escape='\"', delim=',', auto_type_candidates=['BIGINT', 'DOUBLE', 'BOOLEAN', 'VARCHAR']) USING SAMPLE 5 ROWS (reservoir)", "regexp_matches(name, '^A')",
-		"median(salary)", "first(name) FILTER (WHERE name IS NOT NULL)", "LIST(level)", "arg_max(name, salary)", "mode(level)", "string_agg(name, ',')", "* EXCLUDE (m)")
+		"median(salary)", "first(name ORDER BY salary ASC NULLS FIRST) FILTER (WHERE name IS NOT NULL)", "LIST(level ORDER BY salary ASC NULLS FIRST)", "arg_max(name, salary)", "mode(level)", "string_agg(name, ',' ORDER BY salary ASC NULLS FIRST)", "* EXCLUDE (m)")
 	wantNone(t, sql, `"dept"`, "AS __q", "\\copy")
 }
 
@@ -124,6 +125,7 @@ func TestDialectPostgres(t *testing.T) {
 		sql := mustDialect(t, dialectPostgres,
 			"ssql from csv "+file,
 			"ssql where -if Name regex ^A",
+			"ssql sort age",
 			"ssql group-by flag -median score med -percentile score 0.9 p90 -first Name f -last Name l -any Name a -collect age ages -arg-max Name score top -arg-min Name score bottom -mode note m -string-agg age , agelist",
 		)
 		wantAll(t, sql,
@@ -134,14 +136,14 @@ func TestDialectPostgres(t *testing.T) {
 			`("Name" ~ '^A')`,
 			`percentile_cont(0.5) WITHIN GROUP (ORDER BY "score") AS "med"`,
 			`percentile_cont(0.9) WITHIN GROUP (ORDER BY "score") AS "p90"`,
-			`(array_agg("Name") FILTER (WHERE "Name" IS NOT NULL))[1] AS "f"`,
-			`(array_agg("Name") FILTER (WHERE "Name" IS NOT NULL))[cardinality(array_agg("Name") FILTER (WHERE "Name" IS NOT NULL))] AS "l"`,
+			`(array_agg("Name" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "Name" IS NOT NULL))[1] AS "f"`,
+			`(array_agg("Name" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "Name" IS NOT NULL))[cardinality(array_agg("Name" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "Name" IS NOT NULL))] AS "l"`,
 			`any_value("Name") AS "a"`,
-			`COALESCE(array_agg("age") FILTER (WHERE "age" IS NOT NULL), '{}') AS "ages"`,
+			`COALESCE(array_agg("age" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "age" IS NOT NULL), '{}') AS "ages"`,
 			`(array_agg("Name" ORDER BY "score" DESC NULLS LAST) FILTER (WHERE "score" IS NOT NULL))[1] AS "top"`,
 			`(array_agg("Name" ORDER BY "score" ASC NULLS LAST) FILTER (WHERE "score" IS NOT NULL))[1] AS "bottom"`,
 			`mode() WITHIN GROUP (ORDER BY "note") AS "m"`,
-			`string_agg(CAST("age" AS TEXT), ',') AS "agelist"`,
+			`string_agg(CAST("age" AS TEXT), ',' ORDER BY "age" ASC NULLS FIRST) AS "agelist"`,
 			`GROUP BY "flag"`,
 		)
 		wantNone(t, sql, "regexp_matches", "LIST(", "quantile_cont", "arg_max", "median(")
@@ -169,7 +171,7 @@ func TestDialectPostgres(t *testing.T) {
 	})
 
 	t.Run("subqueries_are_aliased", func(t *testing.T) {
-		sql := mustDialect(t, dialectPostgres, "ssql from csv "+file, "ssql limit 2", "ssql group-by flag -count n")
+		sql := mustDialect(t, dialectPostgres, "ssql from csv "+file, "ssql sort age", "ssql limit 2", "ssql group-by flag -count n")
 		wantAll(t, sql, ") AS __q")
 		sql = mustDialect(t, dialectPostgres, "ssql from csv "+file, "ssql group-by flag age -count n -cube")
 		wantAll(t, sql, ") AS __q", `(__d."flag" IS NOT DISTINCT FROM __s1."flag")`)
@@ -226,6 +228,7 @@ func TestDialectDataFusion(t *testing.T) {
 	sql := mustDialect(t, dialectDataFusion,
 		"ssql from csv "+file,
 		"ssql where -if Name regex ^A",
+		"ssql sort age",
 		"ssql group-by flag -median score med -percentile score 0.9 p90 -first Name f -last Name l -any Name a -collect age ages -arg-max Name score top -string-agg age , agelist",
 		"ssql exclude f",
 	)
@@ -235,10 +238,10 @@ func TestDialectDataFusion(t *testing.T) {
 		`regexp_like("Name", '^A')`,
 		`median("score") AS "med"`,
 		`percentile_cont(0.9) WITHIN GROUP (ORDER BY "score") AS "p90"`,
-		`first_value("Name") FILTER (WHERE "Name" IS NOT NULL) AS "f"`, `last_value("Name") FILTER (WHERE "Name" IS NOT NULL) AS "l"`, `first_value("Name") FILTER (WHERE "Name" IS NOT NULL) AS "a"`,
-		`COALESCE(array_agg("age") FILTER (WHERE "age" IS NOT NULL), make_array()) AS "ages"`,
+		`first_value("Name" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "Name" IS NOT NULL) AS "f"`, `last_value("Name" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "Name" IS NOT NULL) AS "l"`, `first_value("Name") FILTER (WHERE "Name" IS NOT NULL) AS "a"`,
+		`COALESCE(array_agg("age" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "age" IS NOT NULL), make_array()) AS "ages"`,
 		`first_value("Name" ORDER BY "score" DESC NULLS LAST) FILTER (WHERE "score" IS NOT NULL) AS "top"`,
-		`string_agg("age", ',') AS "agelist"`,
+		`string_agg("age", ',' ORDER BY "age" ASC NULLS FIRST) AS "agelist"`,
 		`* EXCLUDE ("f")`,
 	)
 	wantNone(t, sql, "\\copy", "AS __q", "CAST(\"age\" AS TEXT)")

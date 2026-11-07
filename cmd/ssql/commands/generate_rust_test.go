@@ -131,17 +131,20 @@ func TestGenerateRustLayers(t *testing.T) {
 			[]string{"ssql from e.csv", "ssql where -if age gt 30", "ssql count"},
 			[]string{`let df = df.aggregate(vec![], vec![agg::count(lit(1i64)).alias("count")])?;`}},
 		{"every registry aggregate is a builder",
-			[]string{"ssql from e.csv", "ssql group-by dept -median salary med -count-distinct city cities -stddev salary sd -variance salary v -string-agg name , m -percentile salary 0.9 p90 -arg-max name salary top -arg-min name salary low -first name f -last name l"},
+			[]string{"ssql from e.csv", "ssql group-by dept -median salary med -count-distinct city cities -stddev salary sd -variance salary v -percentile salary 0.9 p90 -arg-max name salary top -arg-min name salary low"},
 			[]string{`agg::median(col("salary")).alias("med")`, `agg::count_distinct(col("city")).alias("cities")`,
 				`agg::stddev(col("salary")).alias("sd")`, `agg::var_sample(col("salary")).alias("v")`,
-				`string_agg(col("name"), lit(",")).alias("m")`,
 				`agg::percentile_cont(col("salary").sort(true, false), lit(0.9f64)).alias("p90")`,
 				`agg::first_value(col("name"), vec![]).order_by(vec![col("salary").sort(false, false)]).filter(col("salary").is_not_null()).build()?.alias("top")`,
-				`agg::first_value(col("name"), vec![]).order_by(vec![col("salary").sort(true, false)]).filter(col("salary").is_not_null()).build()?.alias("low")`,
-				`agg::first_value(col("name"), vec![]).filter(col("name").is_not_null()).build()?.alias("f")`, `agg::last_value(col("name"), vec![]).filter(col("name").is_not_null()).build()?.alias("l")`}},
+				`agg::first_value(col("name"), vec![]).order_by(vec![col("salary").sort(true, false)]).filter(col("salary").is_not_null()).build()?.alias("low")`}},
 		{"collect is the dialect's text (NULLs skipped, an empty group the empty list)",
-			[]string{"ssql from e.csv", "ssql group-by dept -collect name ns"},
-			[]string{`parse_sql_expr(r#"COALESCE(array_agg("name") FILTER (WHERE "name" IS NOT NULL), make_array()) AS "ns""#)`}},
+			[]string{"ssql from e.csv", "ssql sort age", "ssql group-by dept -collect name ns"},
+			[]string{`parse_sql_expr(r#"COALESCE(array_agg("name" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "name" IS NOT NULL), make_array()) AS "ns""#)`}},
+		{"first, last and string-agg are the dialect's text, with the sort's order",
+			[]string{"ssql from e.csv", "ssql sort age", "ssql group-by dept -first name f -last name l -string-agg name , m"},
+			[]string{`parse_sql_expr(r#"first_value("name" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "name" IS NOT NULL) AS "f""#)`,
+				`parse_sql_expr(r#"last_value("name" ORDER BY "age" ASC NULLS FIRST) FILTER (WHERE "name" IS NOT NULL) AS "l""#)`,
+				`parse_sql_expr(r#"string_agg("name", ',' ORDER BY "age" ASC NULLS FIRST) AS "m""#)`}},
 		{"ranking window is a builder; a frame aggregate builds its frame once",
 			[]string{"ssql from e.csv", "ssql window -partition dept -order salary -desc -rank r -sum salary run -avg salary a"},
 			[]string{`let df = df.with_column("r", win::rank().partition_by(vec![col("dept")]).order_by(vec![col("salary").sort(false, false)]).build()?)?;`,
@@ -171,12 +174,12 @@ func TestGenerateRustLayers(t *testing.T) {
 				`let df = df.drop_columns(&["r.customer_id"])?;`,
 				`let df = df.select_columns(&["customer_id", "name"])?;`}},
 		{"projection stages",
-			[]string{"ssql from " + rustTestCSV(t), "ssql cast -type age float", "ssql rename -as name who", "ssql exclude status", "ssql distinct", "ssql offset 2"},
+			[]string{"ssql from " + rustTestCSV(t), "ssql cast -type age float", "ssql rename -as name who", "ssql exclude status", "ssql distinct", "ssql sort who", "ssql offset 2"},
 			[]string{`let e1 = df.parse_sql_expr(r#"CAST("age" AS DOUBLE)"#)?;`, `let df = df.with_column("age", e1)?;`,
 				`let df = df.with_column_renamed("name", "who")?;`, `let df = df.drop_columns(&["status"])?;`,
 				`let df = df.distinct()?;`, `let df = df.limit(2, None)?;`}},
 		{"parquet source with columns",
-			[]string{"ssql from parquet x.parquet -columns a -columns b", "ssql limit 3"},
+			[]string{"ssql from parquet x.parquet -columns a -columns b", "ssql sort a", "ssql limit 3"},
 			[]string{`let df = ctx.read_parquet("x.parquet", ParquetReadOptions::default()).await?;`, `let df = df.select_columns(&["a", "b"])?;`}},
 		{"range source is a SQL leaf, the stages after it calls",
 			[]string{"ssql from range 5 -start 10", "ssql update -set-expr sq 'n * n'"},
@@ -315,7 +318,7 @@ func TestGenerateRustUnion(t *testing.T) {
 		}
 	}
 	must(lib.CodeFragment{Type: "stmt", Command: "ssql from e.csv"})
-	must(lib.CodeFragment{Type: "func", FuncName: "unionSource1", FuncBody: []*lib.CodeFragment{{Type: "stmt", Command: "ssql from f.csv"}, {Type: "stmt", Command: "ssql limit 2"}}})
+	must(lib.CodeFragment{Type: "func", FuncName: "unionSource1", FuncBody: []*lib.CodeFragment{{Type: "stmt", Command: "ssql from f.csv"}, {Type: "stmt", Command: "ssql sort a"}, {Type: "stmt", Command: "ssql limit 2"}}})
 	must(lib.CodeFragment{Type: "stmt", Command: "ssql union -file /dev/fd/63"})
 	code, err := assembleRust(&buf, "")
 	if err != nil {
@@ -336,7 +339,7 @@ func TestGenerateRustUnion(t *testing.T) {
 
 // TestGenerateRustFunc pins -func: the function alone, named.
 func TestGenerateRustFunc(t *testing.T) {
-	code := rustFromCommands(t, "case_a", "ssql from e.csv", "ssql limit 1")
+	code := rustFromCommands(t, "case_a", "ssql from e.csv", "ssql sort a", "ssql limit 1")
 	if !strings.HasPrefix(code, "pub async fn case_a(ctx: &SessionContext) -> Result<DataFrame> {\n") {
 		t.Errorf("unexpected start:\n%s", code)
 	}

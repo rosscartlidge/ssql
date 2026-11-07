@@ -299,3 +299,62 @@ own offset, every `time_text_*` case is red.
 
 **The cost is the serial plan** for those pipelines: the source read and
 every stage before the order-reading one lose their parallel form.
+
+## 8. The order promise, and where SQL can keep it (2026-11-07)
+
+Ross: "fix the DataFusion wrong answers", then, of a first fix that forced a serial plan: "where we
+cant gurantee the right answer we should fail loudly with a clear reason an work-around rather then
+slowing it down", and "the order guarantees that ssql exec/Go has are one of its nice
+characteristics". File order is part of what `-first` means. So the question is which backends
+can promise it, and a backend that cannot says so.
+
+A census over 3 M rows, with answers computed from the file, found the same bug in all three engines:
+
+| Engine | Wrong | With no sort now |
+|---|---|---|
+| DuckDB | `-first`, `-last`, `-collect`, `-string-agg`: 954250 where the answer is 0, changing per run | translated through `row_number() OVER ()` |
+| DataFusion, rust | those, `limit`, and `offset` under load | refused |
+| Postgres, real table | `array_agg` under its default parallel plan; `OFFSET` under forced parallel costs | refused |
+
+DuckDB's [Order Preservation](https://duckdb.org/docs/2.0/sql/dialect/order_preservation.html) page draws
+the line. It guarantees the order through a single table, `WHERE`, `SELECT`, `LIMIT`, `OFFSET`, `UNION ALL`,
+a window with an empty `OVER` and subqueries of those, and not through `JOIN`, `GROUP BY`, `USING SAMPLE` or
+aggregates. So `join | limit` is refused on DuckDB too, though it answered rightly in all six runs.
+
+- **Translated:** a `sort` before the stage on every engine, as `first(x ORDER BY key)`, and a `limit` under
+  the sort's ORDER BY. A range source's column counts as a sort. On DuckDB with no sort, `row_number() OVER ()`.
+- **Refused, with the reason and the way out:** the rest, including a stage after a sort whose key was dropped.
+- **Unchanged:** `-arg-max` and `-arg-min` (defined but for a tie), `-any` (promises nothing), and a fold, which
+  already worked this way (DFC156).
+
+### What it costs, 14.6 M rows
+
+| `group-by a_kind` | Wall | User |
+|---|---:|---:|
+| **Typed Go, `-first -last`, in file order, parallel** | **0.58 s** | 9.5 s |
+| DuckDB, `-first -last`, row numbers | 3.95 s | 3.6 s |
+| DuckDB, `-collect`, row numbers | 6.06 s | 6.1 s |
+| DuckDB, `sort a_sequence`, then `-first` | 1.10 s | 7.0 s |
+| DuckDB, `-count`, no order read | 0.84 s | 3.7 s |
+| DataFusion, `sort a_sequence`, then `-first` | 0.29 s | |
+| DataFusion, `-count` | 0.23 s | |
+
+Typed Go's answers equal DuckDB's and a sequential Python read of the file, group for group. It is the
+one backend here with the file's order and every core: a parallel source's shards are runs of the file, so
+the merge can honour them, and the row-number form makes DuckDB's plan serial. That is the place to send a
+user who wants both, and the refusal does.
+
+A sort key with ties remains arbitrary in SQL, where exec's sort is stable: DuckDB documents `ORDER BY` as
+possibly unstable. The refusal does not mention this.
+
+### Found on the way
+
+- **The optimiser deleted a `sort` before `-collect`**, in every generated lane. `-first`, `-last` and
+  `-string-agg` were in the flag list that says a group-by reads its order; `-collect` was not.
+- **A join's unbuildable `<(…)` side became the table `/dev/fd/63`.** A side's stages also shared the main
+  query's order state; a side now has its own.
+- **A first fix was wrong twice.** `SET threads = 1` passed every run but rested on no promise, and the row-number
+  form was called parallel before being measured. Its test could not tell it from a serial plan with no
+  ORDER BY at all, so the test now reads the SQL for it.
+- **The lane cannot show Postgres's bug:** it loads TEMP tables, which cannot be scanned in parallel. The
+  Postgres results here were by hand on a real table on the rig.

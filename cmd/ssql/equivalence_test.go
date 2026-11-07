@@ -374,8 +374,10 @@ func equivLanes() []equivLane {
 	// lanes can't fool it. Only present when a duckdb binary is available.
 	if duckdb := duckdbBinary(); duckdb != "" {
 		lanes = append(lanes, equivLane{"duckdb", func(t *testing.T, bin, pipeline string, env []string) string {
-			sql := equivShellEnv(t, "duckdb-gen", "export SSQL_MODE=record && "+
-				pipeline+" | "+bin+" to jsonl | "+bin+" generate sql", env)
+			sql, skip := equivDialectSQL(t, "duckdb", bin, pipeline, env)
+			if skip != "" {
+				return skip
+			}
 			cmd := exec.Command(duckdb, "-json", "-c", sql)
 			cmd.Env = append(os.Environ(), env...)
 			var stdout, stderr bytes.Buffer
@@ -3906,10 +3908,6 @@ var equivCases = []EquivCase{
 			{"g": 3, "c": []any{30000, 35000}},
 			{"g": 4, "c": []any{40000, 45000}},
 		},
-		Skip: map[string]string{
-			"datafusion": "DataFusion repartitions a large input, and an aggregate with no ORDER BY has no order (TODO)",
-			"rust":       "DataFusion repartitions a large input, and an aggregate with no ORDER BY has no order (TODO)",
-		},
 	},
 	{
 		// A stage that reads its input's order takes the serial plan: after
@@ -3922,11 +3920,7 @@ var equivCases = []EquivCase{
 		Skip:     equivNoSQL("limit -last without a sort is refused: arrival order is undefined in SQL"),
 	},
 	{
-		Name: "order_where_offset",
-		Skip: map[string]string{
-			"datafusion": "DataFusion's scan has no file order over a large input: offset answered 8190, 8191 (TODO)",
-			"rust":       "DataFusion's scan has no file order over a large input: offset answered 8190, 8191 (TODO)",
-		},
+		Name:     "order_where_offset",
 		Pipeline: `{{.bin}} from csv {{.data}}/rows_in_order.csv | {{.bin}} where -if n ge 0 | {{.bin}} include n | {{.bin}} offset 49998`,
 		Ordered:  true,
 		Golden:   []map[string]any{{"n": 49998}, {"n": 49999}},
@@ -4671,6 +4665,18 @@ var equivCases = []EquivCase{
 		Golden: []map[string]any{
 			{"link": "l1", "a_name": "Q"},
 		},
+	},
+	{
+		// A sort says which order -collect lists, on every engine. The optimiser
+		// deleted this sort until 2026-11-07.
+		Name:     "order_sort_desc_then_collect",
+		Pipeline: `{{.bin}} from csv {{.data}}/rows_in_order.csv | {{.bin}} where -if-expr 'n % 5000 == 0' | {{.bin}} sort -desc n | {{.bin}} group-by g -collect n c | {{.bin}} sort g | {{.bin}} include g c | {{.bin}} limit 1`,
+		Ordered:  true,
+	},
+	{
+		Name:     "order_sort_then_first_last_string_agg",
+		Pipeline: `{{.bin}} from csv {{.data}}/lookup_kinds.csv | {{.bin}} sort -desc rank | {{.bin}} group-by -first kind_name f -last kind_name l -string-agg kind_name : j`,
+		Golden:   []map[string]any{{"f": "three", "l": "one", "j": "three:deux:two:one"}},
 	},
 	{
 		// Two joins on one key, nothing filtered: DataFusion called the key

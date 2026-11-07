@@ -548,6 +548,7 @@ func assembleQuery(input io.Reader) (*sqlQuery, error) {
 	sqlTimeColumns = map[string]bool{} // per assembly
 	sqlColumnKinds = map[string]string{}
 	sqlZone, sqlNeedsZone = ssql.StreamZoneName(), false // the from stage's -tz replaces the fallback
+	sqlOrder = sqlOrderState{}
 	sqlTextTimeColumns = map[string]bool{}
 
 	// Collect func fragments (subprocess sources for joins) and build subqueries
@@ -731,6 +732,7 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 	if err != nil {
 		return err
 	}
+	sqlOrder.afterStage(name, q)
 	advanceColumns(q, name, args[2:])
 	return nil
 }
@@ -1073,6 +1075,8 @@ func translateFrom(q *sqlQuery, args []string) error {
 		wrapAsSQLOnly(q, "from -sample", func(src string) string { return sqlSampleRows(src, sampleN) })
 		q.hatch = &sqlHatch{sample: sampleN}
 		q.sampled = true
+		sqlOrder.lost = "a sample"
+	sqlOrder.lost = "a sample"
 	}
 	if lastN != "" && lastN != "0" {
 		if sqlDialectCur != dialectDuckDB {
@@ -1420,6 +1424,9 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 				if d.extraArg != "" {
 					extra = args[i+2]
 				}
+				if err := sqlOrder.readsAgg(d.fn, q); err != nil {
+					return err
+				}
 				aggs = append(aggs, sqlAgg{expr: d.sql(qf, extra), name: args[i+n], fn: d.fn, field: strings.Trim(qf, `"`), extra: extra})
 				// The result column's kind, from the registry's own wire-type
 				// rule (an extreme of a text column is text; a count is an
@@ -1466,6 +1473,8 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 		}
 	}
 
+	sqlOrder.aggOrder = ""
+	sqlOrder.numberRows(q)
 	if rollup || cube {
 		if rollup && cube {
 			return fmt.Errorf("cannot use both -rollup and -cube; choose one")
@@ -1669,6 +1678,9 @@ func translateLimit(q *sqlQuery, args []string) error {
 	}
 	if !last {
 		if n != "" {
+			if err := sqlOrder.readsRows("limit", q); err != nil {
+				return err
+			}
 			q.limit = n
 		}
 		return nil
@@ -1734,11 +1746,15 @@ func translateSample(q *sqlQuery, args []string) error {
 		return fmt.Errorf("sample: need N or -percent")
 	}
 	q.sampled = true
+	sqlOrder.lost = "a sample"
 	return nil
 }
 
 func translateOffset(q *sqlQuery, args []string) error {
 	if len(args) > 0 {
+		if err := sqlOrder.readsRows("offset", q); err != nil {
+			return err
+		}
 		q.offset = args[0]
 	}
 	return nil
@@ -1899,6 +1915,7 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 			q.joinNodes = append(q.joinNodes, node)
 			return nil
 		}
+		return sqlSideError("join")
 	}
 
 	src, err := dialectSource(filePath)
@@ -1983,7 +2000,7 @@ func translateAsofJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
 		sub := buildJoinSubquery(funcFrags[len(funcFrags)-1])
 		if sub == "" {
-			return fmt.Errorf("join -asof: source pipeline is too complex to translate (only from/where are supported inside <(…)>)")
+			return sqlSideError("join -asof")
 		}
 		src = "(" + sub + ")"
 		rightFields = fragmentFields(funcFrags[len(funcFrags)-1].FuncBody)
@@ -2109,7 +2126,7 @@ func translateUnion(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) e
 		side := buildJoinQuery(procs[pi])
 		pi++
 		if side == nil {
-			return fmt.Errorf("union: source pipeline is too complex to translate (only from/where are supported inside <(…)>)")
+			return sqlSideError("union")
 		}
 		parts = append(parts, projectByName(renderSelect(side), q.columns))
 		sides = append(sides, side)
@@ -2199,7 +2216,7 @@ func translateSetOp(q *sqlQuery, name string, args []string, funcFrags []*lib.Co
 			side := buildJoinQuery(procs[pi])
 			pi++
 			if side == nil {
-				return "", nil, fmt.Errorf("%s: source pipeline is too complex to translate (only from/where are supported inside <(…)>)", name)
+				return "", nil, sqlSideError(name)
 			}
 			return renderSelect(side), side, nil
 		}
@@ -2311,6 +2328,18 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 
 // buildJoinQuery is buildJoinSubquery's layer: the side pipeline's query
 // (nil when it cannot be translated), for the tree and the rendering.
+// sqlSideOrderRefusal is the order refusal that made the last side unbuildable.
+var sqlSideOrderRefusal error
+
+// sqlSideError is the message for a side the translator could not build.
+func sqlSideError(stage string) error {
+	if err := sqlSideOrderRefusal; err != nil {
+		sqlSideOrderRefusal = nil
+		return fmt.Errorf("%s: its source pipeline: %w", stage, err)
+	}
+	return fmt.Errorf("%s: source pipeline is too complex to translate (only from/where are supported inside <(…)>)", stage)
+}
+
 func buildJoinQuery(funcFrag *lib.CodeFragment) *sqlQuery {
 	if funcFrag == nil {
 		return nil
@@ -2323,12 +2352,21 @@ func buildJoinQuery(funcFrag *lib.CodeFragment) *sqlQuery {
 	// whole file (the random tester's ASOF stage found it). A stage the
 	// translator refuses makes the side unbuildable (""), which the
 	// caller reports.
+	// The side has its own rows, so its own order: what it does to them says
+	// nothing about the main pipeline's. A refusal of its order is kept for the
+	// caller's message, which otherwise could only say "too complex".
+	mainOrder := sqlOrder
+	defer func() { sqlOrder = mainOrder }()
+	sqlOrder = sqlOrderState{}
 	sub := &sqlQuery{}
 	for _, bodyFrag := range funcFrag.FuncBody {
 		if bodyFrag.Command == "" {
 			continue
 		}
 		if err := translateFragment(sub, bodyFrag, nil); err != nil {
+			if strings.Contains(err.Error(), "reads its input's order") || strings.Contains(err.Error(), "reads the order of a sort") {
+				sqlSideOrderRefusal = err
+			}
 			return nil
 		}
 	}

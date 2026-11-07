@@ -1058,12 +1058,16 @@ change (`median` becomes `percentile_cont(0.5) WITHIN GROUP`, `-first`
 becomes `(array_agg(x))[1]`), Postgres gets a `CREATE TABLE` + `\copy`
 prologue because it cannot read a file inside a query, and a stage the
 engine has no form for is refused with a message naming it rather than
-translated approximately. The same equivalence gate runs the generated
+translated approximately. That includes row order: `-first`, `-last`,
+`-collect`, `-string-agg`, `limit` and `offset` read their input's order, which
+ssql and generated Go keep but an engine promises only in part. A `sort`
+says which order and translates everywhere; DuckDB also documents the order
+through a single source, and anything else is refused with the reason. The same equivalence gate runs the generated
 SQL on all three engines when they are available
 ([DFC132 §4](research/dfc132_rust_target_datafusion.md)):
 
 ```bash
-ssql generate sql -dialect postgres -pipeline 'ssql from employees.csv | ssql group-by dept -median salary median_salary -first name first_hired | ssql to table'
+ssql generate sql -dialect postgres -pipeline 'ssql from employees.csv | ssql sort hire_date | ssql group-by dept -median salary median_salary -first name first_hired | ssql to table'
 ```
 
 ### The pipeline as a Rust program

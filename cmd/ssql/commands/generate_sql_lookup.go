@@ -111,7 +111,7 @@ func translateLookupJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
 		side := buildJoinQuery(funcFrags[len(funcFrags)-1])
 		if side == nil {
-			return fmt.Errorf("join: the <(…) side has no SQL translation")
+			return sqlSideError("join")
 		}
 		src = "(" + renderSelect(side) + ")"
 	} else {

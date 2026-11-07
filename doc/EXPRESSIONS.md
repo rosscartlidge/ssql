@@ -452,7 +452,9 @@ time column on the pipeline zone's wall clock without changing its type
 Inside `group-by -expr` every field is the group's array, so the array
 builtins aggregate: `first(name)`, `last(name)`, `median(salary)`,
 `len(uniq(city))`, `join(sort(name), ", ")`. The common ones have flags
-that run in every lane, including `generate sql`: `-first`, `-last`,
+that run in every lane, including `generate sql` (where `-first`, `-last`,
+`-collect` and `-string-agg` need the order to be guaranteed: a `sort`
+before them, or on DuckDB a single source; else they are refused): `-first`, `-last`,
 `-any`, `-count-distinct`, `-string-agg FIELD SEP NAME`, `-median`,
 `-percentile FIELD P NAME`, `-stddev`, `-variance`, `-mode`, `-arg-max
 FIELD BY NAME`, `-arg-min`, `-min`/`-max` (strings and times too). Prefer the flag when one exists: flags translate to SQL as well;

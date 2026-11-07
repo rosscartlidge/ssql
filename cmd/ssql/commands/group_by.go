@@ -32,7 +32,7 @@ type exprSpec struct {
 // and a fold's SQL form needs that ORDER BY to see the order at all).
 func declareGroupByOrder() {
 	lib.DeclareOrder("group-by", lib.OrderReset)
-	for _, flag := range []string{"-presorted", "-stream-expr", "-first", "-last", "-any", "-string-agg", "-mode", "-arg-max", "-arg-min"} {
+	for _, flag := range []string{"-presorted", "-stream-expr", "-first", "-last", "-any", "-string-agg", "-mode", "-arg-max", "-arg-min", "-collect"} {
 		lib.DeclareOrderWhenFlag("group-by", flag, lib.OrderConsumes)
 	}
 }

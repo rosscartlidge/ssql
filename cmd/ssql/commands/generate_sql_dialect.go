@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"slices"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -195,6 +196,155 @@ func sqlJoinSideSubquery(body string, n int) string {
 		return fmt.Sprintf("%s AS __j%d", body, n)
 	}
 	return body
+}
+
+// sqlOrderState follows what a statement may say about row order. An engine
+// keeps none unless it promises to: over 3 M rows `-first` answered 954250 where
+// the group's first row is 0, on DuckDB and DataFusion, and Postgres plans
+// array_agg in parallel by default (2026-11-07; the fixtures had been too small
+// to show it on any engine). So a stage that reads its input's order is translated
+// only where the answer is guaranteed, and refused with the way out otherwise
+// (Ross: fail loudly rather than slow it down). A guarantee is an ORDER BY from an
+// earlier sort or a range source's column, or on DuckDB what its Order Preservation
+// page documents: single table, WHERE, SELECT, LIMIT, OFFSET, UNION ALL and
+// subqueries of those, and row_number() OVER () to make the order a column.
+type sqlOrderState struct {
+	lost     string // the stage that ended the source's order, "" while it holds
+	aggOrder string // " ORDER BY …" for the aggregate being rendered
+	rowNum   bool   // the group-by needs the source's row number as a column
+}
+
+var sqlOrder sqlOrderState
+
+// sqlRowNumColumn is the column row_number() OVER () is carried in.
+const sqlRowNumColumn = "__ssql_row"
+
+// sqlOrderedAggs are the aggregates whose answer is their input's order. The arg
+// aggregates are defined except on a tie, and -any promises nothing.
+var sqlOrderedAggs = map[string]bool{"first": true, "last": true, "collect": true, "string-agg": true}
+
+// sqlOrderTransparent are the stages that keep the rows in the order they came.
+var sqlOrderTransparent = map[string]bool{
+	"from": true, "where": true, "include": true, "exclude": true, "rename": true,
+	"update": true, "cast": true, "limit": true, "offset": true, "to": true,
+}
+
+func (o *sqlOrderState) refuse(what string) error {
+	engine := string(sqlDialectCur)
+	why := "which " + engine + " does not keep"
+	if o.lost != "" {
+		why += " across " + o.lost
+	}
+	way := "add a sort to say which order, or use generate go, which keeps file order"
+	if o.lost == "" && sqlDialectCur != dialectDuckDB {
+		way = "add a sort to say which order, use -dialect duckdb, or use generate go, which keeps file order"
+	}
+	return fmt.Errorf("%s with no sort has no %s translation: it reads its input's order, %s; %s", what, engine, why, way)
+}
+
+// refuseDropped is the sort that is there but cannot be said again here.
+func (o *sqlOrderState) refuseDropped(what string) error {
+	return fmt.Errorf("%s has no %s translation: it reads the order of a sort whose key was dropped before it; keep the key until here, or use generate go", what, sqlDialectCur)
+}
+
+// orderKeys is the ORDER BY that already defines the rows here. wrapped says it
+// sits in a subquery, so it must be said again, which needs its columns.
+func (o *sqlOrderState) orderKeys(q *sqlQuery) (keys []string, wrapped bool) {
+	if len(q.orderBy) > 0 {
+		return q.orderBy, false
+	}
+	if len(q.wrappedOrder) > 0 {
+		return q.wrappedOrder, true
+	}
+	if q.rangeColumn != "" && (q.columns == nil || slices.Contains(q.columns, q.rangeColumn)) {
+		return []string{quoteIdent(q.rangeColumn)}, true
+	}
+	return nil, false
+}
+
+// keysPresent reports that every quoted column of the terms still exists: a
+// projection after the sort can drop the key, and a sort there has no meaning.
+func keysPresent(q *sqlQuery, keys []string) bool {
+	if q.columns == nil {
+		return true
+	}
+	for _, k := range keys {
+		name, ok := strings.CutPrefix(k, `"`)
+		if ok {
+			name, _, _ = strings.Cut(name, `"`)
+		} else {
+			name, _, _ = strings.Cut(k, " ") // a dialect that quotes only when it must
+		}
+		if !strings.Contains(name, "(") && !slices.Contains(q.columns, name) {
+			return false
+		}
+	}
+	return true
+}
+
+// readsRows is limit or offset: which rows they keep is the input's order.
+func (o *sqlOrderState) readsRows(what string, q *sqlQuery) error {
+	if keys, wrapped := o.orderKeys(q); keys != nil {
+		if !wrapped {
+			return nil
+		}
+		if keysPresent(q, keys) {
+			q.orderBy = keys
+			return nil
+		}
+		return o.refuseDropped(what)
+	}
+	if sqlDialectCur == dialectDuckDB && o.lost == "" {
+		return nil
+	}
+	return o.refuse(what)
+}
+
+// readsAgg decides the order an aggregate reads, or refuses it.
+func (o *sqlOrderState) readsAgg(fn string, q *sqlQuery) error {
+	o.aggOrder = ""
+	if !sqlOrderedAggs[fn] {
+		return nil
+	}
+	if keys, _ := o.orderKeys(q); keys != nil {
+		if !keysPresent(q, keys) {
+			return o.refuseDropped("group-by -" + fn)
+		}
+		o.aggOrder = " ORDER BY " + strings.Join(keys, ", ")
+		return nil
+	}
+	if sqlDialectCur == dialectDuckDB && o.lost == "" {
+		o.rowNum = true
+		o.aggOrder = " ORDER BY " + quoteIdent(sqlRowNumColumn)
+		return nil
+	}
+	return o.refuse("group-by -" + fn)
+}
+
+// numberRows makes the source's order a column, under the group-by that reads it.
+func (o *sqlOrderState) numberRows(q *sqlQuery) {
+	if !o.rowNum {
+		return
+	}
+	o.rowNum = false
+	if q.hasClauses() {
+		wrapAsSubquery(q)
+	}
+	q.fromClause = "(SELECT *, row_number() OVER () AS " + quoteIdent(sqlRowNumColumn) + " FROM " + q.fromClause + ")"
+}
+
+// afterStage records what a stage did to the order the next one sees: a sort's
+// ORDER BY speaks for itself, and any other stage that is not known to keep the
+// order ends it, along with a sort below it.
+func (o *sqlOrderState) afterStage(name string, q *sqlQuery) {
+	switch {
+	case sqlOrderTransparent[name]:
+	case name == "sort" || name == "top":
+		o.lost = ""
+	default:
+		o.lost = "`" + name + "`"
+		q.wrappedOrder = nil
+	}
 }
 
 // sqlForRust is set while `generate rust` assembles its tree: the
@@ -687,11 +837,11 @@ func sqlAggCollect(qf string) string {
 	present := " FILTER (WHERE " + qf + " IS NOT NULL)"
 	switch sqlDialectCur {
 	case dialectDuckDB:
-		return "COALESCE(LIST(" + elem + ")" + present + ", [])"
+		return "COALESCE(LIST(" + elem + sqlOrder.aggOrder + ")" + present + ", [])"
 	case dialectPostgres:
-		return "COALESCE(array_agg(" + elem + ")" + present + ", '{}')"
+		return "COALESCE(array_agg(" + elem + sqlOrder.aggOrder + ")" + present + ", '{}')"
 	}
-	return "COALESCE(array_agg(" + elem + ")" + present + ", make_array())"
+	return "COALESCE(array_agg(" + elem + sqlOrder.aggOrder + ")" + present + ", make_array())"
 }
 
 // sqlAggFirst and sqlAggLast skip a missing value, as exec does (Ross,
@@ -700,23 +850,23 @@ func sqlAggFirst(qf string) string {
 	present := " FILTER (WHERE " + qf + " IS NOT NULL)"
 	switch sqlDialectCur {
 	case dialectPostgres:
-		return "(array_agg(" + qf + ")" + present + ")[1]"
+		return "(array_agg(" + qf + sqlOrder.aggOrder + ")" + present + ")[1]"
 	case dialectDataFusion:
-		return "first_value(" + qf + ")" + present
+		return "first_value(" + qf + sqlOrder.aggOrder + ")" + present
 	}
-	return "first(" + qf + ")" + present
+	return "first(" + qf + sqlOrder.aggOrder + ")" + present
 }
 
 func sqlAggLast(qf string) string {
 	present := " FILTER (WHERE " + qf + " IS NOT NULL)"
 	switch sqlDialectCur {
 	case dialectPostgres:
-		agg := "array_agg(" + qf + ")" + present
+		agg := "array_agg(" + qf + sqlOrder.aggOrder + ")" + present
 		return "(" + agg + ")[cardinality(" + agg + ")]"
 	case dialectDataFusion:
-		return "last_value(" + qf + ")" + present
+		return "last_value(" + qf + sqlOrder.aggOrder + ")" + present
 	}
-	return "last(" + qf + ")" + present
+	return "last(" + qf + sqlOrder.aggOrder + ")" + present
 }
 
 func sqlAggAny(qf string) string {
@@ -766,7 +916,7 @@ func sqlAggStringAgg(qf, sep string) string {
 		// string_agg(bigint, text) does not exist in Postgres.
 		qf = "CAST(" + qf + " AS TEXT)"
 	}
-	return fmt.Sprintf("string_agg(%s, %s)", qf, sqlStringLiteral(sep))
+	return fmt.Sprintf("string_agg(%s, %s%s)", qf, sqlStringLiteral(sep), sqlOrder.aggOrder)
 }
 
 // sqlAggArgExtreme renders arg_max (desc=true) / arg_min: the value of qf

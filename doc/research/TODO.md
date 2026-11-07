@@ -71,17 +71,14 @@ Tracked issues and feature gaps discovered during development.
   and built 2026-11-06 (Ross: B for conversions only, A with C; DFC164 §7):
   `ssql.TimeText` in every lane; typed `-collect`; `needsSourceOrder` takes
   the serial plan for a stage that reads its input's order.
-- [ ] **DataFusion's order-sensitive aggregates over a large input**
-  (found 2026-11-06, DFC164 §7.2): DataFusion repartitions, so over 50,000
-  rows `-collect` and `-string-agg` list `25000,20000`, and `-first` of the
-  group whose first row is 0 answers 8192 and `-last` 8191, not 9999 (measured
-  on the engine directly, datafusion 55): a wrong answer, not only an order;
-  the rust lane too. No equivalence fixture was large enough to show it.
-  There is no column that says file order to `ORDER BY`. Options: one target
-  partition in the prologue when such an aggregate appears, or a refusal.
-  `offset` is the same bug (2026-11-07): `where | offset 49998` over 50,000 rows
-  answered 8190, 8191 on one run and passed on others, so `order_where_offset`
-  now skips the DataFusion and rust lanes by name. A `limit` after a `where` probably has the same exposure; not checked.
+- [x] **Order-reading stages over a large input** (found 2026-11-06, FIXED 2026-11-07, DFC164 §8):
+  every SQL engine, not only DataFusion. Translated where guaranteed, refused otherwise
+  (`TestOrderTranslatedOnlyWithAGuarantee`, `TestOrderReadingOverALargeInput`).
+- [ ] **Translate more of the refused order in SQL** (DFC164 §8): Postgres could load with a serial column,
+  a real guarantee, so `-first` with no sort would translate. DataFusion has no documented
+  equivalent. DuckDB's row-number form is guaranteed but serial (0.83 → 3.95 s over 14.6 M rows).
+- [ ] **A sort key with ties in SQL** (DFC164 §8): `sort k | group-by -first` or `sort k | limit` answers any
+  tied row in SQL, where exec's sort is stable and takes the first. Neither the message nor the docs say so.
 - [ ] **Output order after a per-row serial stage** (DFC164 §7.2): `extract`,
   `unpivot` and `union` after a parallel stage print rows in fan-in order,
   not file order. Giving `extract` and `unpivot` parallel forms removes most

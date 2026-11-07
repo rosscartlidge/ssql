@@ -863,6 +863,7 @@ func TestTranslateResampleSQLStructuredOp(t *testing.T) {
 }
 
 func TestTranslateLimitLast(t *testing.T) {
+	sqlOrder = sqlOrderState{}
 	// No ORDER BY → loud refusal (arrival order is undefined in SQL).
 	q := &sqlQuery{fromClause: "'x.csv'"}
 	if err := translateLimit(q, []string{"-last", "3"}); err == nil || !strings.Contains(err.Error(), "preceding sort") {
