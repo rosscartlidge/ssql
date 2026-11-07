@@ -321,6 +321,15 @@ differential that checks it.
   that never asked. `Stream.InOrder()` runs the shards concurrently and yields them in shard
   order. A JSON array side, whose shards are batches, is read serially.
 
+- **`make lanes` found two translator bugs this rewrite walks into.** On Postgres, a
+  filtered side after a subquery took the same `__q` alias as the left side: a hand-written
+  `<(… | where …)` failed the same way. On DataFusion, two `-using` joins on one key failed
+  with no filter at all, which `join_using_chain_same_key` now pins. Neither lane had
+  ever seen those shapes.
+- **`offset` on DataFusion answers wrong over a large input,** intermittently: `order_where_offset`,
+  added the day before, passed twice by luck and then answered 8190, 8191. It is the open
+  DataFusion item in TODO.
+
 ### 8.2 The benchmark
 
 Medians of seven, generated programs, 14.6 M rows. The load average was 16 and falling when it
@@ -351,6 +360,20 @@ DuckDB outputs of the first table were identical to exec's as sorted files.
 - DuckDB gains nothing: it already pushes these predicates down itself.
 - The rule alone leaves Go behind DuckDB (0.90 s against 0.79 s). With `GOGC=800` it is ahead
   (0.64 s), but that setting is not built, and §6 item 3 says why not to fix it at 800.
+
+`scripts/bench-engines.sh -only lookup` on the same build, best of three, a CSV rewritten from the
+Parquet file, output to `/dev/null` rather than a file:
+
+| | DataFusion (generated Rust) | Typed | DuckDB |
+|---|---:|---:|---:|
+| Wall, with the rule | 2.38 s | 0.97 s | 1.31 s |
+| Wall, DFC158 §3.15 | 2.45 s | 1.03 s | 1.04 s |
+| Peak RSS, with the rule | 3.2 GB | 1.2 GB | 910 MB |
+
+Rust barely moves: DataFusion was already pushing these predicates down, as DuckDB does. DuckDB's
+1.31 s against 0.79 s above is the difference in how they run: this driver has it print the rows and
+the table above has `COPY` write a file. That probably also explains §7's note, though it was not
+tested directly. So do not compare the two tables with each other.
 
 **The cost when the filter drops nothing.** With `ne NOTHING` on both columns, all 14.6 M rows
 survive:

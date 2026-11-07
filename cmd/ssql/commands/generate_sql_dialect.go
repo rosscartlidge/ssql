@@ -175,10 +175,24 @@ func dialectRefuse(what, why string) error {
 
 // sqlSubquery renders a derived table for the FROM clause. Postgres
 // requires an alias on every subquery in FROM; DuckDB and DataFusion do
-// not. Nested scopes may reuse the alias, so one fixed name is enough.
+// not. Nested scopes may reuse the alias, so one fixed name is enough, except
+// across the sides of a join: see sqlJoinSideSubquery.
 func sqlSubquery(body string) string {
 	if sqlDialectCur == dialectPostgres {
 		return body + " AS __q"
+	}
+	return body
+}
+
+// sqlJoinSideSubquery is sqlSubquery for a join's right side, which shares a
+// scope with the left side and with the query's other joins, so Postgres needs
+// it to have a name of its own: n is the join's position. With __q on both,
+// `join <(… | where …) -using k` after a subquery was "table name "__q"
+// specified more than once" (found 2026-11-07 by the Postgres lane, when the
+// join pushdown rule began writing that shape).
+func sqlJoinSideSubquery(body string, n int) string {
+	if sqlDialectCur == dialectPostgres {
+		return fmt.Sprintf("%s AS __j%d", body, n)
 	}
 	return body
 }

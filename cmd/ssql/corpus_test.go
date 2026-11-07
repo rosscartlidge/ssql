@@ -201,6 +201,7 @@ func corpusData(t *testing.T) string {
 			// A second table for a chain of joins, and a link whose keys both
 			// match two rows, so a split lookup must keep the row order.
 			"lookup_groups.csv":      "link,grp\nl3,g1\nl1,g1\nl6,g2\nl2,g2\n",
+			"lookup_owners.csv":      "link,owner\nl2,o1\nl1,o1\nl3,o2\n",
 			"lookup_links_multi.csv": "link,a_kind,z_kind\nl8,K1,K2\nl7,K2,K2\n",
 			// A left row whose key cell is empty: absent in ssql, NULL in
 			// SQL; both match nothing. Typed structs cannot hold absence.

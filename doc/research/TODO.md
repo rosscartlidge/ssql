@@ -79,6 +79,9 @@ Tracked issues and feature gaps discovered during development.
   the rust lane too. No equivalence fixture was large enough to show it.
   There is no column that says file order to `ORDER BY`. Options: one target
   partition in the prologue when such an aggregate appears, or a refusal.
+  `offset` is the same bug (2026-11-07): `where | offset 49998` over 50,000 rows
+  answered 8190, 8191 on one run and passed on others, so `order_where_offset`
+  now skips the DataFusion and rust lanes by name. A `limit` after a `where` probably has the same exposure; not checked.
 - [ ] **Output order after a per-row serial stage** (DFC164 §7.2): `extract`,
   `unpivot` and `union` after a parallel stage print rows in fan-in order,
   not file order. Giving `extract` and `unpivot` parallel forms removes most

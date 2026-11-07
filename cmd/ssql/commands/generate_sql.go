@@ -1853,6 +1853,18 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 			return err
 		}
 	}
+	// DataFusion cannot resolve a USING key that a previous USING at the same
+	// level already merged ("Ambiguous reference to unqualified field"), so
+	// `join a -using k | join b -using k` nests the first join.
+	if sqlDialectCur == dialectDataFusion && strings.HasPrefix(joinCond, "USING") && len(q.joins) > 0 {
+		prev := *q
+		*q = sqlQuery{
+			fromClause: "(\n" + indentLines(renderSelect(q), "  ") + "\n)",
+			comments:   q.comments,
+			columns:    q.columns,
+			inner:      &prev,
+		}
+	}
 	if aliased {
 		prev := *q
 		*q = sqlQuery{
@@ -1880,7 +1892,7 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 		if side != nil {
 			src := "(" + renderSelect(side) + ")"
 			if !aliased {
-				src = sqlSubquery(src)
+				src = sqlJoinSideSubquery(src, len(q.joins))
 			}
 			q.joins = append(q.joins, fmt.Sprintf("%s %s %s", joinKind, rightAlias(src), joinCond))
 			node.rightQuery = side
