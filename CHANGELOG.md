@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.142.0] - 2026-11-07
+
 ### Added
 
 - **`group-by -collect` has a typed form,** parallel, each group's list in file order. **Library:** `ssql.TimeText`, `ssql.CollectList`.
