@@ -3,6 +3,7 @@ package ssql
 import (
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
@@ -40,27 +41,28 @@ import (
 // Int128 is Int128, Int128 beside float64 is float64, never on overflow.
 
 const (
-	exprCheckedAdd   = "_ssql_add"
-	exprCheckedSub   = "_ssql_sub"
-	exprCheckedMul   = "_ssql_mul"
-	exprCheckedNeg   = "_ssql_neg"
-	exprCheckedSum   = "_ssql_sum"
-	exprCheckedDiv   = "_ssql_div"
-	exprCheckedMod   = "_ssql_mod"
-	exprCheckedPow   = "_ssql_pow"
-	exprCheckedEq    = "_ssql_eq"
-	exprCheckedNe    = "_ssql_ne"
-	exprCheckedLt    = "_ssql_lt"
-	exprCheckedLe    = "_ssql_le"
-	exprCheckedGt    = "_ssql_gt"
-	exprCheckedGe    = "_ssql_ge"
-	exprCheckedInt   = "_ssql_int"
-	exprCheckedFloat = "_ssql_float"
-	exprCheckedAbs   = "_ssql_abs"
-	exprCheckedMin   = "_ssql_min"
-	exprCheckedMax   = "_ssql_max"
-	exprCheckedFloor = "_ssql_floor"
-	exprCheckedCeil  = "_ssql_ceil"
+	exprCheckedAdd    = "_ssql_add"
+	exprCheckedSub    = "_ssql_sub"
+	exprCheckedMul    = "_ssql_mul"
+	exprCheckedNeg    = "_ssql_neg"
+	exprCheckedSum    = "_ssql_sum"
+	exprCheckedDiv    = "_ssql_div"
+	exprCheckedMod    = "_ssql_mod"
+	exprCheckedPow    = "_ssql_pow"
+	exprCheckedEq     = "_ssql_eq"
+	exprCheckedNe     = "_ssql_ne"
+	exprCheckedLt     = "_ssql_lt"
+	exprCheckedLe     = "_ssql_le"
+	exprCheckedGt     = "_ssql_gt"
+	exprCheckedGe     = "_ssql_ge"
+	exprCheckedInt    = "_ssql_int"
+	exprCheckedFloat  = "_ssql_float"
+	exprCheckedAbs    = "_ssql_abs"
+	exprCheckedString = "_ssql_string"
+	exprCheckedMin    = "_ssql_min"
+	exprCheckedMax    = "_ssql_max"
+	exprCheckedFloor  = "_ssql_floor"
+	exprCheckedCeil   = "_ssql_ceil"
 )
 
 // exprCheckedOperators maps a binary operator to its patched call, and
@@ -77,6 +79,7 @@ var exprCheckedBuiltins = map[string]string{
 	"int": exprCheckedInt, "float": exprCheckedFloat, "abs": exprCheckedAbs,
 	"min": exprCheckedMin, "max": exprCheckedMax,
 	"floor": exprCheckedFloor, "ceil": exprCheckedCeil,
+	"string": exprCheckedString,
 }
 
 var exprCheckedNames = func() map[string]bool {
@@ -119,6 +122,7 @@ func ExprCheckedIntArithmetic() []expr.Option {
 		expr.Function(exprCheckedMax, wideBuiltin("max", wideExtreme(1))),
 		expr.Function(exprCheckedFloor, wideBuiltin("floor", wideFloorCeil(-1))),
 		expr.Function(exprCheckedCeil, wideBuiltin("ceil", wideFloorCeil(1))),
+		expr.Function(exprCheckedString, wideBuiltin("string", wideString), new(func(any) string)),
 		expr.Patch(checkedArithPatcher{}),
 	}
 }
@@ -429,6 +433,17 @@ func wideBuiltin(name string, wide func(args []any) (v any, handled bool, err er
 		}
 		return own(args...)
 	}
+}
+
+// wideString is string(x) of a time: TimeText. expr's own prints Go's
+// Time.String(), which nothing parses back (the DFC128 F3 shape again).
+func wideString(args []any) (any, bool, error) {
+	if len(args) == 1 {
+		if t, ok := args[0].(time.Time); ok {
+			return TimeText(t), true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // wideInt is int(x) of an Int128: the int when it fits, else an error

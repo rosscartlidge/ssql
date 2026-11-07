@@ -106,6 +106,7 @@ func TestExprGoDifferential(t *testing.T) {
 		"int(price)", // truncates toward zero — corpus includes negatives
 		"float(pop)",
 		"string(pop)",
+		"string(when)",
 		"string(price)",
 		"upper(city)",
 		"lower(city)",

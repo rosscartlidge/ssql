@@ -91,7 +91,7 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 		srcInit.Code = srcInit.Var + " := typed.ParallelBatched(in, *flagShards)"
 		srcInit.Imports = append(libraryKeptImports(srcInit.Imports), "github.com/rosscartlidge/ssql/v4/typed")
 		srcInit.IsStream = true
-		srcInit.Capabilities = &Capabilities{Accepts: ShapeNone, Produces: ShapeStream}
+		srcInit.Capabilities = &Capabilities{Accepts: ShapeNone, Produces: ShapeStream, UnorderedShards: true}
 		srcInit.AltCodeIfSeq = srcInit.Var + " := in"
 		srcInit.AltImportsIfSeq = libraryKeptImports(srcInit.Imports)
 		srcInit.AltCapabilitiesIfSeq = &Capabilities{Accepts: ShapeNone, Produces: ShapeSeqTyped}

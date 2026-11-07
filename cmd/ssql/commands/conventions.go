@@ -199,6 +199,10 @@ time and zones
     TZ=UTC ssql from data.csv | …                  # pin a run (CI)
     hour(tz(ts, "Australia/Sydney"))              # one zone for one expression
 
+  A time turned into text by a stage (cast, -string-agg, -collect, string())
+  is on the same clock, RFC 3339; a writer keeps the cell's own offset, so
+  from | to csv changes nothing it did not touch.
+
   Everything that serialises a pipeline freezes the zone into text:
   generate sql writes SET TimeZone = 'Australia/Sydney' by name, generate
   go a time.LoadLocation literal, generate json/ssql a -tz on the from

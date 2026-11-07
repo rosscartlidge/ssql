@@ -1359,10 +1359,13 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
-		// ssql:domain fixed: string() of a time or a bool is not transpiled (the VM runs it)
+		// ssql:domain fixed: string() of a bool is not transpiled (the VM runs it)
 		switch arg.Type {
 		case exprGoString:
 			return arg, nil
+		case exprGoTime:
+			res := exprGo{Src: "ssql.TimeText(" + arg.Src + ")", Type: exprGoString, Imports: []string{"github.com/rosscartlidge/ssql/v4"}}
+			return mergeMeta(res, arg), nil
 		case exprGoInt:
 			res := exprGo{Src: "strconv.FormatInt(" + arg.Src + ", 10)", Type: exprGoString, Imports: []string{"strconv"}}
 			return mergeMeta(res, arg), nil

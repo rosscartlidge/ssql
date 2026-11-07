@@ -277,6 +277,9 @@ func corpusData(t *testing.T) string {
 			"resample_axis.csv":      "e,v\n30.25,3\n10.50,1\n",
 			"set_typed.csv":          "k,f,d,ip,j\n2,3,4.10,::1,{}\n1,1.5,2.25,10.0.0.1,[2]\n",
 			"wide_decimal.csv":       "w,d\n9,9.50\n100000000000000000000,10.25\n-5,-3.10\n",
+			// A time's text (DFC164 §7): offsets the pipeline zone does not
+			// have, a fraction, both sides of a DST change.
+			"time_text.csv":          "k,g,t\n1,a,2026-01-01T09:00:00+11:00\n2,a,2025-12-31T20:00:00.5-05:00\n3,b,2026-07-01T01:00:00.12Z\n4,b,2026-03-15T12:30:00+05:30\n",
 			"first_last_missing.csv": "id,g,v\n1,a,\n2,a,3\n3,a,\n4,b,5\n5,b,\n6,c,\n",
 			"zone_times.csv":         "k,t\n1,2026-01-02T09:00:00+11:00\n2,2026-01-01T23:30:00Z\n3,2026-01-01T12:00:00-05:00\n",
 			"dec.csv":                "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
@@ -288,6 +291,18 @@ func corpusData(t *testing.T) string {
 			"ips.csv":       "ip,n\n192.168.0.2,1\n10.0.0.0/16,2\n::1.2.3.4,3\n9.0.0.1,4\n2001:DB8::1,5\n10.0.0.1/24,6\nfe80::1,7\n10.0.0.1,8\n0:0:0:0:0:0:0:1,9\n10.0.0.0/8,10\n::ffff:1.2.3.4,11\n10.0.0.9,12\n::1,13\n10.0.0.1/32,14\n",
 			"ips_right.csv": "ip,host\n10.0.0.9/32,gw\n::0:1,lo\n2001:db8:0::1,web\n10.0.0.0/8,net\n1.1.1.1,none\n",
 		}
+		// Enough rows that a parallel source's shards interleave in a
+		// fan-in (DFC164 §7): g is contiguous, d present every 1000th row.
+		var rows strings.Builder
+		rows.WriteString("n,g,d\n")
+		for n := range 50000 {
+			d := ""
+			if n%1000 == 0 {
+				d = fmt.Sprintf("m%d", n/1000)
+			}
+			fmt.Fprintf(&rows, "%d,%d,%s\n", n, n/10000, d)
+		}
+		files["rows_in_order.csv"] = rows.String()
 		for name, content := range files {
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
 				corpusDataErr = err

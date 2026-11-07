@@ -184,7 +184,7 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool, time
 		}
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
 		frag.InputTypedSchema = prevSchema
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone, SerialOnly: true}
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone, SerialOnly: true, InputOrder: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

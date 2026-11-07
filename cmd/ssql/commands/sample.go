@@ -177,7 +177,7 @@ func generateSampleCode(n int, percent float64, haveN, passThrough bool, seed in
 		// can re-enter parallelism where profitable.
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true, InputOrder: true}
 	}
 	return lib.WriteCodeFragment(frag)
 }

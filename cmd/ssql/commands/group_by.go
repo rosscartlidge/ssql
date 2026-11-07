@@ -671,8 +671,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// form to MERGEABLE accumulator fields (expr-transpiler Phase 3;
 	// keeps the parallel form); -stream-expr folds lower to accumulator
 	// fields too but force the serial form (Phase 2; fold state is not
-	// mergeable). -rollup / -cube have their own emitter (typed_rollup.go);
-	// -collect is still deferred.
+	// mergeable). -rollup / -cube have their own emitter (typed_rollup.go).
 	// Phase B fall-throughs: prevSchema==nil → Record-mode upstream;
 	// an expression shape a typed struct can't hold → record path
 	// below, with the reason surfaced under -explain.
@@ -745,13 +744,6 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 				Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped,
 			}
 			return lib.WriteCodeFragment(distinctFrag)
-		} else if hasAggFn(aggSpecs, "collect") {
-			// -collect has no typed form yet (a slice-typed result
-			// field); like every other unhandled shape it falls back to
-			// record codegen with the reason under -explain — it used to
-			// exit with "drop -typed for now", the one aggregate that
-			// turned a mode choice into a failure (DFC129 §2).
-			typedFallbackNotes = append(typedFallbackNotes, "record fallback (-collect has no typed form yet)")
 		} else {
 			// emitTypedGroupBy now always emits dual templates (parallel
 			// + serial) for non-presorted, and the planner picks per

@@ -2987,6 +2987,9 @@ func translateCast(q *sqlQuery, args []string) error {
 				// past 2^53 (DFC133: found re-testing cast).
 				expr = fmt.Sprintf("%s(trunc(%s(%s AS %s)) AS %s)", castFn, castFn, quoteIdent(field), sqlFloatType(), sqlType)
 			}
+			if ft, err := ssql.ParseFieldType(typeName); err == nil && ft == ssql.FieldTypeString && kindBefore == "time" {
+				expr = sqlTimeText(sqlTimeColumnRef(field))
+			}
 			if kindBefore == "inet" {
 				// An inet casts to its text (abbrev on Postgres, whose ::text
 				// adds /32) and to nothing else (DFC162).

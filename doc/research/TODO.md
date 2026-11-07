@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-06
+Last modified: 2026-11-07
 
 [Back to Index](./README.md)
 
@@ -67,19 +67,22 @@ Tracked issues and feature gaps discovered during development.
   `bucket()` of a negative epoch, resample's float/decimal axis in SQL,
   `-set-field` of a decimal, `-arg-max`/`-arg-min` with a missing BY on
   Postgres and DataFusion.
-- [ ] **DECIDE: the text of a time** (DFC163 §7): exec keeps each time's
-  source offset (`2025-12-31T20:00:00-05:00`), a TIMESTAMPTZ keeps only
-  the instant, so `-string-agg` and `-collect` of a time (and `cast -type
-  t string`, which the harness's time normalisation hides) differ from
-  every SQL lane. Options: exec writes a time as text in UTC, or in the
-  pipeline zone (the SQL can then match), or the SQL lanes refuse a time
-  as text. The matrix's `string-agg_t` and `collect_t` cells stay known.
-- [ ] **Order after a parallel typed segment** (found 2026-11-06): a
-  record stage after `typed.Stream.Serial()` on an unordered stream sees
-  its rows shard-interleaved, so an order-dependent record-path stage
-  (`group-by -collect`, which has no typed form) lists in another order
-  than exec. An ordered Serial() would serialise the shards; a typed
-  `-collect` (shard-ordered merge, as first/last) would avoid it.
+- [x] **The text of a time, and order after a parallel stage** — decided
+  and built 2026-11-06 (Ross: B for conversions only, A with C; DFC164 §7):
+  `ssql.TimeText` in every lane; typed `-collect`; `needsSourceOrder` takes
+  the serial plan for a stage that reads its input's order.
+- [ ] **DataFusion's order-sensitive aggregates over a large input**
+  (found 2026-11-06, DFC164 §7.2): DataFusion repartitions, so over 50,000
+  rows `-collect` and `-string-agg` list `25000,20000`, and `-first` of the
+  group whose first row is 0 answers 8192 and `-last` 8191, not 9999 (measured
+  on the engine directly, datafusion 55): a wrong answer, not only an order;
+  the rust lane too. No equivalence fixture was large enough to show it.
+  There is no column that says file order to `ORDER BY`. Options: one target
+  partition in the prologue when such an aggregate appears, or a refusal.
+- [ ] **Output order after a per-row serial stage** (DFC164 §7.2): `extract`,
+  `unpivot` and `union` after a parallel stage print rows in fan-in order,
+  not file order. Giving `extract` and `unpivot` parallel forms removes most
+  of it.
 - [ ] **Rust:** a declared time in a pipeline zone other than UTC is
   refused (DataFusion reads a time with no offset as UTC).
 - [ ] **Matrix reach** (DFC163 §7.6: it caught one of §1's seven bugs

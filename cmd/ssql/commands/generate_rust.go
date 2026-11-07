@@ -971,7 +971,10 @@ func (g *rustGen) agg(a sqlAgg, name string) string {
 		k := map[string]string{"first": "first_value", "any": "first_value", "last": "last_value"}[a.fn]
 		e = fmt.Sprintf("agg::%s(%s, vec![]).filter(%s.is_not_null()).build()?", k, c, c)
 	case "string-agg":
-		e = "string_agg(" + c + ", lit(" + rustStr(a.extra) + "))"
+		// A time's text is the dialect's (sqlAggStringAgg).
+		if sqlColumnKinds[a.field] != "time" {
+			e = "string_agg(" + c + ", lit(" + rustStr(a.extra) + "))"
+		}
 	case "stddev":
 		e = "agg::stddev(" + c + ")"
 	case "variance":

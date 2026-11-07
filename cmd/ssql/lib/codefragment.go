@@ -221,6 +221,25 @@ type Capabilities struct {
 	// limit, offset, top, union, cast, update, include, exclude,
 	// rename, and group-by -presorted.
 	SerialOnly bool `json:"serial_only,omitempty"`
+	// InputOrder means the stage's RESULT depends on the order it reads
+	// its input: limit, offset, sample, -presorted, a fold, resample, and
+	// the sinks a person reads top to bottom. A Stream.Serial() fan-in
+	// loses a file's order, so while the stream still carries it the
+	// planner runs the pipeline serially (needsSourceOrder). A record-path
+	// stage counts without saying so: its semantics are not declared.
+	InputOrder bool `json:"input_order,omitempty"`
+	// DefinesOrder means the stage's output order does not come from its
+	// input (group-by, sort, top, window), so a later InputOrder stage asks
+	// nothing of the source.
+	DefinesOrder bool `json:"defines_order,omitempty"`
+	// ShardOrder means the stage merges shards in shard order and takes
+	// that for arrival order: first, last, -collect, a window, a stable
+	// sort. True of a file's shards, which are runs of it.
+	ShardOrder bool `json:"shard_order,omitempty"`
+	// UnorderedShards marks a source whose shards are batches handed to
+	// whichever worker is free (typed.ParallelBatched), not runs of the
+	// input, so a ShardOrder stage over it takes the serial plan.
+	UnorderedShards bool `json:"unordered_shards,omitempty"`
 }
 
 // TypedSchema describes the row type flowing between two pipeline

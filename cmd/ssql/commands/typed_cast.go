@@ -372,7 +372,7 @@ func castTimeExpression(expr, field, from, to, pattern string) (code string, imp
 	case to == "time.Time" && (from == "string" || from == "int64"):
 		return fmt.Sprintf("ssql.MustParseTime(%s, %q)", expr, field), []string{"github.com/rosscartlidge/ssql/v4"}, true
 	case to == "string" && from == "time.Time":
-		return fmt.Sprintf("%s.Format(time.RFC3339Nano)", expr), []string{"time"}, true
+		return "ssql.TimeText(" + expr + ")", []string{"github.com/rosscartlidge/ssql/v4"}, true
 	}
 	return "", nil, false
 }

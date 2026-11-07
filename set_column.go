@@ -260,7 +260,7 @@ func coerceToString(value any) (string, bool) {
 		// field and the one convertToTime, DuckDB and Postgres read back.
 		// The %v default gave Go's Time.String() ("2026-01-02 10:30:00
 		// +0000 UTC"), which nothing parses (DFC128 F3).
-		return v.Format(time.RFC3339Nano), true
+		return TimeText(v), true
 	default:
 		return fmt.Sprintf("%v", v), true
 	}

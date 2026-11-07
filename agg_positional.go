@@ -124,7 +124,7 @@ func StringAgg(field, sep string) AggregateFunc {
 }
 
 // AggValueString is the text form StringAgg uses for a value: integers
-// in full, floats in Go's shortest round-trip form, times as RFC 3339.
+// in full, floats in Go's shortest round-trip form, times as TimeText.
 // Generated typed code emits the same formatting inline (typed_groupby.go).
 func AggValueString(v any) string {
 	// ssql:domain scalar
@@ -152,7 +152,7 @@ func AggValueString(v any) string {
 	case bool:
 		return strconv.FormatBool(x)
 	case time.Time:
-		return x.Format(time.RFC3339Nano)
+		return TimeText(x)
 	}
 	return fmt.Sprint(v)
 }

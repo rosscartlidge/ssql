@@ -503,6 +503,9 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if name == "string" && exprResultIsTime(args[0].String()) {
+			return sqlTimeText(arg), nil
+		}
 		return "CAST(" + arg + " AS " + sqlType + ")", nil
 	}
 	switch name {

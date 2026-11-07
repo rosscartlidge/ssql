@@ -173,10 +173,10 @@ func emitTypedRollup(inputVar string, in *lib.TypedSchema, groupFields []string,
 	detailFrag.OutputTypedSchema = detailSchema
 	detailFrag.StructDefs = defs
 	detailFrag.PlanNotes = []string{fmt.Sprintf("native typed rollup: parallel detail group-by + typed.RollupEnrich over %d grouping sets", len(sets))}
-	detailFrag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped}
+	detailFrag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped, DefinesOrder: true}
 	detailFrag.AltCodeIfSeq = makeDetail("typed.GroupBy", "typed.Aggregator")
 	detailFrag.AltImportsIfSeq = imports
-	detailFrag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
+	detailFrag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, DefinesOrder: true}
 	if err := lib.WriteCodeFragment(detailFrag); err != nil {
 		return true, "", err
 	}

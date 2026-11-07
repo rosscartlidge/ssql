@@ -855,7 +855,11 @@ func explainPlanInitial(fragments []*CodeFragment, plan Plan) {
 	if plan.SourceParallel {
 		fmt.Fprintln(os.Stderr, "[plan]   source: parallel (Stream[T]) — at least one downstream accepts ShapeStream")
 	} else {
-		fmt.Fprintln(os.Stderr, "[plan]   source: serial (iter.Seq[T]) — parallelism reach = 0; downgrade source primitive")
+		reason := "parallelism reach = 0"
+		if f := needsSourceOrder(fragments); f != nil {
+			reason = f.Command + " reads the source's order"
+		}
+		fmt.Fprintf(os.Stderr, "[plan]   source: serial (iter.Seq[T]) — %s; downgrade source primitive\n", reason)
 	}
 	for _, f := range fragments {
 		if f == nil || f.Capabilities == nil {

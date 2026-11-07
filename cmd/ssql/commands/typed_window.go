@@ -285,10 +285,10 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 	frag.OutputTypedSchema = out
 	frag.StructDefs = append(append([]string{structDef}, foldDefs...), hoisted...)
 	frag.IsStream = true
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream, DefinesOrder: true, ShardOrder: true}
 	frag.AltCodeIfSeq = serialCode
 	frag.AltImportsIfSeq = imports
-	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, DefinesOrder: true}
 	return true, "", lib.WriteCodeFragment(frag)
 }
 

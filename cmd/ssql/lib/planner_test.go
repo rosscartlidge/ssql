@@ -130,3 +130,40 @@ func TestPlanReachWithStreamConsumer(t *testing.T) {
 		t.Errorf("expected boundary before sort (idx 2); got %v", p.SerialBoundaryBefore)
 	}
 }
+
+// A stage that reads its input's order takes the serial plan while the
+// stream still carries the source's order (DFC164 §7).
+func TestPlanSourceOrder(t *testing.T) {
+	src := &Capabilities{Accepts: ShapeNone, Produces: ShapeStream}
+	batched := &Capabilities{Accepts: ShapeNone, Produces: ShapeStream, UnorderedShards: true}
+	where := &Capabilities{Accepts: ShapeStream, Produces: ShapeStream}
+	limit := &Capabilities{Accepts: ShapeSeqTyped, Produces: ShapeSeqTyped, SerialOnly: true, InputOrder: true}
+	perRow := &Capabilities{Accepts: ShapeSeqTyped, Produces: ShapeSeqTyped, SerialOnly: true}
+	group := &Capabilities{Accepts: ShapeStream, Produces: ShapeSeqTyped, DefinesOrder: true}
+	first := &Capabilities{Accepts: ShapeStream, Produces: ShapeSeqTyped, DefinesOrder: true, ShardOrder: true}
+	record := &Capabilities{Accepts: ShapeSeqRecord, Produces: ShapeSeqRecord}
+	for _, c := range []struct {
+		name     string
+		caps     []*Capabilities
+		parallel bool
+	}{
+		{"where then to a parallel sink", []*Capabilities{src, where}, true},
+		{"limit reads the file's order", []*Capabilities{src, where, limit}, false},
+		{"a record stage's semantics are not declared", []*Capabilities{src, where, record}, false},
+		{"group-by ends the question", []*Capabilities{src, where, group, limit}, true},
+		{"a per-row serial stage does not ask", []*Capabilities{src, where, perRow, group}, true},
+		{"a file's shards are runs: first is parallel", []*Capabilities{src, where, first}, true},
+		{"batched shards are not runs: first is serial", []*Capabilities{batched, where, first}, false},
+		{"batched shards: a plain group-by stays parallel", []*Capabilities{batched, where, group}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var frags []*CodeFragment
+			for _, cp := range c.caps {
+				frags = append(frags, &CodeFragment{Type: "stmt", Capabilities: cp})
+			}
+			if got := MakePlan(frags).SourceParallel; got != c.parallel {
+				t.Errorf("SourceParallel = %v, want %v", got, c.parallel)
+			}
+		})
+	}
+}

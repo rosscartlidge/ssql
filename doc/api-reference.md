@@ -602,7 +602,8 @@ func SetImmutable[V Value](r Record, field string, value V) Record        // a n
 func SetValue(mut MutableRecord, field string, v any) MutableRecord      // a dynamically typed value by its own type: nil no value, a list or map nested JSON (generated update -set-expr)
 func IntoColumn(mut MutableRecord, field string, value, existing any, exists bool) (MutableRecord, bool) // update -set's rule: value typed like the column's current value (a json column takes [1] as JSON, a decimal its scale); true when a coercion changed its type
 func SetLiteral(mut MutableRecord, frozen Record, field, token string, value any) MutableRecord // IntoColumn for generated record code: text keeps the token as typed
-func TextOf(v any) string                                                  // a value's text as Get[string] reads it: a time in RFC 3339, else its String
+func TextOf(v any) string                                                  // a value's text as Get[string] reads it: a time as TimeText, else its String
+func TimeText(t time.Time) string                                          // a time as a stage converts it to text: RFC 3339 on the pipeline zone's clock
 func Field[V Value](key string, value V) Record                           // a one-field Record
 func ValidateRecord(r Record) error                                       // every value is a Value
 ```
@@ -897,6 +898,7 @@ func Max[T OrderedValue](field string) AggregateFunc
 func First[T Value](field string) AggregateFunc
 func Last[T Value](field string) AggregateFunc
 func Collect(field string) AggregateFunc            // every value, as a JSONString list (`json` on the wire)
+func CollectList(values []any) JSONString           // the list Collect builds, for values already gathered
 func CollectSeq[T Value](field string) AggregateFunc // every value of type T, as iter.Seq[any]
 
 func MinOf(field string) AggregateFunc      // keeps the field's own type: numbers, strings, times

@@ -1376,13 +1376,13 @@ func convertToString(val any) (string, bool) {
 		// RFC 3339, the wire form, so GetOr(r, f, "") of a time reads back
 		// with ParseTime — %v would give Go's unparseable Time.String()
 		// (generated group-by reads its keys this way; DFC128 D1).
-		return v.Format(time.RFC3339Nano), true
+		return TimeText(v), true
 	default:
 		return fmt.Sprintf("%v", val), true
 	}
 }
 
-// TextOf is a value's text as Get[string] reads it: a time in RFC 3339,
+// TextOf is a value's text as Get[string] reads it: a time as TimeText,
 // any other value its String (or %v). Generated typed code calls it where
 // the interpreter reads a non-text field as text (extract over a number,
 // a time or an address; DFC163 §7).

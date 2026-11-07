@@ -86,6 +86,9 @@ func MakePlan(fragments []*CodeFragment) Plan {
 			break
 		}
 	}
+	if plan.SourceParallel && needsSourceOrder(fragments) != nil {
+		plan.SourceParallel = false
+	}
 
 	// Pass 2 — boundary insertion.
 	//
@@ -132,4 +135,32 @@ func MakePlan(fragments []*CodeFragment) Plan {
 	}
 
 	return plan
+}
+
+// needsSourceOrder returns the first stage that reads the source's order
+// while a parallel source would reach it through an unordered fan-in, or
+// nil. A parallel source's shards are runs of the file, in order, but
+// Stream.Serial() fans them in as they come: `where | limit -last 3` and
+// `where | group-by -presorted` answered differently from the interpreter
+// (DFC164 §7). Every Accepts-Stream stage has a serial alternative, so the
+// answer is the serial plan; a stage that defines its own order ends the
+// question.
+func needsSourceOrder(fragments []*CodeFragment) *CodeFragment {
+	live, runs := false, true
+	for _, f := range fragments {
+		if f == nil || f.Capabilities == nil {
+			continue
+		}
+		c := f.Capabilities
+		if c.Accepts == ShapeNone && c.Produces == ShapeStream {
+			live, runs = true, !c.UnorderedShards
+		}
+		if live && (c.InputOrder || c.Accepts == ShapeSeqRecord || (c.ShardOrder && !runs)) {
+			return f
+		}
+		if c.DefinesOrder {
+			live = false
+		}
+	}
+	return nil
 }

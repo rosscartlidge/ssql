@@ -200,6 +200,15 @@ func StreamLocation() *time.Location {
 	return loc
 }
 
+// TimeText is a time as text wherever a stage turns one into a string
+// (cast, -string-agg, -collect, string(), a time read as text): RFC 3339 on
+// the pipeline zone's clock, the zone hour() and format() read, because SQL
+// cannot see the offset a cell carried (Ross, DFC164 §7; DFC147 §5.1). A
+// writer does not convert: `from csv | to csv` keeps the cell's own offset.
+func TimeText(t time.Time) string {
+	return t.In(StreamLocation()).Format(time.RFC3339Nano)
+}
+
 // resetStreamZone is for tests.
 func resetStreamZone() {
 	streamZone.Lock()

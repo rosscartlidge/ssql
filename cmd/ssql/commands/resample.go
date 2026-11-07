@@ -409,6 +409,7 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		Accepts:    lib.ShapeSeqTyped,
 		Produces:   lib.ShapeSeqTyped,
 		SerialOnly: true,
+		InputOrder: true, // a bucket's values in arrival order
 	}
 	return lib.WriteCodeFragment(frag)
 }

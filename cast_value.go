@@ -113,7 +113,7 @@ func CastValue(v any, target FieldType) (any, bool) {
 		case bool:
 			return strconv.FormatBool(x), true
 		case time.Time:
-			return x.Format(time.RFC3339Nano), true
+			return TimeText(x), true
 		case Inet:
 			return x.String(), true
 		}

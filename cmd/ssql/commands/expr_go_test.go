@@ -152,6 +152,7 @@ func TestExprToGo(t *testing.T) {
 		{"int of float truncates", "int(price)", "int64(r.Price)", exprGoInt, ""},
 		{"float of int", "float(pop)", "float64(r.Pop)", exprGoFloat, ""},
 		{"string of int", "string(pop)", "strconv.FormatInt(r.Pop, 10)", exprGoString, "strconv"},
+		{"string of time", "string(when)", "ssql.TimeText(r.When)", exprGoString, ssqlImport},
 		{"upper", "upper(city)", "strings.ToUpper(r.City)", exprGoString, "strings"},
 		{"pipe desugars", "city | upper()", "strings.ToUpper(r.City)", exprGoString, "strings"},
 		{"contains operator", `city contains "x"`, `strings.Contains(r.City, "x")`, exprGoBool, "strings"},

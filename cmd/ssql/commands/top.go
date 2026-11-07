@@ -189,10 +189,10 @@ func generateTopCode(n int, field string, asc bool) error {
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped}
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped, DefinesOrder: true}
 		frag.AltCodeIfSeq = serialCode
 		frag.AltImportsIfSeq = imports
-		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
+		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, DefinesOrder: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

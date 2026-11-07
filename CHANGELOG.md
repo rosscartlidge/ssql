@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`group-by -collect` has a typed form,** parallel, each group's list in file order. **Library:** `ssql.TimeText`, `ssql.CollectList`.
+
+### Changed
+
+- **A time turned into text is on the pipeline zone's clock in every lane:** `cast -type t string`, `-string-agg`, `-collect`, `string(t)`, and a time read as text, as RFC 3339 (`hour()` and `format()` already read that zone; SQL cannot see the offset a cell carried). Writers do not convert: `from csv | to csv` keeps each cell's own offset.
+- **A generated program whose stage reads its input's order runs serially** where it would otherwise lose it (below). `generate go -explain` names the stage.
+
+### Fixed
+
+- **After a parallel stage, `limit`, `limit -last`, `offset`, `sample`, `resample`, `group-by -presorted` and a fold, every record-path stage (such as `fill -down`), and `to table` and `to lines`, read rows in the order the parallel shards delivered them,** not file order, so typed programs could answer differently from exec: `where | limit -last 2` returned rows from whichever shard finished last.
+- **Library mode and JSON-array sources hand shards batches, not runs of the input,** so `-first`, `-last`, `-string-agg`, `-mode`, `-arg-*`, a window and a sort's ties over them were not in arrival order. Those pipelines now take the serial plan.
+- **`string(t)` of a time printed Go's `Time.String()`** in exec, which nothing parses back.
+- **SQL `-string-agg`, `-collect`, `cast` and `string()` of a time** printed the engine's own text.
+
 ## [4.141.0] - 2026-11-06
 
 ### Added

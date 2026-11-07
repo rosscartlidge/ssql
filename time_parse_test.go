@@ -11,6 +11,7 @@ import (
 // type, cast and date() — every form DuckDB, Postgres and ssql itself
 // write (DFC128 F3/D1), zoneless forms as UTC, junk refused.
 func TestParseTime(t *testing.T) {
+	pinStreamZone(t, "UTC") // a time as text is on this clock
 	want := time.Date(2026, 1, 2, 10, 30, 0, 0, time.UTC)
 	for _, in := range []any{
 		"2026-01-02T10:30:00Z",      // RFC 3339 (ssql's own output)
@@ -141,5 +142,41 @@ func TestFieldTypeTime(t *testing.T) {
 	}
 	if _, err := ParseFieldType("instant"); err == nil || !contains(err.Error(), "time") {
 		t.Errorf("the unknown-type message must list time: %v", err)
+	}
+}
+
+// pinStreamZone sets the pipeline zone for one test; these otherwise read
+// the machine's.
+func pinStreamZone(t *testing.T, zone string) {
+	t.Helper()
+	if err := SetStreamZone(zone); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(resetStreamZone)
+}
+
+// A time as text is RFC 3339 on the pipeline zone's clock, whatever offset
+// the value carries (DFC164 §7).
+func TestTimeText(t *testing.T) {
+	instant := time.Date(2026, 1, 2, 10, 30, 0, 500_000_000, time.FixedZone("", -5*3600))
+	for zone, want := range map[string]string{
+		"UTC":              "2026-01-02T15:30:00.5Z",
+		"Asia/Kathmandu":   "2026-01-02T21:15:00.5+05:45",
+		"America/New_York": "2026-01-02T10:30:00.5-05:00",
+		"Europe/London":    "2026-01-02T15:30:00.5Z",
+	} {
+		pinStreamZone(t, zone)
+		if got := TimeText(instant); got != want {
+			t.Errorf("TimeText in %s = %s, want %s", zone, got, want)
+		}
+		if got := AggValueString(instant); got != want {
+			t.Errorf("AggValueString in %s = %s, want %s", zone, got, want)
+		}
+		if got, _ := CastValue(instant, FieldTypeString); got != want {
+			t.Errorf("CastValue in %s = %v, want %s", zone, got, want)
+		}
+		if got := string(CollectList([]any{instant})); got != `["`+want+`"]` {
+			t.Errorf("CollectList in %s = %s", zone, got)
+		}
 	}
 }

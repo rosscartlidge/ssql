@@ -10,6 +10,7 @@ import (
 // TestCastValue: a value that is not of the target type FAILS — it never
 // becomes 0 or false. Defined conversions still convert.
 func TestCastValue(t *testing.T) {
+	pinStreamZone(t, "UTC") // a time as text is on this clock
 	tm := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	ok := []struct {
 		in     any

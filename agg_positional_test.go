@@ -9,6 +9,7 @@ import (
 // -string-agg in the library (DFC129 phase 1) — arrival order, missing
 // values skipped, types kept, text formatting shared with the typed lane.
 func TestPositionalAggregates(t *testing.T) {
+	pinStreamZone(t, "UTC") // a time as text is on this clock
 	recs := aggRecords("v", nil, "b", int64(3), nil, "a")
 	if got := FirstOf("v")(recs).GetValue(); got != "b" {
 		t.Fatalf("FirstOf skips missing, got %v", got)

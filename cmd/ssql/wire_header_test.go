@@ -101,7 +101,8 @@ func TestTimeIntoStringFieldIsRFC3339(t *testing.T) {
 	if err := os.WriteFile(f, []byte("id,d\n1,2026-01-02 10:30:00\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	script := bin + " from " + f + " | " + bin + " update -set-expr d 'date(d)' 2>/dev/null | " + bin + " to csv"
+	// The text is on the pipeline zone's clock (DFC164 §7); pin it.
+	script := "export TZ=UTC; " + bin + " from " + f + " | " + bin + " update -set-expr d 'date(d)' 2>/dev/null | " + bin + " to csv"
 	out, err := exec.Command("bash", "-c", script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)

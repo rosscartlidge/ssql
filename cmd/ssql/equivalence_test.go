@@ -159,6 +159,32 @@ func equivFollowDuckDBOnly() map[string]string {
 	return map[string]string{"datafusion": why, "postgres": why}
 }
 
+// equivLibraryJSON reads a library row's nested text as the value it holds:
+// a library's struct field holds a json column as text (DFC144 Level 0) and
+// the lane's driver prints the struct, not the record it re-wraps elsewhere.
+func equivLibraryJSON(rows []map[string]any) {
+	for _, row := range rows {
+		for k, v := range row {
+			s, ok := v.(string)
+			if !ok || s == "" || (s[0] != '[' && s[0] != '{') {
+				continue
+			}
+			dec := json.NewDecoder(strings.NewReader(s))
+			dec.UseNumber()
+			var nested any
+			if dec.Decode(&nested) == nil {
+				row[k] = nested
+			}
+		}
+	}
+}
+
+// equivRustNeedsUTC skips the rust lane for a time in another zone, which
+// generate rust refuses (DataFusion reads a time with no offset as UTC).
+func equivRustNeedsUTC() map[string]string {
+	return map[string]string{"rust": "a declared time in a zone other than UTC is refused"}
+}
+
 // equivInetPending skips the lanes the inet type (DFC162 §9) does not
 // reach yet; each unit of the build deletes its lanes from here.
 // DataFusion (and the rust lane after it) refuses inet by design.
@@ -800,6 +826,9 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 			continue
 		}
 		results[ln.name] = equivParseWith(t, ln.name, raw, decCols)
+		if ln.name == "go-lib" {
+			equivLibraryJSON(results[ln.name])
+		}
 		var dup string
 		if columns[ln.name], dup = equivColumnOrder(raw); dup != "" {
 			t.Errorf("lane %q: a record carries the key %q twice — invisible to a JSON reader, so no other oracle sees it", ln.name, dup)
@@ -3803,6 +3832,113 @@ var equivCases = []EquivCase{
 			{"g": "c"},
 		},
 		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// A time as text is on the pipeline zone's clock in every lane
+		// (Ross, DFC164 §7). Goldens from Python's zoneinfo; a string that is
+		// exactly one time would be normalised back to its instant, so each
+		// case's text carries more than the time.
+		Name:     "time_text_string_agg_utc",
+		Pipeline: `{{.bin}} from csv -type t time {{.data}}/time_text.csv | {{.bin}} group-by -string-agg t ' ' r`,
+		Golden:   []map[string]any{{"r": "2025-12-31T22:00:00Z 2026-01-01T01:00:00.5Z 2026-07-01T01:00:00.12Z 2026-03-15T07:00:00Z"}},
+	},
+	{
+		// A negative offset, on both sides of a DST change.
+		Name:     "time_text_string_agg_new_york",
+		Pipeline: `{{.bin}} from csv -type t time -tz America/New_York {{.data}}/time_text.csv | {{.bin}} group-by -string-agg t ' ' r`,
+		Golden:   []map[string]any{{"r": "2025-12-31T17:00:00-05:00 2025-12-31T20:00:00.5-05:00 2026-06-30T21:00:00.12-04:00 2026-03-15T03:00:00-04:00"}},
+		Skip:     equivRustNeedsUTC(),
+	},
+	{
+		// An offset with minutes.
+		Name:     "time_text_string_fn_kathmandu",
+		Pipeline: `{{.bin}} from csv -type t time -tz Asia/Kathmandu {{.data}}/time_text.csv | {{.bin}} update -set-expr x '"at " + string(t)' | {{.bin}} include k x`,
+		Golden: []map[string]any{
+			{"k": 1, "x": "at 2026-01-01T03:45:00+05:45"},
+			{"k": 2, "x": "at 2026-01-01T06:45:00.5+05:45"},
+			{"k": 3, "x": "at 2026-07-01T06:45:00.12+05:45"},
+			{"k": 4, "x": "at 2026-03-15T12:45:00+05:45"},
+		},
+		Skip: equivRustNeedsUTC(),
+	},
+	{
+		// Offset zero in winter is Z, in summer +01:00.
+		Name:     "time_text_cast_london",
+		Pipeline: `{{.bin}} from csv -type t time -tz Europe/London {{.data}}/time_text.csv | {{.bin}} cast -type t string | {{.bin}} update -set-expr x '"at " + t' | {{.bin}} include k x`,
+		Golden: []map[string]any{
+			{"k": 1, "x": "at 2025-12-31T22:00:00Z"},
+			{"k": 2, "x": "at 2026-01-01T01:00:00.5Z"},
+			{"k": 3, "x": "at 2026-07-01T02:00:00.12+01:00"},
+			{"k": 4, "x": "at 2026-03-15T07:00:00Z"},
+		},
+		Skip: equivRustNeedsUTC(),
+	},
+	{
+		Name:     "time_text_collect_new_york",
+		Pipeline: `{{.bin}} from csv -type t time -tz America/New_York {{.data}}/time_text.csv | {{.bin}} group-by g -collect t c | {{.bin}} explode c | {{.bin}} update -set-expr x '"at " + c' | {{.bin}} include g x`,
+		Golden: []map[string]any{
+			{"g": "a", "x": "at 2025-12-31T17:00:00-05:00"},
+			{"g": "a", "x": "at 2025-12-31T20:00:00.5-05:00"},
+			{"g": "b", "x": "at 2026-06-30T21:00:00.12-04:00"},
+			{"g": "b", "x": "at 2026-03-15T03:00:00-04:00"},
+		},
+		Skip: equivRustNeedsUTC(),
+	},
+	{
+		Name:     "time_text_window_string_agg",
+		Pipeline: `{{.bin}} from csv -type t time {{.data}}/time_text.csv | {{.bin}} window -partition g -order k -string-agg t ' ' r | {{.bin}} include k r`,
+		Golden: []map[string]any{
+			{"k": 1, "r": "2025-12-31T22:00:00Z"},
+			{"k": 2, "r": "2025-12-31T22:00:00Z 2026-01-01T01:00:00.5Z"},
+			{"k": 3, "r": "2026-07-01T01:00:00.12Z"},
+			{"k": 4, "r": "2026-07-01T01:00:00.12Z 2026-03-15T07:00:00Z"},
+		},
+	},
+	{
+		// -collect is typed now: a group's list is in file order across
+		// shards, as first/last are (DFC164 §7).
+		Name:     "groupby_collect_in_file_order",
+		Pipeline: `{{.bin}} from csv {{.data}}/rows_in_order.csv | {{.bin}} where -if-expr 'n % 5000 == 0' | {{.bin}} group-by g -collect n c`,
+		Golden: []map[string]any{
+			{"g": 0, "c": []any{0, 5000}},
+			{"g": 1, "c": []any{10000, 15000}},
+			{"g": 2, "c": []any{20000, 25000}},
+			{"g": 3, "c": []any{30000, 35000}},
+			{"g": 4, "c": []any{40000, 45000}},
+		},
+		Skip: map[string]string{
+			"datafusion": "DataFusion repartitions a large input, and an aggregate with no ORDER BY has no order (TODO)",
+			"rust":       "DataFusion repartitions a large input, and an aggregate with no ORDER BY has no order (TODO)",
+		},
+	},
+	{
+		// A stage that reads its input's order takes the serial plan: after
+		// a parallel where, a Serial() fan-in lost the file's order and
+		// these answered from whichever shard came last (DFC164 §7).
+		Name:     "order_where_limit_last",
+		Pipeline: `{{.bin}} from csv {{.data}}/rows_in_order.csv | {{.bin}} where -if n ge 0 | {{.bin}} include n | {{.bin}} limit -last 2`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"n": 49998}, {"n": 49999}},
+		Skip:     equivNoSQL("limit -last without a sort is refused: arrival order is undefined in SQL"),
+	},
+	{
+		Name:     "order_where_offset",
+		Pipeline: `{{.bin}} from csv {{.data}}/rows_in_order.csv | {{.bin}} where -if n ge 0 | {{.bin}} include n | {{.bin}} offset 49998`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"n": 49998}, {"n": 49999}},
+	},
+	{
+		Name:     "order_where_group_by_presorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/rows_in_order.csv | {{.bin}} where -if n ge 0 | {{.bin}} group-by g -presorted -count c`,
+		Golden:   []map[string]any{{"g": 0, "c": 10000}, {"g": 1, "c": 10000}, {"g": 2, "c": 10000}, {"g": 3, "c": 10000}, {"g": 4, "c": 10000}},
+	},
+	{
+		// A record-path stage counts without declaring it: fill -down
+		// carries each value over the rows after it.
+		Name:     "order_where_fill_down",
+		Pipeline: `{{.bin}} from csv {{.data}}/rows_in_order.csv | {{.bin}} where -if n ge 0 | {{.bin}} fill -down d | {{.bin}} where -if d eq m7 | {{.bin}} group-by d -count c -min n lo -max n hi`,
+		Golden:   []map[string]any{{"d": "m7", "c": 1000, "lo": 7000, "hi": 7999}},
+		Skip:     equivNoSQL("fill -down without a sort is refused: carry-forward order is undefined in SQL"),
 	},
 	{
 		// -collect lists the present values, as exec does: LIST kept a NULL

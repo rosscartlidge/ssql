@@ -136,7 +136,7 @@ func generateLimitCode(n int, last bool) error {
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true, InputOrder: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

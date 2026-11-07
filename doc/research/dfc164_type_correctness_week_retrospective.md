@@ -2,7 +2,7 @@
 
 Reference: DFC164
 Created: 2026-11-06
-Last modified: 2026-11-06
+Last modified: 2026-11-07
 
 [Back to Index](./README.md)
 
@@ -165,21 +165,7 @@ The lanes then found two more while gating the lint:
 
 ### 5.1 Decisions for Ross
 
-1. **The text of a time.** exec keeps each value's source offset
-   (`-05:00`), but a TIMESTAMPTZ keeps only the instant. So
-   `-string-agg`, `-collect` and `cast -type t string` of a time differ
-   from every SQL lane. The options:
-   - exec writes a time as text in UTC;
-   - exec writes it in the pipeline zone;
-   - the SQL lanes refuse a time used as text.
-
-   This decision is 6 of the matrix's 7 known cells.
-2. **Order after a parallel typed segment.** A record-path stage after an
-   unordered `Serial()` sees rows in shard order, not file order.
-   `group-by -collect` has no typed form, so it shows this. The options:
-   - a typed `-collect`, with a shard-ordered merge as first/last have;
-   - an order-preserving `Serial()`, which runs the shards one after
-     another.
+Both decided on 2026-11-06 and built: §7.
 
 ### 5.2 Built-on-the-way follow-ups (TODO)
 
@@ -223,3 +209,93 @@ exactly the 7 known cells.
   the lint replaces.
 - [DFC150](./dfc150_view_only_week_retrospective.md): the previous
   retrospective of this shape.
+
+## 7. Built: Ross's two decisions (2026-11-06)
+
+Ross: "lets do B for conversions only, and A with C".
+
+### 7.1 The text of a time
+
+A time turned into text by a stage is RFC 3339 on the pipeline zone's
+clock, the zone `hour()` and `format()` read (`ssql.TimeText`). DFC147
+§5.1 rejected the value's own offset for the calendar functions because
+SQL cannot see it; this is the same reason.
+
+- **Conversions:** `cast -type t string`, `-string-agg` (group-by and
+  window), `-collect`, `string(t)`, and a time read as text
+  (`Get[string]`, `extract`, a time set into a text column).
+- **Writers do not convert.** `from csv | to csv` keeps each cell's own
+  offset, in exec and the Go lanes. SQL writers still print UTC, and the
+  harness still reads a bare time back as an instant, so that difference
+  stays normalised. `TestTimeTextConvertsWritersKeep` pins this on raw
+  output.
+- **SQL:** `sqlTimeText`. The session zone stays UTC, so the wall clock
+  and the offset are spelled from the zone's name: `AT TIME ZONE` on
+  DuckDB and Postgres, a `Timestamp(…, Some(zone))` cast on DataFusion.
+  Measured first in all three. Rust takes the dialect's text; a zone
+  other than UTC stays refused there.
+- **Found on the way:** `string(t)` in exec was Go's `Time.String()`, the
+  DFC128 F3 shape, and it had no transpiled form. It is now the same text
+  in every lane.
+- **Goldens** come from Python's `zoneinfo`: a negative offset across a
+  DST change (New York), an offset with minutes (Kathmandu), and Z in
+  winter with +01:00 in summer (London).
+
+Limit: the SQL engines hold microseconds, so a source with nanoseconds
+keeps them in the Go lanes only.
+
+### 7.2 Order after a parallel stage
+
+**A: `group-by -collect` is typed,** parallel, with a shard-ordered merge
+as first/last have. `-rollup`/`-cube` with `-collect` stays on the record
+path, since parent levels need the rows.
+
+**C: a stage that reads its input's order takes the serial plan.** The
+census ran each stage after a parallel `where` over 300,000 rows, typed
+against exec, and found this is wider than `-collect`:
+
+| Result differed from exec | Why |
+|---|---|
+| `limit -last`, `offset` | the last rows of whichever shard finished |
+| `limit \| group-by -string-agg` | the wrong rows reached the aggregate |
+| `group-by -presorted` | contiguous keys no longer contiguous |
+| `sample` | index-driven selection over a different order |
+| `group-by -expr 'first(n)'`, `fill -down` | record-path stages after a fan-in |
+
+`limit` itself matched only by luck: the first shard usually delivers
+first.
+
+The rule (`needsSourceOrder`, `lib/planner.go`), walking from a parallel
+source:
+- `Capabilities.InputOrder` asks for the source's order: limit, offset,
+  sample, -presorted, a fold, resample, `to table`, `to lines`.
+- A record-path stage asks without declaring it, because its semantics
+  are not declared.
+- `DefinesOrder` (group-by, sort, top, window) ends the question, so
+  `where | group-by | limit` stays parallel.
+- A source whose shards are batches rather than runs of the input
+  (`ParallelBatched`, the JSON array reader) sets `UnorderedShards`. A
+  stage that takes shard order for arrival order sets `ShardOrder`
+  (order-sensitive aggregates, window, sort), and over such a source it
+  takes the serial plan too. The library lane found this: a typed
+  `-collect` over 50,000 rows listed `[15000,10000]`.
+
+Watched fail: with the rule off, every `order_where_*` case and
+`groupby_collect_in_file_order` are red; with `TimeText` on the value's
+own offset, every `time_text_*` case is red.
+
+**Not covered (TODO):**
+- A per-row serial stage (`extract`, `unpivot`, `union`) followed by a
+  writer keeps its rows but prints them in fan-in order, not file order.
+  No row's value changes, and the harness compares those as multisets.
+  Making `extract` and `unpivot` parallel would remove most of it.
+- `top`'s ties stay arbitrary (the last matrix known cell).
+- DataFusion and the rust lane repartition a large input, so `-collect`,
+  `-string-agg`, `-first` and `-last` are not in file order there. Measured
+  on the engine over 50,000 rows, `first_value` of the group starting at 0
+  answers 8192, and `last_value` 8191 rather than 9999: wrong answers, not
+  only a different order. The case `groupby_collect_in_file_order` skips
+  those two lanes, naming why; the fix is open in TODO.
+
+**The cost is the serial plan** for those pipelines: the source read and
+every stage before the order-reading one lose their parallel form.

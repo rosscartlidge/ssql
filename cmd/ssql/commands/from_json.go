@@ -362,7 +362,7 @@ func generateFromJSONLCodeTyped(filename string, types typeArgs) error {
 	frag.StructDefs = []string{structDef}
 	frag.IsStream = true
 	frag.PlanNotes = []string{fmt.Sprintf("typed from %s: %d fields inferred from %s", shape, len(schema.Fields), filename)}
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeStream}
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeStream, UnorderedShards: isArray}
 	frag.AltCodeIfSeq = serialCode
 	frag.AltImportsIfSeq = imports
 	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeSeqTyped}

@@ -570,6 +570,53 @@ func sqlInetText(x string) string {
 	return "CAST(" + x + " AS VARCHAR)"
 }
 
+// sqlTimeText renders a time as ssql.TimeText does: RFC 3339 on the pipeline
+// zone's clock, a fraction only when there is one and without trailing
+// zeros, Z at offset zero. The session zone stays UTC (renderZonePrologue),
+// so the wall clock and its offset are spelled out from the zone's name.
+func sqlTimeText(x string) string {
+	zone := sqlZone
+	if zone == "" {
+		zone = "UTC"
+	}
+	z := sqlStringLiteral(zone)
+	sqlNeedsZone = true
+	switch sqlDialectCur {
+	case dialectDataFusion:
+		// A TIMESTAMP is UTC-naive: UTC first, or the second cast reads the
+		// wall clock as the zone's. %.f prints .500; the regexps need its dot.
+		ts := fmt.Sprintf(`arrow_cast(arrow_cast(%s, 'Timestamp(Nanosecond, Some("UTC"))'), 'Timestamp(Nanosecond, Some("%s"))')`, x, escapeSQL(zone))
+		s := "to_char(" + ts + ", '%Y-%m-%dT%H:%M:%S%.f%:z')"
+		s = `regexp_replace(` + s + `, '(\.[0-9]*?)0+([+-][0-9:]+)$', '$1$2')`
+		return `regexp_replace(` + s + `, '[+-]00:00$', 'Z')`
+	case dialectPostgres:
+		local := "(" + x + " AT TIME ZONE " + z + ")"
+		text := `to_char(` + local + `, 'YYYY-MM-DD"T"HH24:MI:SS') || rtrim(rtrim(to_char(` + local + `, '.US'), '0'), '.')`
+		if zone == "UTC" {
+			return "(" + text + " || 'Z')"
+		}
+		return "(" + text + " || " + sqlOffsetText("(extract(epoch FROM "+local+" - ("+x+" AT TIME ZONE 'UTC')) / 60)::int") + ")"
+	}
+	local := "(" + x + " AT TIME ZONE " + z + ")"
+	text := `strftime(` + local + `, '%Y-%m-%dT%H:%M:%S') || rtrim(rtrim(strftime(` + local + `, '.%f'), '0'), '.')`
+	if zone == "UTC" {
+		return "(" + text + " || 'Z')"
+	}
+	return "(" + text + " || " + sqlOffsetText("date_diff('minute', "+x+" AT TIME ZONE 'UTC', "+local+")") + ")"
+}
+
+// sqlOffsetText is RFC 3339's offset from minutes east of UTC.
+func sqlOffsetText(m string) string {
+	part := func(e string) string { return "lpad(CAST(" + e + " AS VARCHAR), 2, '0')" }
+	hours := "abs(" + m + ") // 60"
+	if sqlDialectCur == dialectPostgres {
+		part = func(e string) string { return "lpad(CAST(" + e + " AS TEXT), 2, '0')" }
+		hours = "abs(" + m + ") / 60" // integer division here; DuckDB's / is a float's
+	}
+	return "CASE WHEN " + m + " = 0 THEN 'Z' ELSE CASE WHEN " + m + " < 0 THEN '-' ELSE '+' END || " +
+		part(hours) + " || ':' || " + part("abs("+m+") % 60") + " END"
+}
+
 // sqlDecimalType is the fixed-point type of the scale per dialect:
 // DECIMAL(38,S) on DuckDB and DataFusion, NUMERIC(38,S) on Postgres
 // (DFC155 E; the Postgres and DataFusion lanes are documented, not gated).
@@ -616,8 +663,12 @@ func sqlStringType() string {
 // (DuckDB listed INET structs; DFC163 §7).
 func sqlAggCollect(qf string) string {
 	elem := qf
-	if sqlColumnKinds[strings.Trim(qf, `"`)] == "inet" {
+	// ssql:domain fixed: the kinds SQL's own list would print unlike ssql's text
+	switch sqlColumnKinds[strings.Trim(qf, `"`)] {
+	case "inet":
 		elem = sqlInetText(qf)
+	case "time":
+		elem = sqlTimeText(qf)
 	}
 	present := " FILTER (WHERE " + qf + " IS NOT NULL)"
 	switch sqlDialectCur {
@@ -695,6 +746,8 @@ func sqlAggStringAgg(qf, sep string) string {
 		// An address's text, as ssql writes it: Postgres's CAST to text
 		// adds /32 (DFC162 §9); abbrev does not (DFC163 §6).
 		qf = sqlInetText(qf)
+	} else if sqlColumnKinds[strings.Trim(qf, `"`)] == "time" {
+		qf = sqlTimeText(qf)
 	} else if sqlDialectCur == dialectPostgres {
 		// string_agg(bigint, text) does not exist in Postgres.
 		qf = "CAST(" + qf + " AS TEXT)"

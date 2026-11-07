@@ -287,10 +287,10 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
 		frag.IsStream = true
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream, DefinesOrder: true, ShardOrder: true}
 		frag.AltCodeIfSeq = serialCode
 		frag.AltImportsIfSeq = imports
-		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true, DefinesOrder: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

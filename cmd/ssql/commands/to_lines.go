@@ -133,7 +133,7 @@ func generateToLinesCode(field, filename string) error {
 		frag.InputTypedSchema = prevSchema
 		// Serial only: the planner inserts Stream.Serial() before this
 		// sink when the upstream is a Stream — the lines ARE the order.
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone, SerialOnly: true}
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone, SerialOnly: true, InputOrder: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

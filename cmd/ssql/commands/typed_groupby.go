@@ -245,9 +245,11 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 		frag.StructDefs = append(defs, hoisted...)
 		frag.PlanNotes = planNotes
 		frag.Capabilities = &lib.Capabilities{
-			Accepts:    lib.ShapeSeqTyped,
-			Produces:   lib.ShapeSeqTyped,
-			SerialOnly: true,
+			Accepts:      lib.ShapeSeqTyped,
+			Produces:     lib.ShapeSeqTyped,
+			SerialOnly:   true,
+			InputOrder:   true, // contiguous keys, or a fold's order
+			DefinesOrder: true,
 		}
 		return true, "", lib.WriteCodeFragment(frag)
 	}
@@ -264,10 +266,10 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	frag.OutputTypedSchema = resultSchema
 	frag.StructDefs = append(defs, hoisted...)
 	frag.PlanNotes = planNotes
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped}
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped, DefinesOrder: true, ShardOrder: hasOrderSensitiveAgg(specs)}
 	frag.AltCodeIfSeq = serialCode
 	frag.AltImportsIfSeq = imports
-	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, DefinesOrder: true}
 	_ = parallel // intentionally unused — the planner picks now
 	return true, "", lib.WriteCodeFragment(frag)
 }
@@ -359,6 +361,7 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		stateName string
 		fieldGo   string // input field's GoName (empty for count)
 		fieldGoT  string // input field's GoType (empty for count)
+		fieldJSON bool   // input field holds a nested value's text
 		stateType string // "int64", "float64", "MinMaxState[int64]", etc.
 		needsN    bool   // avg also tracks count
 		byGo      string // -arg-*: the BY field's GoName
@@ -382,6 +385,7 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		f := byCSV[strings.ToLower(s.field)]
 		st.fieldGo = f.GoName
 		st.fieldGoT = f.GoType
+		st.fieldJSON = f.JSON
 		switch s.function {
 		case "sum":
 			// Integers sum exactly in an Int128 (DFC155 C, DuckDB's
@@ -418,6 +422,8 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			st.stateType = fmt.Sprintf("map[%s]struct{}", f.GoType)
 		case "string-agg":
 			st.stateType = "[]string"
+		case "collect":
+			st.stateType = "[]any" // the present values in arrival order; Merge is in shard order
 		case "median", "percentile":
 			st.stateType = "[]float64" // sorted in Result; the group's values
 		case "stddev", "variance":
@@ -532,6 +538,8 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\ta.%s[r.%s] = struct{}{}\n", s.stateName, s.fieldGo)
 		case "string-agg":
 			fmt.Fprintf(&d, "\ta.%s = append(a.%s, %s)\n", s.stateName, s.stateName, aggValueStringCode(s.fieldGoT, "r."+s.fieldGo))
+		case "collect":
+			collectAppend(&d, s.stateName, s.fieldGo, s.fieldGoT, s.fieldJSON)
 		case "median", "percentile":
 			fmt.Fprintf(&d, "\ta.%s = append(a.%s, %s)\n", s.stateName, s.stateName, floatOf(s.fieldGoT, "r."+s.fieldGo))
 		case "stddev", "variance":
@@ -599,6 +607,8 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\t\t%s: int64(len(a.%s)),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
 		case "string-agg":
 			fmt.Fprintf(&d, "\t\t%s: strings.Join(a.%s, %q),\n", lib.GoNameFromColumn(s.spec.result), s.stateName, s.spec.extra)
+		case "collect":
+			fmt.Fprintf(&d, "\t\t%s: string(ssql.CollectList(a.%s)),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
 		case "median", "percentile":
 			p := 0.5
 			if s.spec.function == "percentile" {
@@ -680,7 +690,7 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			case "count-distinct":
 				fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
 				fmt.Fprintf(&d, "\tfor k := range o.%s {\n\t\ta.%s[k] = struct{}{}\n\t}\n", s.stateName, s.stateName)
-			case "string-agg":
+			case "string-agg", "collect":
 				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
 			case "median", "percentile":
 				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
@@ -826,6 +836,21 @@ func typedAggAccepts(fn, field string, f lib.TypedSchemaField) error {
 	return nil
 }
 
+// collectAppend adds a row's value to a -collect list: a nullable column's
+// missing value is skipped, as ssql.Collect skips one, and a json column's
+// text goes in as the nested value it holds.
+func collectAppend(d *strings.Builder, state, goName, goType string, isJSON bool) {
+	v := "r." + goName
+	if strings.HasPrefix(goType, "*") {
+		fmt.Fprintf(d, "\tif %s != nil {\n\t\ta.%s = append(a.%s, *%s)\n\t}\n", v, state, state, v)
+		return
+	}
+	if isJSON {
+		v = "ssql.JSONString(" + v + ")"
+	}
+	fmt.Fprintf(d, "\ta.%s = append(a.%s, %s)\n", state, state, v)
+}
+
 // presentCond is "r.F != nil" for a nullable (*T) field, else "": the
 // guard first/last/any put on a row so a missing value is skipped.
 func presentCond(goType, goName string) string {
@@ -919,7 +944,7 @@ func aggResultGoType(s aggSpec, in *lib.TypedSchema) string {
 		return "float64"
 	case "stddev", "variance": // none below two values (SQL's NULL)
 		return "*float64"
-	case "string-agg":
+	case "string-agg", "collect":
 		return "string"
 	}
 	if f, ok := lookupSchemaField(in, s.field); ok {
@@ -935,6 +960,9 @@ func aggResultGoType(s aggSpec, in *lib.TypedSchema) string {
 // values (first, last, any, mode, the arg-* value) is json too; the typed
 // lane wrote its text as a string until DFC163's matrix.
 func aggResultJSON(s aggSpec, in *lib.TypedSchema) bool {
+	if s.function == "collect" {
+		return true // a list, whatever it holds
+	}
 	f, ok := lookupSchemaField(in, s.field)
 	if !ok || !f.JSON {
 		return false
@@ -972,7 +1000,7 @@ func aggResultGoTypeForState(fn, fieldGoType string) string {
 		return "float64"
 	case "stddev", "variance":
 		return "*float64"
-	case "string-agg":
+	case "string-agg", "collect":
 		return "string"
 	case "sum":
 		if isIntegerGoType(fieldGoType) {
@@ -998,11 +1026,13 @@ func typedAggImports(specs []aggSpec, in *lib.TypedSchema) []string {
 				switch f.GoType {
 				case "string", "ssql.Int128", "ssql.Decimal", "ssql.Inet": // their own String(): aggValueStringCode
 				case "time.Time":
-					out = append(out, "time")
+					out = append(out, "github.com/rosscartlidge/ssql/v4") // ssql.TimeText
 				default:
 					out = append(out, "strconv")
 				}
 			}
+		case "collect":
+			out = append(out, "github.com/rosscartlidge/ssql/v4")
 		case "median", "percentile":
 			out = append(out, "sort", "github.com/rosscartlidge/ssql/v4")
 		case "sum", "avg":
@@ -1012,6 +1042,17 @@ func typedAggImports(specs []aggSpec, in *lib.TypedSchema) []string {
 		}
 	}
 	return out
+}
+
+// hasOrderSensitiveAgg reports whether a group-by's answer depends on the
+// order its rows arrive in (the shard-ordered merges).
+func hasOrderSensitiveAgg(specs []aggSpec) bool {
+	for _, s := range specs {
+		if orderSensitiveAggs[s.function] {
+			return true
+		}
+	}
+	return false
 }
 
 // typedModeEntryDef is the helper type generated alongside an
@@ -1045,7 +1086,7 @@ func aggValueStringCode(goType, v string) string {
 	case "bool":
 		return fmt.Sprintf("strconv.FormatBool(%s)", v)
 	case "time.Time":
-		return fmt.Sprintf("%s.Format(time.RFC3339Nano)", v)
+		return "ssql.TimeText(" + v + ")"
 	}
 	return fmt.Sprintf("fmt.Sprint(%s)", v)
 }

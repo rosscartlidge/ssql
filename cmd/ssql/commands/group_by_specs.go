@@ -131,6 +131,7 @@ const (
 	typedKindPositional = "positional"   // first/last: value + have flag, shard-ordered merge
 	typedKindSet        = "set"          // map[T]struct{} → count
 	typedKindStringList = "string-list"  // []string → join
+	typedKindValueList  = "value-list"   // []any → JSON list, shard-ordered merge
 	typedKindQuantile   = "quantile"     // []float64 → sort → interpolate (median, percentile)
 	typedKindWelford    = "welford"      // []float64 in arrival order → one Welford pass → variance / stddev
 	typedKindCounts     = "counts"       // map[T]count + first index → mode
@@ -214,7 +215,7 @@ var aggDefs = []aggDef{
 	{flag: "-max", fn: "max", merge: "-max", hasField: true, sql: sqlCall("MAX"), wireType: wireOfField, typedKind: typedKindExtreme,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.MaxOf(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.MaxOf(%q)", f) }},
-	{flag: "-collect", fn: "collect", hasField: true, sql: func(qf, _ string) string { return sqlAggCollect(qf) }, wireType: wireFixed("json"),
+	{flag: "-collect", fn: "collect", hasField: true, sql: func(qf, _ string) string { return sqlAggCollect(qf) }, wireType: wireFixed("json"), typedKind: typedKindValueList,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Collect(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Collect(%q)", f) }},
 	// DFC129 phase 1. first/last are arrival order — file order on a file

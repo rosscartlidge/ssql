@@ -341,7 +341,7 @@ workaround was `fromJSON(string(tags))`, which is no longer needed.)
 | `int(value)` | Convert to integer | `int("123")` → `123` |
 | `int128(value)` | Widen to a 128-bit integer (an integer, a whole float, a digit string past int64; a decimal truncates toward zero, as `int()` does) | `int128("123456789012345678901234567890") * 2` → `246913578024691357802469135780` |
 | `float(value)` | Convert to float | `float("3.14")` → `3.14` |
-| `string(value)` | Convert to string | `string(123)` → `"123"` |
+| `string(value)` | Convert to string; a time is RFC 3339 on the pipeline zone's clock | `string(123)` → `"123"` |
 | `type(value)` | Get type name as string | `type(42)` → `"int"` |
 
 **JSON:**

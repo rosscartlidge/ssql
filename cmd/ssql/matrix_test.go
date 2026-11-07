@@ -96,10 +96,6 @@ func TestTypeOperationMatrix(t *testing.T) {
 // SSQL_MATRIX_KNOWN=1 runs them anyway, to find the entries a fix has
 // made stale; delete an entry with its fix.
 var matrixKnown = []struct{ pattern, why string }{
-	// SQL lanes: a value's text or kind.
-	{`^(group-by|window)_string-agg_t(_empties)?$`, "SQL: string-agg of a time uses the engine's text; exec keeps each value's own offset, which a TIMESTAMPTZ does not (a decision: the text of a time)"},
-	{`^group-by_collect_t(_empties)?$`, "SQL: -collect lists a time as the engine's text; exec keeps each value's own offset, which a TIMESTAMPTZ does not (a decision: the text of a time)"},
-	// Commands with several gaps.
 	// The harness.
 	{`^top_field_(b|s)(_empties)?$`, "top over ties: which tied rows win is arbitrary"},
 }
