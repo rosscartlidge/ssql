@@ -83,6 +83,23 @@ Tracked issues and feature gaps discovered during development.
   `unpivot` and `union` after a parallel stage print rows in fan-in order,
   not file order. Giving `extract` and `unpivot` parallel forms removes most
   of it.
+- [ ] **The lookup pipeline's CPU, typed against DuckDB** ([DFC165](./dfc165_lookup_pipeline_cpu_typed_vs_duckdb.md); profiled 2026-11-07,
+  hand-edited copies of the generated program, medians of 3 to 5; DFC158 §3.15's
+  pipeline): typed 1.01 s, 15.8 s user; DuckDB alone 0.81 s, 4.1 s user. On one
+  P-core 7.2 s against 3.3 s, so most of the gap appears only in parallel: an
+  E-core costs about 1.35 times a P-core for both engines, and Go uses about
+  16 CPUs' worth across all 24 where DuckDB uses about 6. Measured wins, wall and user:
+  `GOGC=800` 0.75 s, 13.8 s (160 GC cycles a second at a 26 to 38 MB heap goal;
+  RSS +17%); the where before the joins 0.83 s, 12.1 s; plus dropping the two
+  unread columns 0.76 s, 10.9 s; plus a first and last byte check before
+  `TrimSpace` 0.74 s, 10.6 s; all with `GOGC=800` **0.56 s, 8.6 s, ahead of
+  DuckDB**. No string columns at all (attribution only, the output differs) 0.40 s,
+  7.2 s: string copies for the 99.3% of rows the filter drops. Options, largest
+  first: move a `where` on a lookup's column into the lookup table (DuckDB does; the
+  optimiser applied no rule here, and `-columns` did not fire through the join);
+  decode strings after the filter; a GC floor while the live heap is small,
+  not a fixed `GOGC`, which would multiply a sort's or window's multi-GB heap.
+  `GOGC=off` is slower than 1600 (0.87 against 0.73 s; sys 1.7 s against 0.4 s).
 - [ ] **File sinks outside DuckDB** (2026-11-07): `generate sql` writes a
   file through DuckDB's `COPY`; Postgres, DataFusion and `generate rust`
   (except `to parquet FILE`) refuse. Probed: DataFusion's

@@ -172,6 +172,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC162 | 2026-11-03 | 2026-11-04 | [UUIDs and IP Addresses: Functions, Types, or Neither](./dfc162_uuid_and_ip_address_types.md) |
 | DFC163 | 2026-11-04 | 2026-11-06 | [Finding Type Gaps Before Users Do: a Type × Operation Matrix and a Domain Lint](./dfc163_type_operation_matrix_and_domain_lint.md) |
 | DFC164 | 2026-11-06 | 2026-11-07 | [The type week: what landed, what it fixed, what remains](./dfc164_type_correctness_week_retrospective.md) |
+| DFC165 | 2026-11-07 | 2026-11-07 | [The lookup pipeline's extra CPU: typed Go against DuckDB](./dfc165_lookup_pipeline_cpu_typed_vs_duckdb.md) |
 
 <!-- DFC-INDEX-END -->
 
