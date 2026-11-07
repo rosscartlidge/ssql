@@ -83,6 +83,21 @@ Tracked issues and feature gaps discovered during development.
   `unpivot` and `union` after a parallel stage print rows in fan-in order,
   not file order. Giving `extract` and `unpivot` parallel forms removes most
   of it.
+- [ ] **File sinks outside DuckDB** (2026-11-07): `generate sql` writes a
+  file through DuckDB's `COPY`; Postgres, DataFusion and `generate rust`
+  (except `to parquet FILE`) refuse. Probed: DataFusion's
+  `COPY (q) TO 'f.csv' STORED AS CSV OPTIONS ('format.has_header' 'true')`
+  writes one file, with `1e20` and no offset on a time. Postgres has no
+  file form inside a query (`\o FILE` + `COPY … TO STDOUT` in psql, not yet
+  run on the rig), and may write a bool as `t`, which `to csv` does not.
+- [ ] **A sink's stdout format in the SQL and rust lanes** (2026-11-07):
+  `to csv` with no file under `generate sql -run` prints DuckDB's box, not
+  CSV, and `generate rust` prints JSONL for `to tsv` and `to json`. The
+  equivalence lanes rely on the bare `SELECT`, so `-run` should pick the
+  client's output mode rather than change the statement.
+- [ ] **`to tsv` does not escape a tab in a value** (2026-11-07): `a<TAB>b`
+  in a cell comes out as one more column, exit 0. Exec and generated Go;
+  the DuckDB `COPY` matches it (no quoting). Fail loudly or escape.
 - [ ] **Rust:** a declared time in a pipeline zone other than UTC is
   refused (DataFusion reads a time with no offset as UTC).
 - [ ] **Matrix reach** (DFC163 §7.6: it caught one of §1's seven bugs

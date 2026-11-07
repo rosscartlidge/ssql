@@ -364,3 +364,5 @@ ssql from data.parquet | ssql where -if age gt 25 | ssql to parquet output.parqu
 (export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql | duckdb
 ```
 DuckDB is installed at `~/.local/bin/duckdb` for testing generated SQL.
+
+**A sink that names a file is written or refused, never dropped.** Each sink says what it writes with `stampSinkFile` on its own fragment (`commands/sink_output.go`); DuckDB renders it as `COPY … TO`, and `sqlCopyOptions` refuses the rest. A new file sink stamps itself, and `TestEverySinkFileIsWrittenOrRefused` walks `-spec-json` and fails on one that does not. The equivalence lanes compare stdout, so they cannot see a missing file. Until 2026-11-07 `to csv FILE` under `generate sql` printed the rows and wrote nothing, exit 0 (found by Ross).

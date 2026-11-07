@@ -185,6 +185,7 @@ func generateToMarkdownCode(fields []string, onlySpecified bool, outputFile stri
 	}`, call("os.Stdout"))
 	}
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	stampSinkFile(frag, outputFile, nil)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

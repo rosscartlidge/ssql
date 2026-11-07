@@ -1042,6 +1042,15 @@ ssql generate sql -pipeline 'ssql from employees.csv | ssql where -if status eq 
 ssql generate sql -run -pipeline 'ssql from employees.csv | ssql group-by dept -avg salary avg_salary | ssql to table'
 ```
 
+A sink that names a file makes the statement write it. On DuckDB, `to csv`,
+`to tsv`, `to json`, `to jsonl` and `to parquet` become a `COPY … TO`, and
+anything `generate sql` cannot write is refused rather than dropped:
+
+```bash
+# codelab: skip — needs duckdb on PATH
+ssql generate sql -run -pipeline 'ssql from employees.csv | ssql where -if status eq active | ssql to csv active.csv'
+```
+
 `-dialect postgres` or `-dialect datafusion` renders the same pipeline
 for [PostgreSQL](https://www.postgresql.org) or Apache
 [DataFusion](https://datafusion.apache.org): the aggregate spellings

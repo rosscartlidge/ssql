@@ -99,6 +99,8 @@ func generateToArrowCode(filename string) error {
 	}`, inputVar)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+
+	stampSinkFile(frag, filename, nil)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

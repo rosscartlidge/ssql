@@ -159,6 +159,7 @@ func generateToParquetCode(filename string, rowGroupSize int, compression string
 			code = streamCode
 		}
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+		stampSinkFile(frag, filename, map[string]any{"compression": compression, "row_group_size": int64(rowGroupSize)})
 		// Both forms, like to csv: the planner swaps to the iter.Seq
 		// form when the upstream turns out serial (the Stream form
 		// alone did not compile after a source downgrade).
@@ -181,6 +182,8 @@ func generateToParquetCode(filename string, rowGroupSize int, compression string
 	}`, inputVar, rowGroupSize, compression)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+
+	stampSinkFile(frag, filename, map[string]any{"compression": compression, "row_group_size": int64(rowGroupSize)})
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

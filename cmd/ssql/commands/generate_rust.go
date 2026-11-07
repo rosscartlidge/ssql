@@ -176,6 +176,11 @@ func assembleRust(input io.Reader, funcName string) (string, error) {
 	if sqlZone != "UTC" && rustDeclaresTime(q) {
 		return "", dialectRefuse("a declared time in zone "+sqlZone, "DataFusion reads a time with no offset as UTC; run the pipeline with -tz UTC")
 	}
+	if funcName == "" { // -func returns the DataFrame; the caller writes it
+		if err := rustRefuseSink(q); err != nil {
+			return "", err
+		}
+	}
 	return renderRust(q, funcName), nil
 }
 
@@ -241,7 +246,7 @@ func renderRust(q *sqlQuery, funcName string) string {
 	}
 	sb.WriteString("    Ok(df)\n}\n")
 	if funcName == "" {
-		sb.WriteString("\n" + rustMain(fn, q.sink))
+		sb.WriteString("\n" + rustMain(fn, q.sink, q.sinkFile()))
 	}
 	return sb.String()
 }
@@ -282,21 +287,15 @@ func rustArrowType(kind string) string {
 // rustMain is the program's main: the session the datafusion oracle
 // lane uses (CSV files have a header; a quoted path in an escape-hatch
 // SQL is a table), the pipeline, and the sink.
-func rustMain(fn string, sink []string) string {
+func rustMain(fn string, sink []string, file string) string {
 	var sb strings.Builder
 	sb.WriteString("#[tokio::main]\nasync fn main() -> Result<()> {\n")
 	sb.WriteString("    let config = SessionConfig::new().set_str(\"datafusion.catalog.has_header\", \"true\");\n")
 	sb.WriteString("    let ctx = SessionContext::new_with_config(config).enable_url_table();\n")
 	fmt.Fprintf(&sb, "    let df = %s(&ctx).await?;\n", fn)
-	kind, file := "", ""
+	kind := ""
 	if len(sink) > 0 {
 		kind = sink[0]
-		for _, a := range sink[1:] {
-			if !strings.HasPrefix(a, "-") {
-				file = a
-				break
-			}
-		}
 	}
 	switch {
 	case kind == "table":

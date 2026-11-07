@@ -200,6 +200,7 @@ func generateToJSONCode(filename string, pretty bool) error {
 		imports = append(imports, "encoding/json")
 	}
 	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+	stampSinkFile(frag, filename, nil)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

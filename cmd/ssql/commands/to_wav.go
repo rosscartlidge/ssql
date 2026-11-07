@@ -121,6 +121,8 @@ func generateToWAVCode(filename string, sampleRate int) error {
 	}`, inputVar, sampleRate)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+
+	stampSinkFile(frag, filename, nil)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

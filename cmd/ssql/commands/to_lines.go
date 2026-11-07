@@ -129,6 +129,7 @@ func generateToLinesCode(field, filename string) error {
 		}
 		imports := []string{"github.com/rosscartlidge/ssql/v4", "github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+		stampSinkFile(frag, filename, nil)
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
 		// Serial only: the planner inserts Stream.Serial() before this
@@ -150,6 +151,7 @@ func generateToLinesCode(field, filename string) error {
 	}`, inputVar, field)
 	}
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	stampSinkFile(frag, filename, nil)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

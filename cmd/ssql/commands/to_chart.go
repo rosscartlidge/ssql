@@ -374,6 +374,8 @@ func generateToChartCode(xField string, yFields []string, zField, chartType stri
 	fmt.Printf("Heatmap created: %%s\n", *flagOutput)`, joinStrings(configLines, "\n"), checkedInput)
 
 		frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+
+		stampSinkFile(frag, outputFile, nil)
 		frag.Params = params
 		return lib.WriteCodeFragment(frag)
 	}
@@ -418,6 +420,8 @@ func generateToChartCode(xField string, yFields []string, zField, chartType stri
 	fmt.Printf("Chart created: %%s\n", *flagOutput)`, joinStrings(configLines, "\n"), checkedInput)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+
+	stampSinkFile(frag, outputFile, nil)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

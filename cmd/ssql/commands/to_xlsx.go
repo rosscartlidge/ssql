@@ -121,6 +121,8 @@ func generateToXLSXCode(filename string, sheet string) error {
 	}
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+
+	stampSinkFile(frag, filename, nil)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

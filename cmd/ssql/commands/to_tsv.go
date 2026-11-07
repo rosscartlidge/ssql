@@ -136,6 +136,8 @@ func generateToTSVCode(filename string, sep rune, timeFormat string) error {
 	}
 
 	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+
+	stampSinkFile(frag, filename, map[string]any{"separator": string(sep), "time_format": timeFormat})
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

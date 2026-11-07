@@ -224,6 +224,7 @@ func generateToCSVCode(filename string, sidecar bool, timeFormat string) error {
 			code = serialCode
 		}
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+		stampSinkFile(frag, filename, map[string]any{"sidecar": sidecar, "time_format": timeFormat})
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
 		// Capabilities: this sink accepts whichever the upstream is.
@@ -265,6 +266,8 @@ func generateToCSVCode(filename string, sidecar bool, timeFormat string) error {
 	}
 
 	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+
+	stampSinkFile(frag, filename, map[string]any{"sidecar": sidecar, "time_format": timeFormat})
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

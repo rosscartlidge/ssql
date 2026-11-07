@@ -32,6 +32,7 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 		Example("(export SSQL_MODE=record; ssql from data.parquet | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql", "Parquet aggregation query").
 		Example("(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate sql -run", "Generate and execute with DuckDB").
 		Example("ssql generate sql -run -pipeline 'ssql from data.csv | ssql group-by dept -sum salary total | ssql to table'", "One-shot: translate the quoted pipeline and execute with DuckDB").
+		Example("ssql generate sql -run -pipeline 'ssql from data.csv | ssql where -if age gt 25 | ssql to csv adults.csv'", "A sink with a file becomes COPY ... TO on DuckDB; a file the dialect cannot write is refused").
 		Example("ssql generate sql -dialect postgres -pipeline 'ssql from data.csv | ssql group-by dept -median salary med | ssql to table'", "Postgres spellings (percentile_cont WITHIN GROUP) plus a CREATE TABLE + \\copy prologue for the source").
 		Flag("-run", "-r").
 		Bool().
@@ -252,6 +253,8 @@ type sqlQuery struct {
 	joinNodes    []sqlJoin   // one per joins entry
 	setOp        *sqlSetOp   // a union / except / intersect layer
 	sink         []string    // the `to` stage's arguments (table, csv, parquet FILE, …); nil: none seen
+	sinkOp       *lib.Op     // the `to` stage's Op, which says what file it writes (stampSinkFile)
+	copyTo       string      // `TO 'file' (options)` when the statement writes a file (sqlCopySink)
 }
 
 // sqlHatch is a sqlOnly layer's structure: what it does to the rows of
@@ -511,6 +514,9 @@ func assembleSQL(input io.Reader) (string, error) {
 		return "", err
 	}
 	sqlInetOutput(q)
+	if err := sqlCopySink(q); err != nil {
+		return "", err
+	}
 	return renderSQL(q), nil
 }
 
@@ -715,7 +721,7 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 	case "to":
 		// Output commands don't affect SQL; the Rust renderer's main
 		// writes by the sink.
-		q.sink = args[2:]
+		q.sink, q.sinkOp = args[2:], frag.Op
 		return nil
 	case "count":
 		translateCount(q)
@@ -3417,6 +3423,10 @@ func renderSQL(q *sqlQuery) string {
 	renderZonePrologue(&sb)
 	renderPGPrologue(&sb)
 
+	if q.copyTo != "" {
+		sb.WriteString("COPY (\n" + renderSelect(q) + "\n) " + q.copyTo + "\n;\n")
+		return sb.String()
+	}
 	sb.WriteString(renderSelect(q))
 	sb.WriteString("\n;\n")
 	return sb.String()

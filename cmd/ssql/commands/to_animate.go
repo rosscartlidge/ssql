@@ -249,5 +249,7 @@ func generateToAnimateCode(frameField, xField, yField, zField, chartType string,
 	fmt.Printf("Animation created: %%s\n", %q)`, joinStrings(configLines, "\n"), inputVar, outputFile, outputFile)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+
+	stampSinkFile(frag, outputFile, nil)
 	return lib.WriteCodeFragment(frag)
 }
