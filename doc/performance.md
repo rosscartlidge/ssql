@@ -150,6 +150,15 @@ lanes that are not in the table (`-engines rust,typed,duckdb,record,exec`):
 |---|---:|---:|---:|---:|---:|
 | lookup | 2.26 s | **1.05 s** | 1.36 s | 125.5 s | 86.4 s |
 
+**At v4.142.0** (2026-11-08, `scripts/bench-engines.sh`): the typed
+lookup is 0.90 s (1.03 before), because a `where` on a joined column now
+moves into the side table
+([DFC165](research/dfc165_lookup_pipeline_cpu_typed_vs_duckdb.md) §9). The typed
+filtered write is 1.23 s (1.39 before). Every other row is within noise
+of the table above, on every engine. No row reads its input's order, so
+the stricter SQL order rules of that release refuse nothing here and
+cost nothing.
+
 Record is slower than exec on this pipeline. Pinning each to one core
 shows why. Exec does about 40% more work (348 s CPU against record's
 247 s), because every stage re-encodes JSONL for the next. But its seven
