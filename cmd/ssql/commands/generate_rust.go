@@ -51,7 +51,7 @@ func registerGenerateRust(cmd *cf.SubcommandBuilder) {
 		Bool().
 		Global().
 		Default(false).
-		Help("Compile the program with cargo and run it (mutually exclusive with OUTPUT and -build). The crate lives under $XDG_CACHE_HOME/ssql/rust (~/.cache/ssql/rust): the first build compiles DataFusion itself — several minutes and about 1.3 GB — later builds relink in seconds. cargo is found on PATH, then at ~/.cargo/bin/cargo, or named by SSQL_CARGO").
+		Help("Compile the program with cargo and run it (mutually exclusive with OUTPUT and -build). The crate lives under $XDG_CACHE_HOME/ssql/rust (~/.cache/ssql/rust): the first build compiles DataFusion itself — several minutes and about 1.3 GB — and later builds compile only the program (seconds). The program's crate and binary are removed after the run, also on an interrupt; DataFusion's build stays. cargo is SSQL_CARGO when set, else cargo on PATH, else ~/.cargo/bin/cargo").
 		Done().
 		Flag("-build", "-b").
 		String().
@@ -1306,8 +1306,8 @@ var rustIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // --- cargo: -run and -build ---
 
-// rustCargo finds cargo: PATH, then the rustup default location, or
-// SSQL_CARGO.
+// rustCargo finds cargo: SSQL_CARGO when set, else PATH, else the rustup
+// default location.
 func rustCargo() (string, error) {
 	if c := os.Getenv("SSQL_CARGO"); c != "" {
 		return c, nil
@@ -1339,10 +1339,11 @@ func rustCacheDir() (string, error) {
 	return dir, os.MkdirAll(dir, 0o755)
 }
 
-// rustCargoToml is the generated program's crate manifest.
-func rustCargoToml() string {
+// rustCargoToml is the generated program's crate manifest; pkg names the
+// package, and so the binary and every file cargo keeps for it.
+func rustCargoToml(pkg string) string {
 	return fmt.Sprintf(`[package]
-name = "ssqlgen"
+name = "%s"
 version = "0.1.0"
 edition = "2021"
 
@@ -1353,97 +1354,127 @@ futures = "0.3"
 
 [profile.release]
 opt-level = 3
-`, rustDataFusionCrate)
+`, pkg, rustDataFusionCrate)
 }
 
-// compileRustSource writes the program into a crate of its own (so two
-// invocations never overwrite each other's main.rs) built under the
-// shared cache target directory (so DataFusion compiles once), and
-// returns the crate directory and the binary's path.
-func compileRustSource(code, outPath string) (crateDir, binPath string, err error) {
+// compileRustSource writes the program into a crate of its own, built
+// under the shared cache target directory so DataFusion compiles once,
+// and returns the binary's path and a cleanup that removes every trace of
+// the program: the crate, and what cargo kept for it in the target
+// directory. The crate's package is named after its directory, so two
+// builds at once never share a binary path (with one package name, every
+// build wrote target/release/ssqlgen and a concurrent run could execute
+// the other's program) and the cleanup can find exactly this program's
+// files. Each kept program cost ~170 MB until 2026-11-08 (eleven were
+// found). cleanup is never nil, even with an error.
+func compileRustSource(g *childGuard, code, outPath string) (binPath string, cleanup func(), err error) {
+	cleanup = func() {}
 	cargo, err := rustCargo()
 	if err != nil {
-		return "", "", err
+		return "", cleanup, err
 	}
 	cache, err := rustCacheDir()
 	if err != nil {
-		return "", "", fmt.Errorf("ssql generate rust: cache dir: %w", err)
+		return "", cleanup, fmt.Errorf("ssql generate rust: cache dir: %w", err)
 	}
 	target := filepath.Join(cache, "target")
 	dir, err := os.MkdirTemp(cache, "crate-*")
 	if err != nil {
-		return "", "", fmt.Errorf("creating crate dir: %w", err)
+		return "", cleanup, fmt.Errorf("creating crate dir: %w", err)
+	}
+	pkg := "ssqlgen_" + strings.TrimPrefix(filepath.Base(dir), "crate-")
+	cleanup = func() {
+		os.RemoveAll(dir)
+		removeRustProgram(target, pkg)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
-		os.RemoveAll(dir)
-		return "", "", err
+		return "", cleanup, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(rustCargoToml()), 0o644); err != nil {
-		os.RemoveAll(dir)
-		return "", "", err
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(rustCargoToml(pkg)), 0o644); err != nil {
+		return "", cleanup, err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "src", "main.rs"), []byte(code), 0o644); err != nil {
-		os.RemoveAll(dir)
-		return "", "", err
+		return "", cleanup, err
 	}
 	if _, err := os.Stat(filepath.Join(target, "release")); err != nil {
-		fmt.Fprintf(os.Stderr, "ssql generate rust: first build compiles DataFusion %s itself (several minutes, about 1.3 GB under %s); later builds relink in seconds\n", rustDataFusionCrate, target)
+		fmt.Fprintf(os.Stderr, "ssql generate rust: first build compiles DataFusion %s itself (several minutes, about 1.3 GB under %s); later builds compile only the program\n", rustDataFusionCrate, target)
 	}
 	build := exec.Command(cargo, "build", "--release", "--quiet")
 	build.Dir = dir
 	build.Env = append(os.Environ(), "CARGO_TARGET_DIR="+target)
 	build.Stdout = os.Stderr
 	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		os.RemoveAll(dir)
-		return "", "", fmt.Errorf("ssql generate rust: cargo build failed: %w", err)
+	if err := g.run(build); err != nil {
+		if err == errInterrupted {
+			return "", cleanup, err
+		}
+		return "", cleanup, fmt.Errorf("ssql generate rust: cargo build failed: %w", err)
 	}
-	built := filepath.Join(target, "release", "ssqlgen")
+	built := filepath.Join(target, "release", pkg)
 	if outPath == "" {
-		return dir, built, nil
+		return built, cleanup, nil
 	}
 	data, err := os.ReadFile(built)
 	if err != nil {
-		os.RemoveAll(dir)
-		return "", "", err
+		return "", cleanup, err
 	}
 	if err := os.WriteFile(outPath, data, 0o755); err != nil {
-		os.RemoveAll(dir)
-		return "", "", fmt.Errorf("ssql generate rust -build: %w", err)
+		return "", cleanup, fmt.Errorf("ssql generate rust -build: %w", err)
 	}
-	return dir, outPath, nil
+	return outPath, cleanup, nil
+}
+
+// removeRustProgram removes what cargo keeps for package pkg in the
+// target directory: the binary, its dep-info, and its files under deps,
+// .fingerprint, build and incremental (each named pkg-HASH). DataFusion
+// and the other dependencies stay: they are the cache.
+func removeRustProgram(target, pkg string) {
+	rel := filepath.Join(target, "release")
+	os.Remove(filepath.Join(rel, pkg))
+	os.Remove(filepath.Join(rel, pkg+".d"))
+	for _, sub := range []string{"deps", ".fingerprint", "build", "incremental"} {
+		matches, _ := filepath.Glob(filepath.Join(rel, sub, pkg+"-*"))
+		for _, m := range matches {
+			os.RemoveAll(m)
+		}
+	}
 }
 
 // runRustSource compiles and runs the program from the user's cwd (so
-// relative file paths in the pipeline resolve as they do for the CLI).
+// relative file paths in the pipeline resolve as they do for the CLI),
+// then removes it; an interrupt does the same (childGuard).
 func runRustSource(code string, timeRun bool) error {
+	g := newChildGuard()
+	cleanup := func() {}
+	defer g.finish(func() { cleanup() })
 	compileStart := time.Now()
-	dir, bin, err := compileRustSource(code, "")
+	bin, c, err := compileRustSource(g, code, "")
+	cleanup = c
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
 	compileDur := time.Since(compileStart)
 	run := exec.Command(bin)
 	run.Stdout = os.Stdout
 	run.Stderr = os.Stderr
 	runStart := time.Now()
-	runErr := run.Run()
+	runErr := g.run(run)
 	if timeRun {
 		fmt.Fprintf(os.Stderr, "[ssql: compiled in %s, ran in %s]\n", roundDur(compileDur), roundDur(time.Since(runStart)))
 	}
 	return runErr
 }
 
-// buildRustSource compiles the program to outPath and exits.
+// buildRustSource compiles the program to outPath and exits, leaving
+// only the binary it was asked for.
 func buildRustSource(code, outPath string) error {
 	abs, err := filepath.Abs(outPath)
 	if err != nil {
 		return fmt.Errorf("ssql generate rust -build: resolving output path: %w", err)
 	}
-	dir, _, err := compileRustSource(code, abs)
-	if err != nil {
-		return err
-	}
-	return os.RemoveAll(dir)
+	g := newChildGuard()
+	cleanup := func() {}
+	defer g.finish(func() { cleanup() })
+	_, cleanup, err = compileRustSource(g, code, abs)
+	return err
 }

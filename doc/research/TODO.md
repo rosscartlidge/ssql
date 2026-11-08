@@ -114,6 +114,12 @@ Tracked issues and feature gaps discovered during development.
   CSV, and `generate rust` prints JSONL for `to tsv` and `to json`. The
   equivalence lanes rely on the bare `SELECT`, so `-run` should pick the
   client's output mode rather than change the statement.
+- [ ] **`generate rust -run` compiles the program at `opt-level = 3`, 16–18 s**
+  (2026-11-08): DataFusion's generic async code is instantiated in `main.rs`.
+  `[profile.release.package.<pkg>] opt-level = 0` compiled the lookup in 3.0 s
+  with the same 2.34 s run (DataFusion stays at 3); check the rust lane and
+  the bench's Rust column (window, cube) before shipping. Ross ruled out
+  keeping crates for fast reruns: `-run` leaves no trace.
 - [ ] **`to tsv` does not escape a tab in a value** (2026-11-07): `a<TAB>b`
   in a cell comes out as one more column, exit 0. Exec and generated Go;
   the DuckDB `COPY` matches it (no quoting). Fail loudly or escape.

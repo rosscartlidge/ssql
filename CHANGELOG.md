@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`generate go -run` and `generate rust -run` leave nothing behind, also when interrupted.** Ctrl-C (or SIGTERM, SIGHUP) is passed on to the build or the program; ssql waits for it, removes the build, and then dies of the same signal, so a shell loop around it stops. Before, an interrupted run left its ~47 MB Go build in `/tmp`, and every Rust run left its ~170 MB binary in `~/.cache/ssql/rust/target`. DataFusion's own build stays there as the cache. `-build` keeps only the binary it was asked for.
+- **Two `generate rust -run`s at once could each run the other's program:** both built to `target/release/ssqlgen`. Each build now has its own package name.
+
 ## [4.142.0] - 2026-11-07
 
 ### Added

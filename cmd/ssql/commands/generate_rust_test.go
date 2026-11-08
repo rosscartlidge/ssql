@@ -374,11 +374,11 @@ func TestGenerateRustRuns(t *testing.T) {
 		"ssql group-by dept -avg salary avg_salary -sum bonus bonus -count n",
 		"ssql sort -desc avg_salary",
 		"ssql to jsonl")
-	crate, bin, err := compileRustSource(code, "")
+	bin, cleanup, err := compileRustSource(newChildGuard(), code, "")
+	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(crate)
 	cmd := exec.Command(bin)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()

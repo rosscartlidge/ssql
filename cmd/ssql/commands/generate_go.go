@@ -418,12 +418,18 @@ func shellQuote(s string) string {
 // resolve the temp module without conflict with whatever go.mod is
 // (or isn't) in the user's cwd.
 func runGoSource(code string, timeRun bool) error {
+	g := newChildGuard()
+	var dir string
+	defer g.finish(func() {
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
+	})
 	compileStart := time.Now()
-	dir, binPath, err := compileGoSource(code, "")
+	dir, binPath, err := compileGoSource(g, code, "")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
 	compileDur := time.Since(compileStart)
 
 	// Run step: do NOT set cmd.Dir — the binary inherits the user's
@@ -432,7 +438,7 @@ func runGoSource(code string, timeRun bool) error {
 	run.Stdout = os.Stdout
 	run.Stderr = os.Stderr
 	runStart := time.Now()
-	runErr := run.Run()
+	runErr := g.run(run)
 	runDur := time.Since(runStart)
 
 	// Timing goes to stderr so it never pollutes the data on stdout. The
@@ -468,11 +474,17 @@ func buildGoSource(code, outPath string) error {
 	if err != nil {
 		return fmt.Errorf("ssql generate go -build: resolving output path: %w", err)
 	}
-	dir, _, err := compileGoSource(code, abs)
+	g := newChildGuard()
+	var dir string
+	defer g.finish(func() {
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
+	})
+	dir, _, err = compileGoSource(g, code, abs)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
 
 	// Silent on success, as `go build -o` is: the caller named the path.
 	return nil
@@ -521,7 +533,7 @@ var fullGoVersionRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 // context: the SSQL_MODULE_DIR notice prints only when asked.
 var explainBuild bool
 
-func compileGoSource(code, outPath string) (tempDir, binPath string, err error) {
+func compileGoSource(g *childGuard, code, outPath string) (tempDir, binPath string, err error) {
 	if _, err := exec.LookPath("go"); err != nil {
 		return "", "", fmt.Errorf("ssql generate go: 'go' binary not found in PATH (a Go toolchain is required)")
 	}
@@ -582,8 +594,11 @@ require github.com/rosscartlidge/ssql/v4 v%s
 	build.Dir = dir
 	build.Stdout = os.Stderr
 	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
+	if err := g.run(build); err != nil {
 		os.RemoveAll(dir)
+		if err == errInterrupted {
+			return "", "", err
+		}
 		if version.Local && os.Getenv("SSQL_MODULE_DIR") == "" {
 			// A binary built from a checkout emits what its templates
 			// know; the program compiled against the released module at
