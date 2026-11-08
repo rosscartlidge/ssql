@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.143.0] - 2026-11-09
+
 ### Added
 
 - **`generate rust` writes `to json FILE` and `to jsonl FILE`** with Arrow's JSON writer, where it refused them. A time is an RFC 3339 instant with its `Z`, also on stdout (it had none, which a reader other than ssql takes as local time). `to json` is a JSON array, every key in every object, `[]` for no rows; exec indents it, Arrow does not. A float is spelled `1.0e20` where exec writes `1e+20`.
