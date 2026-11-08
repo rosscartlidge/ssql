@@ -2,7 +2,7 @@
 
 Reference: DFC157
 Created: 2026-10-27
-Last modified: 2026-11-02
+Last modified: 2026-11-08
 Revisits: [DFC132](./dfc132_rust_target_datafusion.md) §4
 
 [Back to Index](./README.md)
@@ -138,11 +138,15 @@ cast and the `coalesce(sum, 0)` are the datafusion dialect's own rules
 (`sqlAggAvg`, `sqlSumOrZero`) rendered as builders; an integer column
 sums as `cast(col, Decimal128(38, 0))` as the SQL does (`sqlSumArg`).
 
-The sink decides `main`'s tail: `to table` → `show()`; `to csv` → the
-arrow CSV writer on stdout; `to jsonl` and every other sink → JSONL on
-stdout through `datafusion::arrow::json::LineDelimitedWriter` over
-`execute_stream()` (the form the equivalence lane reads); `to parquet F`
-→ `write_parquet(F, single-file)`. `-func NAME` emits only the function,
+The sink decides `main`'s tail: `to table` → `show()`; `to csv` and
+`to tsv`, to stdout or a file → the arrow CSV writer (`rustCSVSink`: a time
+as an RFC 3339 instant with its `Z`, the header written before the first
+batch so no rows is a header, TSV unquoted with a one-byte delimiter,
+`-time-format` and `-sidecar` refused; 2026-11-08); `to jsonl` and every
+other stdout sink → JSONL through
+`datafusion::arrow::json::LineDelimitedWriter` over `execute_stream()`
+(the form the equivalence lane reads); `to parquet F` →
+`write_parquet(F, single-file)`; any other file is refused. `-func NAME` emits only the function,
 which is how the lane builds one binary from 328 pipelines (§5).
 
 ### 3.2 The assembler keeps the layer tree

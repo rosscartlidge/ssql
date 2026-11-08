@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`generate rust` writes `to csv FILE` and `to tsv FILE`** with Arrow's CSV writer, where it refused them before. A time is an RFC 3339 instant (`…Z`), as DuckDB's `COPY` writes it: the same time when read back, without the cell's own offset. A float is spelled `1e20` and `2.0` where exec writes `1e+20` and `2`. `-time-format`, `-sidecar` and a separator of more than one byte are refused. A file that cannot be created is named in the error.
+
 ### Fixed
+
+- **`generate rust`'s `to csv` wrote nothing for no rows** where exec writes the header, and **its `to tsv` printed JSONL.** Both now go through the same writer.
+- **`generate rust` ignored `to csv -time-format`** on stdout and wrote its own format. It is refused, with the reason; a sink now stamps its options for stdout too, so a backend can see them.
+- **`to tsv -separator ab` wrote `a`, and a multi-byte character wrote its first byte,** silently. A separator is one character, decoded whole: `-separator →` works, and `ab` is an error.
 
 - **`generate go -run` and `generate rust -run` leave nothing behind, also when interrupted.** Ctrl-C (or SIGTERM, SIGHUP) is passed on to the build or the program; ssql waits for it, removes the build, and then dies of the same signal, so a shell loop around it stops. Before, an interrupted run left its ~47 MB Go build in `/tmp`, and every Rust run left its ~170 MB binary in `~/.cache/ssql/rust/target`. DataFusion's own build stays there as the cache. `-build` keeps only the binary it was asked for.
 - **Two `generate rust -run`s at once could each run the other's program:** both built to `target/release/ssqlgen`. Each build now has its own package name.

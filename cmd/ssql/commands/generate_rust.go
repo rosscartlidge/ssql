@@ -34,6 +34,7 @@ import (
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
 // rustDataFusionCrate is the DataFusion crate the generated program
@@ -246,7 +247,7 @@ func renderRust(q *sqlQuery, funcName string) string {
 	}
 	sb.WriteString("    Ok(df)\n}\n")
 	if funcName == "" {
-		sb.WriteString("\n" + rustMain(fn, q.sink, q.sinkFile()))
+		sb.WriteString("\n" + rustMain(fn, q.sink, q.sinkFile(), q.sinkOp))
 	}
 	return sb.String()
 }
@@ -287,7 +288,7 @@ func rustArrowType(kind string) string {
 // rustMain is the program's main: the session the datafusion oracle
 // lane uses (CSV files have a header; a quoted path in an escape-hatch
 // SQL is a table), the pipeline, and the sink.
-func rustMain(fn string, sink []string, file string) string {
+func rustMain(fn string, sink []string, file string, op *lib.Op) string {
 	var sb strings.Builder
 	sb.WriteString("#[tokio::main]\nasync fn main() -> Result<()> {\n")
 	sb.WriteString("    let config = SessionConfig::new().set_str(\"datafusion.catalog.has_header\", \"true\");\n")
@@ -302,13 +303,8 @@ func rustMain(fn string, sink []string, file string) string {
 		sb.WriteString("    df.show().await?;\n")
 	case kind == "parquet" && file != "":
 		fmt.Fprintf(&sb, "    df.write_parquet(%s, datafusion::dataframe::DataFrameWriteOptions::new().with_single_file_output(true), None).await?;\n", rustStr(file))
-	case kind == "csv":
-		sb.WriteString(`    let mut w = datafusion::arrow::csv::WriterBuilder::new().with_header(true).build(std::io::BufWriter::new(std::io::stdout().lock()));
-    let mut stream = df.execute_stream().await?;
-    while let Some(batch) = futures::StreamExt::next(&mut stream).await {
-        w.write(&batch?)?;
-    }
-`)
+	case kind == "csv" || kind == "tsv":
+		sb.WriteString(rustCSVSink(kind, file, op))
 	default:
 		// JSONL on stdout: what `to jsonl` writes and what the
 		// equivalence lane reads.

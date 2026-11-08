@@ -178,9 +178,12 @@ func TestSinkFileIsWrittenOrRefused(t *testing.T) {
 		{"postgres_parquet", "sql -dialect postgres", "to parquet o.parquet"},
 		{"datafusion_csv", "sql -dialect datafusion", "to csv o.csv"},
 		{"datafusion_jsonl", "sql -dialect datafusion", "to jsonl o.jsonl"},
-		{"rust_csv", "rust", "to csv o.csv"},
-		{"rust_tsv", "rust", "to tsv o.tsv"},
 		{"rust_jsonl", "rust", "to jsonl o.jsonl"},
+		{"rust_time_format", "rust", "to csv o.csv -time-format %Y"},
+		{"rust_time_format_stdout", "rust", "to csv -time-format %Y"},
+		{"rust_sidecar", "rust", "to csv o.csv -sidecar"},
+		{"tsv_separator_two_chars", "go", "to tsv o.tsv -separator ab"},
+		{"rust_separator_multibyte", "rust", "to tsv o.tsv -separator →"},
 		{"duckdb_sidecar", "sql", "to csv o.csv -sidecar"},
 		{"duckdb_time_format", "sql", "to csv o.csv -time-format %Y"},
 		{"duckdb_xlsx", "sql", "to xlsx o.xlsx"},
@@ -199,12 +202,15 @@ func TestSinkFileIsWrittenOrRefused(t *testing.T) {
 			}
 		})
 	}
-	// Stdout sinks and the one file rust writes stay as they were.
+	// Stdout sinks and the files rust writes are written.
 	for _, c := range []struct{ generate, sink, want string }{
 		{"sql", "to table", "SELECT"},
 		{"sql", "to csv", "SELECT"},
 		{"sql -dialect postgres", "to csv", "SELECT"},
 		{"rust", "to parquet o.parquet", "write_parquet"},
+		{"rust", "to csv o.csv", `File::create(path)`},
+		{"rust", "to tsv o.tsv -separator ^", `with_delimiter(b'^')`},
+		{"rust", "to tsv", `QuoteStyle::Never`},
 	} {
 		script := "PATH=" + filepath.Dir(bin) + ":$PATH " + bin + " generate " + c.generate + " -pipeline 'ssql from csv t.csv | ssql " + c.sink + "'"
 		out, err := sinkShell(t, dir, script)

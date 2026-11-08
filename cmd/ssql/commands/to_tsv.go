@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"unicode/utf8"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -64,7 +65,13 @@ func registerToTSV(cmd *cf.SubcommandBuilder) {
 			if separator == "" || separator == "\\t" {
 				separator = "\t"
 			}
-			sep := rune(separator[0])
+			// One character, decoded whole: `-separator ab` wrote `a` and a
+			// multi-byte character wrote its first byte, silently, until
+			// 2026-11-08.
+			if utf8.RuneCountInString(separator) != 1 {
+				return fmt.Errorf("to tsv -separator %q: the separator is one character", separator)
+			}
+			sep, _ := utf8.DecodeRuneInString(separator)
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)

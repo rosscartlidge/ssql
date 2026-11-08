@@ -1110,14 +1110,16 @@ DataFrame API's readers can take and DataFusion's SQL file table cannot:
 a `.tsv` (its delimiter), a `.jsonl` (its extension), and `-type` or a
 schema sidecar (a declared schema). The program's `main`
 builds the session, runs the function and writes by the pipeline's sink
-(`to table` shows it, `to csv` and `to jsonl` stream it to stdout, `to
-parquet FILE` writes the file).
+(`to table` shows it, `to csv`, `to tsv` and `to jsonl` stream it to
+stdout, and `to csv FILE`, `to tsv FILE` and `to parquet FILE` write the
+file; a time in a CSV is an RFC 3339 instant, as DuckDB writes it).
 
 `-run` compiles it with cargo and runs it; `-build PATH` keeps the
 binary (about 170 MB, DataFusion statically linked). The crate lives
 under `~/.cache/ssql/rust`: the first build compiles DataFusion itself —
 several minutes and about 1.3 GB, announced on stderr — and later builds
-relink in seconds. On the 14.6 M-row file from [Performance,
+compile only the program, about 18 s. The program's crate and binary are
+removed after the run, also when it is interrupted. On the 14.6 M-row file from [Performance,
 Measured](performance.md) the program runs the three-key cube in 0.19 s
 against the typed Go program's 0.32 s; the table there has the rest.
 

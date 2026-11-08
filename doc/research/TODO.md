@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-07
+Last modified: 2026-11-08
 
 [Back to Index](./README.md)
 
@@ -103,17 +103,32 @@ Tracked issues and feature gaps discovered during development.
   not a fixed `GOGC`, which would multiply a sort's or window's multi-GB heap.
   `GOGC=off` is slower than 1600 (0.87 against 0.73 s; sys 1.7 s against 0.4 s).
 - [ ] **File sinks outside DuckDB** (2026-11-07): `generate sql` writes a
-  file through DuckDB's `COPY`; Postgres, DataFusion and `generate rust`
-  (except `to parquet FILE`) refuse. Probed: DataFusion's
+  file through DuckDB's `COPY`; Postgres and DataFusion refuse, and
+  `generate rust` writes csv, tsv and parquet (csv and tsv since
+  2026-11-08) and refuses jsonl, json and the rest. Probed: DataFusion's
   `COPY (q) TO 'f.csv' STORED AS CSV OPTIONS ('format.has_header' 'true')`
   writes one file, with `1e20` and no offset on a time. Postgres has no
   file form inside a query (`\o FILE` + `COPY … TO STDOUT` in psql, not yet
   run on the rig), and may write a bool as `t`, which `to csv` does not.
 - [ ] **A sink's stdout format in the SQL and rust lanes** (2026-11-07):
   `to csv` with no file under `generate sql -run` prints DuckDB's box, not
-  CSV, and `generate rust` prints JSONL for `to tsv` and `to json`. The
+  CSV, and `generate rust` prints JSONL for `to json` (`to tsv` is TSV since
+  2026-11-08). The
   equivalence lanes rely on the bare `SELECT`, so `-run` should pick the
   client's output mode rather than change the statement.
+- [ ] **A float's spelling differs between writers** (2026-11-08): exec's
+  `to csv` writes `1e+20` and `2`, its `to tsv` writes `100000000000000000000`
+  and `2`, and Arrow's CSV writer (`generate rust`) `1e20` and `2.0`. The
+  values read back equal; the bytes do not, so `TestGenerateRustWritesTheSinkFile`
+  leaves the float column out of its byte check. Pick one spelling for exec's
+  two writers first.
+- [ ] **exec's `to tsv` writes nothing for no rows** (2026-11-08): `to csv`
+  writes the header (from the schema line), `to tsv` takes its columns from
+  the first record. `generate rust` writes the header for both.
+- [ ] **A large int128 does not fit `generate rust`'s reader** (2026-11-08):
+  it reads an int128 column as `Decimal128(38, 0)`, so
+  `170141183460469231731687303715884105727` (39 digits) fails with "parse
+  decimal overflow". Decimal256 or a refusal with the reason.
 - [ ] **`generate rust -run` compiles the program at `opt-level = 3`, 16–18 s**
   (2026-11-08): DataFusion's generic async code is instantiated in `main.rs`.
   `[profile.release.package.<pkg>] opt-level = 0` compiled the lookup in 3.0 s
