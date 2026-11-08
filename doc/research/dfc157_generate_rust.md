@@ -142,11 +142,14 @@ The sink decides `main`'s tail: `to table` → `show()`; `to csv` and
 `to tsv`, to stdout or a file → the arrow CSV writer (`rustCSVSink`: a time
 as an RFC 3339 instant with its `Z`, the header written before the first
 batch so no rows is a header, TSV unquoted with a one-byte delimiter,
-`-time-format` and `-sidecar` refused; 2026-11-08); `to jsonl` and every
-other stdout sink → JSONL through
-`datafusion::arrow::json::LineDelimitedWriter` over `execute_stream()`
-(the form the equivalence lane reads); `to parquet F` →
-`write_parquet(F, single-file)`; any other file is refused. `-func NAME` emits only the function,
+`-time-format` and `-sidecar` refused; 2026-11-08); `to jsonl` and no
+sink → JSONL through the arrow JSON writer's `LineDelimitedWriter` over
+`execute_stream()` (the form the equivalence lane reads), and `to json` →
+its `ArrayWriter` with explicit nulls, `[]` for no rows, to stdout or a
+file, a time with its `Z` (`rustJSONSink`, 2026-11-09; until then `to
+json` and every other stdout sink printed JSONL); `to parquet F` →
+`write_parquet(F, single-file)`; any other sink is refused
+(`rustRefuseSink`). `-func NAME` emits only the function,
 which is how the lane builds one binary from 328 pipelines (§5).
 
 ### 3.2 The assembler keeps the layer tree

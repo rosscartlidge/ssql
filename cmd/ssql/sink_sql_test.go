@@ -178,7 +178,8 @@ func TestSinkFileIsWrittenOrRefused(t *testing.T) {
 		{"postgres_parquet", "sql -dialect postgres", "to parquet o.parquet"},
 		{"datafusion_csv", "sql -dialect datafusion", "to csv o.csv"},
 		{"datafusion_jsonl", "sql -dialect datafusion", "to jsonl o.jsonl"},
-		{"rust_jsonl", "rust", "to jsonl o.jsonl"},
+		{"rust_markdown_stdout", "rust", "to markdown"},
+		{"rust_xlsx", "rust", "to xlsx o.xlsx"},
 		{"rust_time_format", "rust", "to csv o.csv -time-format %Y"},
 		{"rust_time_format_stdout", "rust", "to csv -time-format %Y"},
 		{"rust_sidecar", "rust", "to csv o.csv -sidecar"},
@@ -211,6 +212,9 @@ func TestSinkFileIsWrittenOrRefused(t *testing.T) {
 		{"rust", "to csv o.csv", `File::create(path)`},
 		{"rust", "to tsv o.tsv -separator ^", `with_delimiter(b'^')`},
 		{"rust", "to tsv", `QuoteStyle::Never`},
+		{"rust", "to jsonl o.jsonl", `LineDelimitedWriter<_> = builder.build(std::io::BufWriter::new(out))`},
+		{"rust", "to json o.json", `ArrayWriter<_> = builder.build(std::io::BufWriter::new(out))`},
+		{"rust", "to json", `ArrayWriter<_> = builder.build(std::io::BufWriter::new(std::io::stdout()`},
 	} {
 		script := "PATH=" + filepath.Dir(bin) + ":$PATH " + bin + " generate " + c.generate + " -pipeline 'ssql from csv t.csv | ssql " + c.sink + "'"
 		out, err := sinkShell(t, dir, script)

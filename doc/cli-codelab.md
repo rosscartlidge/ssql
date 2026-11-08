@@ -1110,9 +1110,9 @@ DataFrame API's readers can take and DataFusion's SQL file table cannot:
 a `.tsv` (its delimiter), a `.jsonl` (its extension), and `-type` or a
 schema sidecar (a declared schema). The program's `main`
 builds the session, runs the function and writes by the pipeline's sink
-(`to table` shows it, `to csv`, `to tsv` and `to jsonl` stream it to
-stdout, and `to csv FILE`, `to tsv FILE` and `to parquet FILE` write the
-file; a time in a CSV is an RFC 3339 instant, as DuckDB writes it).
+(`to table` shows it, `to csv`, `to tsv`, `to json` and `to jsonl` write
+it to stdout or to a FILE, and `to parquet FILE` writes the file; a time
+is an RFC 3339 instant, as DuckDB writes it).
 
 `-run` compiles it with cargo and runs it; `-build PATH` keeps the
 binary (about 170 MB, DataFusion statically linked). The crate lives

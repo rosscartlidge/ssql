@@ -305,16 +305,12 @@ func rustMain(fn string, sink []string, file string, op *lib.Op) string {
 		fmt.Fprintf(&sb, "    df.write_parquet(%s, datafusion::dataframe::DataFrameWriteOptions::new().with_single_file_output(true), None).await?;\n", rustStr(file))
 	case kind == "csv" || kind == "tsv":
 		sb.WriteString(rustCSVSink(kind, file, op))
+	case kind == "json":
+		sb.WriteString(rustJSONSink(kind, file))
 	default:
-		// JSONL on stdout: what `to jsonl` writes and what the
-		// equivalence lane reads.
-		sb.WriteString(`    let mut w = datafusion::arrow::json::LineDelimitedWriter::new(std::io::BufWriter::new(std::io::stdout().lock()));
-    let mut stream = df.execute_stream().await?;
-    while let Some(batch) = futures::StreamExt::next(&mut stream).await {
-        w.write(&batch?)?;
-    }
-    w.finish()?;
-`)
+		// `to jsonl`, and no sink: JSONL on stdout, what the equivalence
+		// lanes read (rustRefuseSink refuses every other sink).
+		sb.WriteString(rustJSONSink("jsonl", file))
 	}
 	sb.WriteString("    Ok(())\n}\n")
 	return sb.String()

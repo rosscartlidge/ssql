@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`generate rust` writes `to json FILE` and `to jsonl FILE`** with Arrow's JSON writer, where it refused them. A time is an RFC 3339 instant with its `Z`, also on stdout (it had none, which a reader other than ssql takes as local time). `to json` is a JSON array, every key in every object, `[]` for no rows; exec indents it, Arrow does not. A float is spelled `1.0e20` where exec writes `1e+20`.
 - **`generate rust` writes `to csv FILE` and `to tsv FILE`** with Arrow's CSV writer, where it refused them before. A time is an RFC 3339 instant (`…Z`), as DuckDB's `COPY` writes it: the same time when read back, without the cell's own offset. A float is spelled `1e20` and `2.0` where exec writes `1e+20` and `2`. `-time-format`, `-sidecar` and a separator of more than one byte are refused. A file that cannot be created is named in the error.
 
 ### Fixed
 
+- **`generate rust`'s `to json` printed JSONL, and so did `to markdown` and every other sink it has no writer for.** `to json` writes a JSON array; the others are refused, naming the sinks it writes.
 - **`generate rust`'s `to csv` wrote nothing for no rows** where exec writes the header, and **its `to tsv` printed JSONL.** Both now go through the same writer.
 - **`generate rust` ignored `to csv -time-format`** on stdout and wrote its own format. It is refused, with the reason; a sink now stamps its options for stdout too, so a backend can see them.
 - **`to tsv -separator ab` wrote `a`, and a multi-byte character wrote its first byte,** silently. A separator is one character, decoded whole: `-separator →` works, and `ab` is an error.

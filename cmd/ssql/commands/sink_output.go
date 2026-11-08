@@ -111,8 +111,11 @@ func sqlCopyOptions(kind, what string, op *lib.Op) ([]string, error) {
 }
 
 // rustRefuseSink refuses a sink the generated main would not write as
-// asked: a file other than csv, tsv and parquet, and an option of a csv or
-// tsv sink that Arrow's CSV writer cannot honour.
+// asked: anything but a table, csv, tsv, json or jsonl (on stdout or to a
+// file) and a parquet file, and an option of a csv or tsv sink that
+// Arrow's CSV writer cannot honour. Until 2026-11-09 a sink the main did
+// not know printed JSONL on stdout, exit 0 (`to json` and `to markdown`
+// among them).
 func rustRefuseSink(q *sqlQuery) error {
 	if len(q.sink) == 0 {
 		return nil
@@ -134,29 +137,56 @@ func rustRefuseSink(q *sqlQuery) error {
 			return fmt.Errorf("%s -separator %q has no generate rust form: Arrow's CSV writer takes a one-byte delimiter — use generate go", what, sep)
 		}
 		return nil
-	case "parquet":
+	case "table", "json", "jsonl":
 		return nil
+	case "parquet":
+		if file != "" {
+			return nil
+		}
 	}
-	if file != "" {
-		return fmt.Errorf("%s has no generate rust form: the program writes csv, tsv and parquet files — use generate sql or generate go", what)
-	}
-	return nil
+	return fmt.Errorf("%s has no generate rust form: the program writes a table, csv, tsv, json and jsonl, and parquet files — use generate go", what)
 }
+
+// rustTimeFormat spells a time in a written file as an RFC 3339 instant
+// in UTC, which reads back as the same time in ssql and in any other
+// reader; the cell's own offset is gone, as in every SQL lane. Arrow's
+// default has no Z, which another reader takes as local time.
+const rustTimeFormat = "\"%Y-%m-%dT%H:%M:%S%.fZ\".to_string()"
+
+// rustSinkWriter is the Rust that builds the writer w from builder over a
+// buffered stdout or file; a file that cannot be created is an error that
+// names it. typ annotates w where build is generic over the format.
+func rustSinkWriter(b *strings.Builder, file, typ string) {
+	if file == "" {
+		fmt.Fprintf(b, "    let mut w%s = builder.build(std::io::BufWriter::new(std::io::stdout().lock()));\n", typ)
+		return
+	}
+	fmt.Fprintf(b, "    let path = %s;\n", rustStr(file))
+	b.WriteString("    let out = std::fs::File::create(path).map_err(|e| datafusion::error::DataFusionError::Execution(format!(\"{path}: {e}\")))?;\n")
+	fmt.Fprintf(b, "    let mut w%s = builder.build(std::io::BufWriter::new(out));\n", typ)
+}
+
+// rustWriteBatches is the Rust that writes the DataFrame's batches to w
+// as they stream.
+const rustWriteBatches = `    let mut stream = df.execute_stream().await?;
+    while let Some(batch) = futures::StreamExt::next(&mut stream).await {
+        w.write(&batch?)?;
+    }
+`
 
 // rustCSVSink is the Rust that writes the DataFrame as CSV, or as TSV
 // (tab or -separator, nothing quoted, as `to tsv` writes), to file or to
-// stdout. A time is an RFC 3339 instant, which reads back as the same
-// time; the cell's own offset is gone, as in every SQL lane. The header
-// goes out before the first batch, so a result with no rows is a header,
-// as exec writes it (Arrow's writer emitted nothing until 2026-11-08). The
-// writer is flushed explicitly: a write error is the program's exit code.
+// stdout. The header goes out before the first batch, so a result with no
+// rows is a header, as exec writes it (Arrow's writer emitted nothing
+// until 2026-11-08). The writer is flushed explicitly: a write error is
+// the program's exit code.
 func rustCSVSink(kind, file string, op *lib.Op) string {
 	var b strings.Builder
 	b.WriteString("    let schema = df.schema().inner().clone();\n")
 	b.WriteString("    let builder = datafusion::arrow::csv::WriterBuilder::new()\n")
 	b.WriteString("        .with_header(true)\n")
-	b.WriteString("        .with_timestamp_format(\"%Y-%m-%dT%H:%M:%S%.fZ\".to_string())\n")
-	b.WriteString("        .with_timestamp_tz_format(\"%Y-%m-%dT%H:%M:%S%.fZ\".to_string())")
+	b.WriteString("        .with_timestamp_format(" + rustTimeFormat + ")\n")
+	b.WriteString("        .with_timestamp_tz_format(" + rustTimeFormat + ")")
 	if kind == "tsv" {
 		sep := "\t"
 		if op != nil {
@@ -168,20 +198,39 @@ func rustCSVSink(kind, file string, op *lib.Op) string {
 		b.WriteString("        .with_quote_style(datafusion::arrow::csv::QuoteStyle::Never)")
 	}
 	b.WriteString(";\n")
-	if file == "" {
-		b.WriteString("    let mut w = builder.build(std::io::BufWriter::new(std::io::stdout().lock()));\n")
-	} else {
-		fmt.Fprintf(&b, "    let path = %s;\n", rustStr(file))
-		b.WriteString("    let out = std::fs::File::create(path).map_err(|e| datafusion::error::DataFusionError::Execution(format!(\"{path}: {e}\")))?;\n")
-		b.WriteString("    let mut w = builder.build(std::io::BufWriter::new(out));\n")
+	rustSinkWriter(&b, file, "")
+	b.WriteString("    w.write(&datafusion::arrow::record_batch::RecordBatch::new_empty(schema))?;\n")
+	b.WriteString(rustWriteBatches)
+	b.WriteString("    std::io::Write::flush(&mut w.into_inner())?;\n")
+	return b.String()
+}
+
+// rustJSONSink is the Rust that writes the DataFrame as JSONL (one object
+// per line, a null left out, as `to jsonl` writes; what the equivalence
+// lanes read on stdout) or as a JSON array (every key in every object, a
+// null spelled null, as `to json` writes; `[]` for no rows), to file or
+// to stdout. Arrow's array has no indentation where exec's is
+// pretty-printed: the same JSON, other bytes.
+func rustJSONSink(kind, file string) string {
+	var b strings.Builder
+	b.WriteString("    let builder = datafusion::arrow::json::WriterBuilder::new()\n")
+	if kind == "json" {
+		b.WriteString("        .with_explicit_nulls(true)\n")
 	}
-	b.WriteString(`    w.write(&datafusion::arrow::record_batch::RecordBatch::new_empty(schema))?;
-    let mut stream = df.execute_stream().await?;
-    while let Some(batch) = futures::StreamExt::next(&mut stream).await {
-        w.write(&batch?)?;
-    }
-    std::io::Write::flush(&mut w.into_inner())?;
-`)
+	b.WriteString("        .with_timestamp_format(" + rustTimeFormat + ")\n")
+	b.WriteString("        .with_timestamp_tz_format(" + rustTimeFormat + ");\n")
+	typ := ": datafusion::arrow::json::LineDelimitedWriter<_>"
+	if kind == "json" {
+		typ = ": datafusion::arrow::json::ArrayWriter<_>"
+	}
+	rustSinkWriter(&b, file, typ)
+	b.WriteString(rustWriteBatches)
+	b.WriteString("    w.finish()?;\n")
+	b.WriteString("    let mut out = w.into_inner();\n")
+	if kind == "json" {
+		b.WriteString("    std::io::Write::write_all(&mut out, b\"\\n\")?;\n")
+	}
+	b.WriteString("    std::io::Write::flush(&mut out)?;\n")
 	return b.String()
 }
 

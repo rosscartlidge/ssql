@@ -104,21 +104,24 @@ Tracked issues and feature gaps discovered during development.
   `GOGC=off` is slower than 1600 (0.87 against 0.73 s; sys 1.7 s against 0.4 s).
 - [ ] **File sinks outside DuckDB** (2026-11-07): `generate sql` writes a
   file through DuckDB's `COPY`; Postgres and DataFusion refuse, and
-  `generate rust` writes csv, tsv and parquet (csv and tsv since
-  2026-11-08) and refuses jsonl, json and the rest. Probed: DataFusion's
+  `generate rust` writes csv, tsv, json, jsonl and parquet (csv and tsv
+  since 2026-11-08, json and jsonl since 2026-11-09) and refuses the rest
+  (arrow, xlsx, markdown, lines, the charts). Probed: DataFusion's
   `COPY (q) TO 'f.csv' STORED AS CSV OPTIONS ('format.has_header' 'true')`
   writes one file, with `1e20` and no offset on a time. Postgres has no
   file form inside a query (`\o FILE` + `COPY … TO STDOUT` in psql, not yet
   run on the rig), and may write a bool as `t`, which `to csv` does not.
 - [ ] **A sink's stdout format in the SQL and rust lanes** (2026-11-07):
   `to csv` with no file under `generate sql -run` prints DuckDB's box, not
-  CSV, and `generate rust` prints JSONL for `to json` (`to tsv` is TSV since
-  2026-11-08). The
+  CSV. (`generate rust` printed JSONL for `to tsv` until 2026-11-08 and
+  for `to json` and `to markdown` until 2026-11-09; it now writes TSV and a
+  JSON array and refuses the sinks it has no writer for.) The
   equivalence lanes rely on the bare `SELECT`, so `-run` should pick the
   client's output mode rather than change the statement.
 - [ ] **A float's spelling differs between writers** (2026-11-08): exec's
   `to csv` writes `1e+20` and `2`, its `to tsv` writes `100000000000000000000`
-  and `2`, and Arrow's CSV writer (`generate rust`) `1e20` and `2.0`. The
+  and `2`, Arrow's CSV writer (`generate rust`) `1e20` and `2.0`, and its
+  JSON writer `1.0e20` where exec's `to jsonl` writes `1e+20`. The
   values read back equal; the bytes do not, so `TestGenerateRustWritesTheSinkFile`
   leaves the float column out of its byte check. Pick one spelling for exec's
   two writers first.
