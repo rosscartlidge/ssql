@@ -1118,8 +1118,12 @@ is an RFC 3339 instant, as DuckDB writes it).
 binary (about 170 MB, DataFusion statically linked). The crate lives
 under `~/.cache/ssql/rust`: the first build compiles DataFusion itself —
 several minutes and about 1.3 GB, announced on stderr — and later builds
-compile only the program, about 18 s. The program's crate and binary are
-removed after the run, also when it is interrupted. On the 14.6 M-row file from [Performance,
+compile only the program, a few seconds: `-run` compiles it without
+optimisation (DataFusion keeps its own), which costs run time only when it
+writes a large CSV or TSV, and `-build` optimises it fully. The dependency
+versions are pinned in ssql, so DataFusion is compiled again only when an
+ssql release changes them. The program's crate and binary are removed
+after the run, also when it is interrupted. On the 14.6 M-row file from [Performance,
 Measured](performance.md) the program runs the three-key cube in 0.19 s
 against the typed Go program's 0.32 s; the table there has the rest.
 

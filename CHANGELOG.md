@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`generate rust -run` compiles the program in a few seconds:** without optimisation, while DataFusion keeps its own. The lookup pipeline compiles in 6 s where it took 16 s, with the same run time. A large CSV or TSV output runs slower (14.6 M rows to a CSV file: 9.1 s against 4.0 s). `-build` still optimises fully. ([DFC157](doc/research/dfc157_generate_rust.md) §3.4)
+
+### Fixed
+
+- **`generate rust` rebuilt DataFusion, for minutes, whenever any of its ~280 dependencies published a patch release,** and kept every old build (ten copies, 9 GB, in two weeks). The dependency versions are now pinned in ssql (the ones the rust lane tests) and every build uses them. The old builds can be removed with `rm -rf ~/.cache/ssql/rust/target`, at the cost of one DataFusion build.
+
 ## [4.143.0] - 2026-11-09
 
 ### Added

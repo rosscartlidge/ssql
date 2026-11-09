@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-09
+Last modified: 2026-11-10
 
 [Back to Index](./README.md)
 
@@ -132,12 +132,20 @@ Tracked issues and feature gaps discovered during development.
   it reads an int128 column as `Decimal128(38, 0)`, so
   `170141183460469231731687303715884105727` (39 digits) fails with "parse
   decimal overflow". Decimal256 or a refusal with the reason.
-- [ ] **`generate rust -run` compiles the program at `opt-level = 3`, 16–18 s**
-  (2026-11-08): DataFusion's generic async code is instantiated in `main.rs`.
-  `[profile.release.package.<pkg>] opt-level = 0` compiled the lookup in 3.0 s
-  with the same 2.34 s run (DataFusion stays at 3); check the rust lane and
-  the bench's Rust column (window, cube) before shipping. Ross ruled out
-  keeping crates for fast reruns: `-run` leaves no trace.
+- [ ] **`generate rust` on mimalloc** ([DFC166](./dfc166_memory_go_vs_rust.md), 2026-11-10):
+  the lookup program spends 3.6 s in the kernel faulting in 3.6 GB of fresh
+  heap in 4 KB pages (glibc); with mimalloc as the global allocator (2 MB
+  pages) 1.4 s, wall 2.30 → 1.37 s, memory +0.8 GB. Measure the bench's
+  other pipelines (windows, large writes), then add the dependency and
+  regenerate the pinned lock. Also open: why DataFusion's heap peaks at
+  3.6 GB on a streaming pipeline that keeps 0.7% of its rows (Go's: 65 MB).
+- [ ] **`generate rust -run`'s CSV and TSV writer runs unoptimised**
+  (2026-11-10): `-run` compiles the program at `opt-level = 0` (DFC157
+  §3.4, the table), and Arrow's CSV writer, generic over its output, is
+  compiled in the program: 14.6 M rows to a CSV file 9.07 s against 3.98 s.
+  A helper crate built once at 3 recovers part (6.0 s); find the remaining
+  ~2 s of library code instantiated in the program (needs a profiler:
+  `perf_event_paranoid` is 4) before choosing.
 - [ ] **`to tsv` does not escape a tab in a value** (2026-11-07): `a<TAB>b`
   in a cell comes out as one more column, exit 0. Exec and generated Go;
   the DuckDB `COPY` matches it (no quoting). Fail loudly or escape.

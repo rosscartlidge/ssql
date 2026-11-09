@@ -20,6 +20,7 @@ package commands
 
 import (
 	"bytes"
+	_ "embed"
 	"fmt"
 	"io"
 	"math"
@@ -42,6 +43,20 @@ import (
 // oracle lane runs (55), bumped deliberately with it.
 const rustDataFusionCrate = "55"
 
+// rustCargoLock pins every crate the program compiles against: the
+// versions the rust lane tested, copied into each crate and built with
+// --locked. Without it cargo resolved the newest compatible version of
+// each of DataFusion's ~280 dependencies for every new crate, and a patch
+// release anywhere (itoa, syn, uuid, fixedbitset) rebuilt DataFusion for
+// minutes and left the old build behind: ten builds of DataFusion 55.2.0,
+// 9 GB, by 2026-11-10. Its root package is "ssqlgen" (RustCargoLock
+// renames it). Regenerate with
+// SSQL_RUST_LOCK_UPDATE=1 go test ./cmd/ssql/commands -run TestRustCargoLock
+// after changing the manifest or rustDataFusionCrate.
+//
+//go:embed rust_cargo.lock
+var rustCargoLock string
+
 func registerGenerateRust(cmd *cf.SubcommandBuilder) {
 	sub := cmd.Subcommand("rust").
 		Description("Generate a Rust program (Apache DataFusion's DataFrame API) from an ssql CLI pipeline").
@@ -52,14 +67,14 @@ func registerGenerateRust(cmd *cf.SubcommandBuilder) {
 		Bool().
 		Global().
 		Default(false).
-		Help("Compile the program with cargo and run it (mutually exclusive with OUTPUT and -build). The crate lives under $XDG_CACHE_HOME/ssql/rust (~/.cache/ssql/rust): the first build compiles DataFusion itself — several minutes and about 1.3 GB — and later builds compile only the program (seconds). The program's crate and binary are removed after the run, also on an interrupt; DataFusion's build stays. cargo is SSQL_CARGO when set, else cargo on PATH, else ~/.cargo/bin/cargo").
+		Help("Compile the program with cargo and run it (mutually exclusive with OUTPUT and -build). The crate lives under $XDG_CACHE_HOME/ssql/rust (~/.cache/ssql/rust): the first build compiles DataFusion itself — several minutes and about 1.3 GB — and later builds compile only the program, at opt-level 0 (a few seconds; DataFusion keeps its full optimisation, and only a large CSV or TSV output runs slower). Every build uses the dependency versions pinned in ssql, so DataFusion is not rebuilt when a dependency publishes a release. The program's crate and binary are removed after the run, also on an interrupt; DataFusion's build stays. cargo is SSQL_CARGO when set, else cargo on PATH, else ~/.cargo/bin/cargo").
 		Done().
 		Flag("-build", "-b").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*"}).
 		Global().
 		Default("").
-		Help("Compile to the named binary and exit (mutually exclusive with OUTPUT and -run)").
+		Help("Compile to the named binary, at full optimisation, and exit (mutually exclusive with OUTPUT and -run)").
 		Done().
 		Flag("-time").
 		Bool().
@@ -1331,10 +1346,18 @@ func rustCacheDir() (string, error) {
 	return dir, os.MkdirAll(dir, 0o755)
 }
 
-// rustCargoToml is the generated program's crate manifest; pkg names the
-// package, and so the binary and every file cargo keeps for it.
-func rustCargoToml(pkg string) string {
-	return fmt.Sprintf(`[package]
+// RustCargoToml is the generated program's crate manifest; pkg names the
+// package, and so the binary and every file cargo keeps for it. The
+// program itself compiles at programOpt and its dependencies at 3: the
+// program only builds a plan and hands it to DataFusion, so `-run` takes
+// 0 and compiles in 2-6 s where 3 took 6-16 s with the same run time,
+// except for a large CSV or TSV output, whose Arrow writer is compiled in
+// the program (14.6 M rows to a CSV file: 3.98 s at 3, 9.07 s at 0; the
+// whole run is still about 2 s slower, compile included; DFC157 §3.4,
+// measured 2026-11-10). `-build` keeps 3: its binary is run many times.
+// The rust lane builds with the same manifest and lock.
+func RustCargoToml(pkg string, programOpt int) string {
+	toml := fmt.Sprintf(`[package]
 name = "%s"
 version = "0.1.0"
 edition = "2021"
@@ -1347,6 +1370,16 @@ futures = "0.3"
 [profile.release]
 opt-level = 3
 `, pkg, rustDataFusionCrate)
+	if programOpt != 3 {
+		toml += fmt.Sprintf("\n[profile.release.package.%s]\nopt-level = %d\n", pkg, programOpt)
+	}
+	return toml
+}
+
+// RustCargoLock is the pinned lock (rustCargoLock) for a crate whose
+// package is pkg.
+func RustCargoLock(pkg string) string {
+	return strings.Replace(rustCargoLock, "\nname = \"ssqlgen\"\n", "\nname = \""+pkg+"\"\n", 1)
 }
 
 // compileRustSource writes the program into a crate of its own, built
@@ -1382,7 +1415,14 @@ func compileRustSource(g *childGuard, code, outPath string) (binPath string, cle
 	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
 		return "", cleanup, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(rustCargoToml(pkg)), 0o644); err != nil {
+	opt := 3
+	if outPath == "" { // -run
+		opt = 0
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(RustCargoToml(pkg, opt)), 0o644); err != nil {
+		return "", cleanup, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.lock"), []byte(RustCargoLock(pkg)), 0o644); err != nil {
 		return "", cleanup, err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "src", "main.rs"), []byte(code), 0o644); err != nil {
@@ -1391,7 +1431,7 @@ func compileRustSource(g *childGuard, code, outPath string) (binPath string, cle
 	if _, err := os.Stat(filepath.Join(target, "release")); err != nil {
 		fmt.Fprintf(os.Stderr, "ssql generate rust: first build compiles DataFusion %s itself (several minutes, about 1.3 GB under %s); later builds compile only the program\n", rustDataFusionCrate, target)
 	}
-	build := exec.Command(cargo, "build", "--release", "--quiet")
+	build := exec.Command(cargo, "build", "--release", "--locked", "--quiet")
 	build.Dir = dir
 	build.Env = append(os.Environ(), "CARGO_TARGET_DIR="+target)
 	build.Stdout = os.Stderr

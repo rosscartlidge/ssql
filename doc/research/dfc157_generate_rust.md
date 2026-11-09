@@ -2,7 +2,7 @@
 
 Reference: DFC157
 Created: 2026-10-27
-Last modified: 2026-11-09
+Last modified: 2026-11-10
 Revisits: [DFC132](./dfc132_rust_target_datafusion.md) §4
 
 [Back to Index](./README.md)
@@ -204,9 +204,49 @@ rewritten per invocation, `CARGO_TARGET_DIR` inside it so the dependency
 build persists). `cargo` is resolved from PATH, then
 `$HOME/.cargo/bin/cargo`, or `SSQL_CARGO`. The first build compiles
 DataFusion — several minutes and ~1.3 GB, announced on stderr — and later
-builds are the incremental link, tens of seconds. The binary is ~170 MB;
-documented, not hidden. `-time` prints compile and run wall as `generate
-go` does.
+builds compile only the program. The binary is ~170 MB; documented, not
+hidden. `-time` prints compile and run wall as `generate go` does.
+
+**Pinned dependencies (2026-11-10).** Every crate gets the embedded
+`rust_cargo.lock` (`RustCargoLock`, root renamed to the crate's package)
+and builds with `--locked`; the rust lane builds with the same manifest and
+lock (`RustCargoToml`). Without a lock cargo resolved the newest compatible
+version of each of DataFusion's ~280 dependencies for every new crate, so a
+patch release anywhere (`itoa`, `syn`, `uuid` one morning, `fixedbitset`
+the day before) changed every hash above it and rebuilt DataFusion for
+minutes in the next run, leaving the old build: ten builds of the same
+55.2.0, 9 GB. `SSQL_RUST_LOCK_UPDATE=1 go test ./cmd/ssql/commands -run
+TestRustCargoLock` regenerates the lock; the rust lane then tests it.
+
+**The program's optimisation (2026-11-10).** `-run` compiles the program
+at `opt-level = 0` and its dependencies at 3
+(`[profile.release.package.<pkg>]`); `-build` compiles everything at 3.
+The program only builds a plan for DataFusion, so most of the optimiser's
+time went on DataFusion's async code instantiated in it. Measured on the
+14.6 M-row file, best of 3, outputs equal (seconds):
+
+| pipeline | compile 3 | compile 0 | run 3 | run 0 |
+|---|---:|---:|---:|---:|
+| cube | 13.6 | 2.1 | 0.18 | 0.18 |
+| groupby_parquet | 6.1 | 1.9 | 0.03 | 0.02 |
+| groupby_csv | 5.7 | 3.2 | 0.22 | 0.22 |
+| filter_write (2.7 M rows of CSV) | 5.5 | 3.1 | 0.68 | 1.24 |
+| join3 | 11.5 | 2.8 | 0.26 | 0.27 |
+| lookup | 15.9 | 6.3 | 2.28 | 2.43 |
+| decimal | 5.6 | 1.9 | 0.04 | 0.05 |
+| window | 5.8 | 5.4 | 5.72 | 5.73 |
+| `to csv FILE`, 14.6 M rows | 5.7 | 2.5 | 3.98 | 9.07 |
+| `to jsonl FILE`, 14.6 M rows | 6.9 | 2.5 | 3.12 | 3.36 |
+| `to tsv FILE` from CSV | 6.3 | 1.8 | 2.91 | 6.32 |
+
+The exception is Arrow's CSV writer: generic over its output, it is
+compiled in the program, and a large CSV or TSV output runs up to 2.3×
+slower (compile and run together, the 14.6 M-row CSV file is 2 s slower;
+lookup is 10 s faster). The JSON writer's encoders are compiled in Arrow.
+Moving the CSV sink into a helper crate built once at 3 ran in 6.0 s: the
+boxed writer it used costs nothing (3.93 s with the program at 3), and the
+remaining ~2 s is other library code instantiated in the program, not
+profiled (`perf_event_paranoid` is 4 on the machine).
 
 ## 4. Measured: DataFusion against typed Go (2026-10-27)
 

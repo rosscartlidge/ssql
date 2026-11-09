@@ -151,15 +151,19 @@ func rustBuildCrate(t *testing.T, pkg string, funcs, names []string) (string, er
 	} else {
 		t.Logf("rust: keeping the crate at %s", crate)
 	}
-	toml := strings.Replace(rustLaneCargoToml, `name = "ssqllane"`, `name = "`+pkg+`"`, 1)
-	if err := os.WriteFile(filepath.Join(crate, "Cargo.toml"), []byte(toml), 0o644); err != nil {
+	// The manifest and pinned lock `generate rust` builds with, so the
+	// lane tests the versions users get.
+	if err := os.WriteFile(filepath.Join(crate, "Cargo.toml"), []byte(commands.RustCargoToml(pkg, 3)), 0o644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(crate, "Cargo.lock"), []byte(commands.RustCargoLock(pkg)), 0o644); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(crate, "src", "main.rs"), []byte(rustLaneMain(funcs, names)), 0o644); err != nil {
 		return "", err
 	}
 	target := rustTarget()
-	build := exec.Command(rustLaneCargo(), "build", "--release", "--quiet")
+	build := exec.Command(rustLaneCargo(), "build", "--release", "--locked", "--quiet")
 	build.Dir = crate
 	build.Env = append(os.Environ(), "CARGO_TARGET_DIR="+target)
 	var out bytes.Buffer
@@ -170,20 +174,6 @@ func rustBuildCrate(t *testing.T, pkg string, funcs, names []string) (string, er
 	}
 	return filepath.Join(target, "release", pkg), nil
 }
-
-const rustLaneCargoToml = `[package]
-name = "ssqllane"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-datafusion = "55"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-futures = "0.3"
-
-[profile.release]
-opt-level = 3
-`
 
 // rustLaneMain is the crate's main.rs: every case's function and a main
 // that runs the one named by argv[1] and prints its rows as JSONL.
