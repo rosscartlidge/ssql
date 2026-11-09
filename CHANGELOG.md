@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ssql generate pretty`: the pipeline as written, one stage to a line, within 80 columns** (`-width N`). A long stage breaks between its clauses (a flag the command declares, or a clause separator), and a process substitution is laid out in place. The output is a bash pipeline: it runs the same, reads back through `-pipeline` and `-script` to the same stages, and formats to itself. An argument longer than a line, such as a long quoted expression, cannot be split without changing it, so its line runs over and a warning names it.
+
 ### Changed
 
 - **`generate rust -run` compiles the program in a few seconds:** without optimisation, while DataFusion keeps its own. The lookup pipeline compiles in 6 s where it took 16 s, with the same run time. A large CSV or TSV output runs slower (14.6 M rows to a CSV file: 9.1 s against 4.0 s). `-build` still optimises fully. ([DFC157](doc/research/dfc157_generate_rust.md) §3.4)
 
 ### Fixed
 
+- **A `-script` or `-pipeline` written with backslash line continuations passed a stage a word with a leading space** (`update -set-expr a x \` then `-set-expr b y` gave update the argument `" -set-expr"`), because the lines were joined with a space and the kept backslash escaped it. The continuation is now dropped before the join.
 - **`generate rust` rebuilt DataFusion, for minutes, whenever any of its ~280 dependencies published a patch release,** and kept every old build (ten copies, 9 GB, in two weeks). The dependency versions are now pinned in ssql (the ones the rust lane tests) and every build uses them. The old builds can be removed with `rm -rf ~/.cache/ssql/rust/target`, at the cost of one DataFusion build.
 
 ## [4.143.0] - 2026-11-09

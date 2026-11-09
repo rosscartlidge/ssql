@@ -111,6 +111,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `generate rust -pipeline 'PIPELINE'` | a Rust program on Apache DataFusion's DataFrame API, one call per stage; `-run` compiles with cargo (the first build takes minutes) and runs it; `-build BIN` keeps the binary |
 | `generate ssql -pipeline 'PIPELINE'` | the pipeline rewritten with fewer stages; `-explain` says why; `-as-written` leaves off the zone the from stage resolved (a `-tz` you typed stays) |
 | `generate json -pipeline 'PIPELINE'` | the pipeline as a JSON document for `ssql run` |
+| `generate pretty -pipeline 'PIPELINE'` | the pipeline as written, one stage to a line within 80 columns (`-width N`), runnable by bash and by `-script` |
 | `run FILE.json` | run a pipeline document with no shell, after the optimiser's rewrites (`-explain` names them, `+O` runs it as written); `-check` validates commands, flags and field names without running; `-stdin` reads the document from stdin (a views table: `from views.csv \| where -if name eq X \| to lines pipeline \| run -stdin`) |
 | `generate ssql -json FILE.json` / `generate sql -json FILE.json` | the optimised pipeline / SQL from a document |
 

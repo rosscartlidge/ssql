@@ -4,7 +4,7 @@ import (
 	cf "github.com/rosscartlidge/autocli/v4"
 )
 
-// RegisterGenerate registers the "generate" parent subcommand with go, sql, ssql, schema and json children.
+// RegisterGenerate registers the "generate" parent subcommand with go, sql, ssql, schema, json and pretty children.
 func RegisterGenerate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	genCmd := cmd.Subcommand("generate").
 		Description("Generate code, SQL, or optimized pipelines from ssql fragments").
@@ -19,6 +19,7 @@ func RegisterGenerate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	registerGenerateSSQL(genCmd)
 	registerGenerateSchema(genCmd)
 	registerGenerateJSON(genCmd)
+	registerGeneratePretty(genCmd)
 
 	genCmd.Done()
 	return cmd

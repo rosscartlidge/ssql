@@ -792,7 +792,12 @@ func compareVersions(a, b []int) int {
 //  1. Strip "# comment" — to-end-of-line, only outside quoted strings
 //     so tokens like `where -if-expr 'tag == "#urgent"'` survive.
 //  2. Trim per-line whitespace and drop empty lines.
-//  3. Join leading-| continuation lines onto the previous line so
+//  3. Drop a backslash that continues a line (outside quotes, not
+//     itself escaped): the lines are joined with a space, and a kept
+//     backslash escaped that space, so `update -set-expr a 'x' \`
+//     then `-set-expr b 'y'` passed update the word " -set-expr"
+//     (`generate pretty` writes continuations; found 2026-11-10).
+//  4. Join leading-| continuation lines onto the previous line so
 //     bash sees a single pipeline (bash natively allows trailing-|
 //     continuation but not leading-|).
 func preprocessScript(src string) string {
@@ -800,6 +805,9 @@ func preprocessScript(src string) string {
 	for _, raw := range strings.Split(src, "\n") {
 		line := stripCommentRespectingQuotes(raw)
 		line = strings.TrimSpace(line)
+		if continuesLine(line) {
+			line = strings.TrimSpace(line[:len(line)-1])
+		}
 		if line == "" {
 			continue
 		}
@@ -815,6 +823,35 @@ func preprocessScript(src string) string {
 		}
 	}
 	return strings.Join(joined, " ")
+}
+
+// continuesLine reports whether line ends in a backslash that continues
+// it: outside single and double quotes, and not escaped by a backslash
+// before it (bash's rules within one line).
+func continuesLine(line string) bool {
+	var quote rune
+	runes := []rune(line)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch {
+		case quote == '\'':
+			if r == '\'' {
+				quote = 0
+			}
+		case r == '\\':
+			if i == len(runes)-1 {
+				return true
+			}
+			i++ // escapes the next character, in or out of double quotes
+		case quote == '"':
+			if r == '"' {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		}
+	}
+	return false
 }
 
 // stripCommentRespectingQuotes returns the prefix of line up to the

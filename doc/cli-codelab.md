@@ -1298,6 +1298,16 @@ as a document from the stages' own arguments, ready for `run`:
 (export SSQL_MODE=record; ssql from orders.csv | ssql where -if status eq shipped | ssql join customers.csv -using customer_id | ssql to table) | ssql generate json
 ```
 
+A pipeline too long to read on one line has a text form too: `generate
+pretty` writes it as you typed it, one stage to a line and within 80
+columns (`-width N`), breaking a long stage between its clauses. The
+output is a bash pipeline, so a one-liner becomes a script that runs the
+same, and it reads back through `-script`:
+
+```bash
+ssql generate pretty -pipeline 'ssql from orders.csv | ssql where -if status eq shipped | ssql join customers.csv -using customer_id | ssql include order_id name amount | ssql to table'
+```
+
 A document is also a source for `generate`: `-json FILE` runs it the way
 `run` does, with no shell, and generates from its fragments. So a
 program that holds a document gets SQL, Go or the optimised text in one
