@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.144.0] - 2026-11-10
+
 ### Added
 
 - **`ssql generate pretty`: the pipeline as written, one stage to a line, within 80 columns** (`-width N`). A long stage breaks between its clauses (a flag the command declares, or a clause separator), and a process substitution is laid out in place. The output is a bash pipeline: it runs the same, reads back through `-pipeline` and `-script` to the same stages, and formats to itself. An argument longer than a line, such as a long quoted expression, cannot be split without changing it, so its line runs over and a warning names it.
