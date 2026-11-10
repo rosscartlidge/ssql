@@ -1763,6 +1763,35 @@ var equivCases = []EquivCase{
 		// reads the same text) — pins that -no-sidecar is honoured in
 		// every lane too, since a lane that still read the sidecar would
 		// keep code as text.
+		// A named side file is read as `from FILE` reads it, sidecar
+		// included: until 2026-11-11 join, union and intersect read
+		// sidecar_sales.csv without its package in every lane (code came
+		// back 2.5, 4, 1000, 3), so `join FILE` and `join <(ssql from
+		// FILE)` disagreed. code is text by declaration; a lane that
+		// samples it gets numbers.
+		Name:     "sidecar_join_side_file",
+		Pipeline: `{{.bin}} from range 4 -start 1 -field id | {{.bin}} join {{.data}}/sidecar_sales.csv -using id | {{.bin}} include id code`,
+		Golden: []map[string]any{
+			{"id": 1, "code": "2.50"}, {"id": 2, "code": "4e0"}, {"id": 3, "code": "1e3"}, {"id": 4, "code": "3.0"},
+		},
+	},
+	{
+		// The same for union's and intersect's named files: the side rows
+		// must be the rows `from csv` reads — union keeps both copies of
+		// id 3's text, and intersect finds every row (a side read with
+		// numbers would match none).
+		Name:     "sidecar_union_side_file",
+		Pipeline: `{{.bin}} from csv {{.data}}/sidecar_sales.csv | {{.bin}} union -all -file {{.data}}/sidecar_sales.csv | {{.bin}} where -if id eq 3 | {{.bin}} include id code`,
+		Golden:   []map[string]any{{"id": 3, "code": "1e3"}, {"id": 3, "code": "1e3"}},
+	},
+	{
+		Name:     "sidecar_intersect_side_file",
+		Pipeline: `{{.bin}} from csv {{.data}}/sidecar_sales.csv | {{.bin}} include id code | {{.bin}} intersect -file {{.data}}/sidecar_sales.csv -using code | {{.bin}} include id code`,
+		Golden: []map[string]any{
+			{"id": 1, "code": "2.50"}, {"id": 2, "code": "4e0"}, {"id": 3, "code": "1e3"}, {"id": 4, "code": "3.0"},
+		},
+	},
+	{
 		Name:     "sidecar_off_all_lanes",
 		Pipeline: `{{.bin}} from csv {{.data}}/sidecar_sales.csv -no-sidecar | {{.bin}} sort -desc amount | {{.bin}} include id amount code`,
 		Ordered:  true,

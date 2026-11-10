@@ -1050,6 +1050,14 @@ func translateFrom(q *sqlQuery, args []string) error {
 			files, _ := parquetSourceArgs(args)
 			return translateParquetSource(q, files, nil)
 		}
+		// Bare `from FILE.csv` / `.tsv` reads as `from csv` / `from tsv`
+		// (from.go routes it to the same reader), so it translates as that
+		// form: its sidecar, -type and -format apply. Until 2026-11-11 it
+		// was the bare file, typed by the engine's own sniffing — a
+		// sidecar's decimal:2 column came back a double.
+		if fi, ok := formatForPath(args[0]); ok && (fi.Name == "csv" || fi.Name == "tsv") {
+			return translateFrom(q, append([]string{fi.Name}, args...))
+		}
 		// Bare: from FILE — seed column tracking from the header as the
 		// explicit forms do, so `update -set-expr NEW …` becomes an added
 		// column, not a REPLACE of one that does not exist.
@@ -1918,12 +1926,12 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 		return sqlSideError("join")
 	}
 
-	src, err := dialectSource(filePath)
+	src, side, err := sqlSideFileSource(filePath)
 	if err != nil {
 		return err
 	}
 	q.joins = append(q.joins, fmt.Sprintf("%s %s %s", joinKind, rightAlias(src), joinCond))
-	node.rightFile = filePath
+	node.rightFile, node.rightQuery = filePath, side
 	q.joinNodes = append(q.joinNodes, node)
 	return nil
 }
@@ -2006,7 +2014,7 @@ func translateAsofJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 		rightFields = fragmentFields(funcFrags[len(funcFrags)-1].FuncBody)
 	} else {
 		var err error
-		if src, err = dialectSource(filePath); err != nil {
+		if src, _, err = sqlSideFileSource(filePath); err != nil {
 			return err
 		}
 		rightFields = sideFileFields(filePath)
@@ -2117,16 +2125,24 @@ func translateUnion(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) e
 	sides := []*sqlQuery{&left}
 	pi := 0
 	for _, f := range files {
-		if !strings.HasPrefix(f, "/dev/fd/") {
-			return fmt.Errorf("union -file %s: schema-headed JSONL files have no SQL translation — use <(ssql from csv FILE)", f)
-		}
-		if pi >= len(procs) {
-			return fmt.Errorf("union: missing source fragment for %s", f)
-		}
-		side := buildJoinQuery(procs[pi])
-		pi++
-		if side == nil {
-			return sqlSideError("union")
+		var side *sqlQuery
+		if strings.HasPrefix(f, "/dev/fd/") {
+			if pi >= len(procs) {
+				return fmt.Errorf("union: missing source fragment for %s", f)
+			}
+			side = buildJoinQuery(procs[pi])
+			pi++
+			if side == nil {
+				return sqlSideError("union")
+			}
+		} else {
+			// a named file is `from FILE`, sidecar included, as exec reads
+			// it (every named file was refused here until 2026-11-11, with
+			// a message from when union read only schema-headed JSONL)
+			var err error
+			if side, err = sqlSideFileQuery(f); err != nil {
+				return fmt.Errorf("union -file %s: %w", f, err)
+			}
 		}
 		parts = append(parts, projectByName(renderSelect(side), q.columns))
 		sides = append(sides, side)
@@ -2220,11 +2236,14 @@ func translateSetOp(q *sqlQuery, name string, args []string, funcFrags []*lib.Co
 			}
 			return renderSelect(side), side, nil
 		}
-		src, err := dialectSource(f)
+		src, side, err := sqlSideFileSource(f)
 		if err != nil {
 			return "", nil, err
 		}
-		return "SELECT *\nFROM " + src, &sqlQuery{fromClause: src, source: &sqlSource{files: []string{f}}}, nil
+		if side == nil {
+			side = &sqlQuery{fromClause: src, source: &sqlSource{files: []string{f}}}
+		}
+		return "SELECT *\nFROM " + src, side, nil
 	}
 	op := strings.ToUpper(name)
 	if all {

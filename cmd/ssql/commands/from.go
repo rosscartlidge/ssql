@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
@@ -701,19 +702,26 @@ func buildCSVConfig(typeOverrides map[string]string, defaultType string) (ssql.C
 	}
 	config.EmptyAsZero = fromEmptyZero
 
-	// Parse type overrides
-	if len(typeOverrides) > 0 {
-		config.TypeOverrides = make(map[string]ssql.FieldType)
-		for field, typeName := range typeOverrides {
-			ft, err := ssql.ParseFieldType(typeName)
-			if err != nil {
-				return config, fmt.Errorf("field %q: %w", field, err)
-			}
-			config.TypeOverrides[field] = ft
-		}
-	}
+	var err error
+	config.TypeOverrides, err = fieldTypeMap(typeOverrides)
+	return config, err
+}
 
-	return config, nil
+// fieldTypeMap parses -type overrides (column → type name) into the
+// readers' CSVConfig.TypeOverrides; nil for none.
+func fieldTypeMap(typeOverrides map[string]string) (map[string]ssql.FieldType, error) {
+	if len(typeOverrides) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]ssql.FieldType, len(typeOverrides))
+	for field, typeName := range typeOverrides {
+		ft, err := ssql.ParseFieldType(typeName)
+		if err != nil {
+			return nil, fmt.Errorf("field %q: %w", field, err)
+		}
+		out[field] = ft
+	}
+	return out, nil
 }
 
 // writeWithInferredSchemaOptions configures writeWithInferredSchema behavior
@@ -911,23 +919,48 @@ func capitalizeFieldType(typeName string) string {
 	return strings.ToUpper(ft.String()[:1]) + ft.String()[1:]
 }
 
-// checkTypeOverrideColumns refuses a -type override naming a column the
+// checkTypeOverrideColumns refuses a type override naming a column the
 // header does not have: a typo there used to be accepted silently (the
 // override simply never applied), which `run -check` inherited. headers
-// nil means the header could not be read; nothing is checked then.
-func checkTypeOverrideColumns(headers []string, overrides map[string]string, cmd string) error {
+// nil means the header could not be read; nothing is checked then. The
+// overrides are merged from three places, and each missing column is
+// blamed on the one that named it: the schema sidecar (sidecarColumns),
+// a -format (which implies time; fromTimeFormats), else -type. without
+// is how to read the file without its sidecar, for the message.
+func checkTypeOverrideColumns(headers []string, overrides map[string]string, cmd, without string) error {
 	if headers == nil || len(overrides) == 0 {
 		return nil
 	}
-	var missing []string
+	var typed, formatted []string
+	bySidecar := map[string][]string{}
 	for col := range overrides {
-		if !slices.Contains(headers, col) {
-			missing = append(missing, col)
+		if slices.Contains(headers, col) {
+			continue
+		}
+		if src, ok := sidecarColumns[col]; ok {
+			bySidecar[src] = append(bySidecar[src], col)
+		} else if _, ok := fromTimeFormats[col]; ok {
+			formatted = append(formatted, col)
+		} else {
+			typed = append(typed, col)
 		}
 	}
-	if len(missing) == 0 {
+	var msgs []string
+	list := func(cols []string) string {
+		slices.Sort(cols)
+		return strings.Join(cols, ", ")
+	}
+	if len(typed) > 0 {
+		msgs = append(msgs, "-type names column(s) not in the header: "+list(typed))
+	}
+	if len(formatted) > 0 {
+		msgs = append(msgs, "-format names column(s) not in the header: "+list(formatted))
+	}
+	for _, src := range slices.Sorted(maps.Keys(bySidecar)) {
+		msgs = append(msgs, fmt.Sprintf("the schema sidecar %s names column(s) not in the header: %s — correct the sidecar, or %s", src, list(bySidecar[src]), without))
+	}
+	if len(msgs) == 0 {
 		return nil
 	}
-	slices.Sort(missing)
-	return fmt.Errorf("%s: -type names column(s) not in the header: %s (available: %s)", cmd, strings.Join(missing, ", "), strings.Join(headers, ", "))
+	return fmt.Errorf("%s: %s (available: %s)", cmd, strings.Join(msgs, "; "), strings.Join(headers, ", "))
 }

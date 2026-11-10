@@ -271,7 +271,10 @@ func sideSourceFragment(stage string, n int, file string) (expr string, needsLib
 		}
 	}
 	varName := fmt.Sprintf("%sFile%d", stage, n)
-	code, imports, needsLib := sideFileReadCode(varName, file)
+	code, imports, needsLib, err := sideFileReadCode(varName, file)
+	if err != nil {
+		return "", false, err
+	}
 	if err := lib.WriteCodeFragment(lib.NewInitFragment(varName, code, imports, "")); err != nil {
 		return "", false, fmt.Errorf("writing file read fragment: %w", err)
 	}
@@ -280,32 +283,100 @@ func sideSourceFragment(stage string, n int, file string) (expr string, needsLib
 
 // sideFileReadCode is the record-mode read of a named side file into
 // varName, extension-inferred as exec's readAuxInput: csv and tsv
-// through the package readers, anything else through the schema-aware
-// JSONL reader (lib). Any error is reported and fatal.
-func sideFileReadCode(varName, file string) (code string, imports []string, needsLib bool) {
-	format := ""
-	if fi, ok := formatForPath(file); ok {
-		format = fi.Name
+// through the package readers with the file's sidecar typing
+// (sideDelimReadCode), anything else through the schema-aware JSONL
+// reader (lib). Any error is reported and fatal.
+func sideFileReadCode(varName, file string) (code string, imports []string, needsLib bool, err error) {
+	if code, ok, err := sideDelimReadCode(varName, fmt.Sprintf("%q", file), file); ok || err != nil {
+		return code, []string{"fmt", "os"}, false, err
 	}
-	switch format {
-	case "csv", "tsv":
-		reader := "ReadCSV"
-		if format == "tsv" {
-			reader = "ReadTSV"
-		}
-		return fmt.Sprintf(`%s, err := ssql.%s(%q)
-	if err != nil {
-		return fmt.Errorf("opening %s: %%w", err)
-	}`, varName, reader, file, file), []string{"fmt", "os"}, false
-	default:
-		return fmt.Sprintf(`%sHandle, err := os.Open(%q)
+	return fmt.Sprintf(`%sHandle, err := os.Open(%q)
 	if err != nil {
 		return fmt.Errorf("opening %s: %%w", err)
 	}
 	defer %sHandle.Close()
 	%s := lib.ReadJSONLWithSchema(%sHandle).Records`, varName, file, file, varName, varName, varName),
-			[]string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}, true
+		[]string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}, true, nil
+}
+
+// sideDelimReadCode is the record-mode read of a CSV or TSV side file
+// into varName (ok false for another format): pathExpr is the Go
+// expression for its path (a quoted literal, or a generated program's
+// flag), and the reader takes the config `from FILE` would, the file's
+// schema sidecar (sideFileTyping). join, traverse, union, except and
+// intersect all read a named file through it.
+func sideDelimReadCode(varName, pathExpr, file string) (code string, ok bool, err error) {
+	format := ""
+	if fi, found := formatForPath(file); found {
+		format = fi.Name
 	}
+	if format != "csv" && format != "tsv" {
+		return "", false, nil
+	}
+	overrides, formats, err := sideFileTyping(file)
+	if err != nil {
+		return "", true, err
+	}
+	cfgVar := varName + "Config"
+	var cfg, read string
+	if format == "csv" {
+		cfg = delimConfigCode(cfgVar, overrides, "", formats, false, "','")
+		read = "ssql.ReadCSV(" + pathExpr
+		if cfg != "" {
+			read += ", " + cfgVar
+		}
+	} else {
+		cfg = delimConfigCode(cfgVar, overrides, "", formats, false, "0 /* auto-detect */")
+		read = "ssql.ReadTSV(" + pathExpr
+		if cfg != "" {
+			read = "ssql.ReadTSVWithConfig(" + pathExpr + ", " + cfgVar
+		}
+	}
+	if cfg != "" {
+		cfg += "\n\t"
+	}
+	return fmt.Sprintf(`%s%s, err := %s)
+	if err != nil {
+		return fmt.Errorf("opening %%s: %%w", %s, err)
+	}`, cfg, varName, read, pathExpr), true, nil
+}
+
+// sideFileTypedRead is the typed-mode read of a CSV or TSV side file:
+// the row struct sampled from the file under its sidecar's typing (the
+// struct `from FILE` would make; typeName "" names it from the file) and
+// the reader expression, with the sidecar's date formats, and the
+// imports both need (time for a time.Time field). Any other format is
+// refused.
+func sideFileTypedRead(file, typeName string) (schema *lib.TypedSchema, structDef, readExpr string, imports []string, err error) {
+	overrides, formats, err := sideFileTyping(file)
+	if err != nil {
+		return nil, "", "", nil, err
+	}
+	opts := lib.TypeOptions{Fields: overrides, Formats: formats}
+	format := ""
+	if fi, ok := formatForPath(file); ok {
+		format = fi.Name
+	}
+	switch format {
+	case "csv":
+		if schema, structDef, err = lib.SampleCSVSchema(file, typeName, 0, opts); err != nil {
+			return nil, "", "", nil, err
+		}
+		readExpr = fmt.Sprintf("typed.ReadCSV[%s](%q%s)", schema.TypeName, file, timeFormatOptionsCode(formats, "TimeFormat"))
+	case "tsv":
+		var delim byte
+		if schema, structDef, delim, err = lib.SampleTSVSchema(file, typeName, 0, opts); err != nil {
+			return nil, "", "", nil, err
+		}
+		readExpr = fmt.Sprintf("typed.ReadDelim[%s](%q%s%s)", schema.TypeName, file, typedDelimArg(delim), timeFormatOptionsCode(formats, "DelimTimeFormat"))
+	default:
+		return nil, "", "", nil, fmt.Errorf("%s: only csv/tsv files are read directly in typed mode — use <(ssql from %s)", file, file)
+	}
+	imports = []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	if needsTimeImport(schema) {
+		imports = append(imports, "time")
+	}
+	return schema, structDef, readExpr, imports, nil
 }
 
 func quotedList(items []string) string {
@@ -353,32 +424,15 @@ func emitTypedSetOp(kind setOpKind, inputVar string, leftSchema *lib.TypedSchema
 			if key.wholeRow() {
 				typeName = leftSchema.TypeName // read as the left type; schemas are checked below
 			}
-			format := ""
-			if fi, ok := formatForPath(file); ok {
-				format = fi.Name
-			}
-			var structDef, readCode string
+			var structDef, readExpr string
+			var readImports []string
 			var err error
-			switch format {
-			case "csv":
-				rightSchema, structDef, err = lib.SampleCSVSchema(file, typeName, 0)
-				if err == nil {
-					readCode = fmt.Sprintf("%sFile%d := typed.ReadCSV[%s](%q)", kind.name, i+1, rightSchema.TypeName, file)
-				}
-			case "tsv":
-				var delim byte
-				rightSchema, structDef, delim, err = lib.SampleTSVSchema(file, typeName, 0)
-				if err == nil {
-					readCode = fmt.Sprintf("%sFile%d := typed.ReadDelim[%s](%q%s)", kind.name, i+1, rightSchema.TypeName, file, typedDelimArg(delim))
-				}
-			default:
-				return fail(fmt.Errorf("-file %s: only csv/tsv files are read directly in typed mode — use <(ssql from %s)", file, file))
+			if rightSchema, structDef, readExpr, readImports, err = sideFileTypedRead(file, typeName); err != nil {
+				return fail(fmt.Errorf("-file %w", err))
 			}
-			if err != nil {
-				return fail(err)
-			}
+			readCode := fmt.Sprintf("%sFile%d := %s", kind.name, i+1, readExpr)
 			init := lib.NewInitFragment(fmt.Sprintf("%sFile%d", kind.name, i+1), readCode,
-				[]string{"github.com/rosscartlidge/ssql/v4/typed"}, fmt.Sprintf("ssql from %s", file))
+				readImports, fmt.Sprintf("ssql from %s", file))
 			init.OutputTypedSchema = rightSchema
 			if !key.wholeRow() {
 				init.StructDefs = []string{structDef}

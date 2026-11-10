@@ -344,3 +344,44 @@ func TestJSONLAbsentValueIsLoudInTyped(t *testing.T) {
 		}
 	}
 }
+
+// TestSidecarStrayColumnIsLoud: a schema sidecar naming a column the file
+// does not have stops the read, in every form that reads the file — a
+// source (from FILE, from csv, from tsv) and a side file (join), which
+// was read without its sidecar at all until 2026-11-11 — and in every
+// lane, and the message blames the sidecar, not a -type the user never
+// gave. The side file's way past it is the procsub, since join has no
+// -no-sidecar. A -type typo on from tsv (unchecked outside schema mode
+// until the same day) is blamed on -type.
+func TestSidecarStrayColumnIsLoud(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.csv"), []byte("code,amt\n007,12.5\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "t.tsv"), []byte("code\tamt\n007\t12.5\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "datapackage.json"), []byte(`{"resources":[`+
+		`{"path":"a.csv","schema":{"fields":[{"name":"code","type":"string"},{"name":"ghost","type":"integer"}]}},`+
+		`{"path":"t.tsv","schema":{"fields":[{"name":"ghost","type":"integer"}]}}]}`), 0o644)
+	sidecar := "the schema sidecar datapackage.json names column(s) not in the header: ghost"
+	join := bin + " from range 1 | " + bin + " join a.csv -on n code"
+	for _, c := range []struct{ lane, pipeline, way string }{
+		{"from FILE", bin + " from a.csv", "-no-sidecar"},
+		{"from csv", bin + " from csv a.csv", "-no-sidecar"},
+		{"from tsv", bin + " from tsv t.tsv", "-no-sidecar"},
+		{"join exec", join + " | " + bin + " to jsonl", "<(ssql from csv a.csv -no-sidecar)"},
+		{"join record", "(export SSQL_MODE=record; " + join + ") 2>/dev/null | " + bin + " generate go", "<(ssql from csv a.csv -no-sidecar)"},
+		{"join typed", "(export SSQL_MODE=typed; " + join + ") 2>/dev/null | " + bin + " generate go", "<(ssql from csv a.csv -no-sidecar)"},
+		{"join sql", "(export SSQL_MODE=record; " + join + ") 2>/dev/null | " + bin + " generate sql", "<(ssql from csv a.csv -no-sidecar)"},
+	} {
+		run := exec.Command("bash", "-o", "pipefail", "-c", c.pipeline)
+		run.Dir = dir
+		out, err := run.CombinedOutput()
+		assertLoudFailure(t, c.lane, string(out), err, sidecar, c.way)
+		if strings.Contains(string(out), "-type names") {
+			t.Errorf("%s: blames -type:\n%s", c.lane, out)
+		}
+	}
+	run := exec.Command(bin, "from", "tsv", "t.tsv", "-no-sidecar", "-type", "nope", "int")
+	run.Dir = dir
+	out, err := run.CombinedOutput()
+	assertLoudFailure(t, "from tsv -type typo", string(out), err, "-type names column(s) not in the header: nope")
+}

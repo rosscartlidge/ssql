@@ -69,7 +69,7 @@ What overrides what:
   - the source is several files.
 - **No sidecar is ever looked for** next to several files, stdin or a URL.
 
-`join`, `merge` and `union` don't yet read a sidecar next to a file they open directly (`join sales.csv`). Feed such a file through `<(ssql from csv sales.csv)` instead, and the sidecar applies.
+A file that `join`, `traverse -start-file`, `union`, `merge`, `except` or `intersect` opens directly is read the way `from FILE` reads it, sidecar included, in every lane: `join sales.csv` gives the same types as `join <(ssql from csv sales.csv)`.
 
 ## Types
 
@@ -118,7 +118,7 @@ Each of these stops the command, with the reason and the remedy:
 - a `dialect` that says the file has no header row (ssql reads headed files);
 - a `dialect` delimiter other than comma or tab (`from tsv` detects other delimiters from the header);
 - a type name ssql does not know, or a date format it cannot parse;
-- a sidecar column that is not in the file's header. The message currently says `-type` named it, because the sidecar's types are applied as `-type` overrides.
+- a sidecar column that is not in the file's header. The message names the sidecar, and gives the way past it: `-no-sidecar` on a source, `<(ssql from csv FILE -no-sidecar)` for a file given to `join` and the other commands.
 
 ## Writing one
 

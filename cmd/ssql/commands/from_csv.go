@@ -261,7 +261,7 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 			return err
 		}
 		headers, in := peekDelimitedHeader(r, ',')
-		if err := checkTypeOverrideColumns(headers, typeOverrides, "from csv"); err != nil {
+		if err := checkTypeOverrideColumns(headers, typeOverrides, "from csv", fromWithoutSidecar); err != nil {
 			return err
 		}
 		if err := checkSourceColumns(headers, columns, "from csv"); err != nil {
@@ -303,7 +303,7 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 		records = ssql.ReadCSVFromReader(in, csvConfig)
 	}
 
-	if err := checkTypeOverrideColumns(csvHeaders, typeOverrides, "from csv"); err != nil {
+	if err := checkTypeOverrideColumns(csvHeaders, typeOverrides, "from csv", fromWithoutSidecar); err != nil {
 		return err
 	}
 	return writeDelimitedSource(records, csvHeaders, columns, inputFile, "from csv")
@@ -663,13 +663,21 @@ func generateCSVConfigCode(typeOverrides map[string]string, defaultType string) 
 // literal supplied — "','" for CSV, "0" (auto-detect from the header)
 // for TSV.
 func generateDelimConfigCode(typeOverrides map[string]string, defaultType string, delimLiteral string) string {
+	return delimConfigCode("csvConfig", typeOverrides, defaultType, fromTimeFormats, fromEmptyZero, delimLiteral)
+}
+
+// delimConfigCode renders `cfgVar := ssql.CSVConfig{…}` for a generated
+// record program ("" when every setting is the default): the source's
+// stage passes its own -type/-format/-empty state, a side file its
+// sidecar's typing (sideFileReadCode).
+func delimConfigCode(cfgVar string, typeOverrides map[string]string, defaultType string, timeFormats map[string]string, emptyZero bool, delimLiteral string) string {
 	// No config needed if using defaults
-	if len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") && len(fromTimeFormats) == 0 && !fromEmptyZero {
+	if len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") && len(timeFormats) == 0 && !emptyZero {
 		return ""
 	}
 
 	var parts []string
-	parts = append(parts, "csvConfig := ssql.CSVConfig{")
+	parts = append(parts, cfgVar+" := ssql.CSVConfig{")
 	parts = append(parts, "\t\tHasHeaders: true,")
 	parts = append(parts, fmt.Sprintf("\t\tDelimiter:  %s,", delimLiteral))
 	parts = append(parts, "\t\tComment:    '#',")
@@ -692,10 +700,10 @@ func generateDelimConfigCode(typeOverrides map[string]string, defaultType string
 		}
 		parts = append(parts, "\t\t},")
 	}
-	if lit := timeFormatsLiteral(fromTimeFormats); lit != "" {
+	if lit := timeFormatsLiteral(timeFormats); lit != "" {
 		parts = append(parts, lit)
 	}
-	if fromEmptyZero {
+	if emptyZero {
 		parts = append(parts, "\t\tEmptyAsZero: true,")
 	}
 

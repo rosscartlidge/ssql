@@ -333,8 +333,9 @@ where ssql looks
   It applies wherever the pipeline runs: exec, schema mode and completion,
   generate go and generate sql. Several files, stdin or a URL: name one with
   -sidecar FILE (a bare {"fields": [...]} Table Schema works there too).
-  join/merge/union reading a file directly do not look yet: use
-  join <(ssql from csv FILE).
+  A file given to join, traverse -start-file, union, merge, except or
+  intersect is read as from FILE reads it, sidecar included: join FILE is
+  join <(ssql from FILE).
 
 who wins
   -type COL TYPE and -format COL PATTERN beat the sidecar for that column;

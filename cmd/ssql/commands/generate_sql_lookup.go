@@ -116,7 +116,7 @@ func translateLookupJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragme
 		src = "(" + renderSelect(side) + ")"
 	} else {
 		var err error
-		if src, err = dialectSource(filePath); err != nil {
+		if src, _, err = sqlSideFileSource(filePath); err != nil {
 			return err
 		}
 	}

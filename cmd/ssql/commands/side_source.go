@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
@@ -157,40 +156,18 @@ func generateSideCode(s sideSource) error {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: '%s' must follow a typed-mode source", s.name))
 		}
-		sideFmt := ""
-		if fi, ok := formatForPath(s.file); ok {
-			sideFmt = fi.Name
-		}
-		var rightSchema *lib.TypedSchema
-		var rightStructDef, readCode string
-		switch sideFmt {
-		case "csv":
-			var err error
-			rightSchema, rightStructDef, err = lib.SampleCSVSchema(s.file, "", 0)
-			if err != nil {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: %w", err))
-			}
-			readCode = fmt.Sprintf("right%s := typed.ReadCSV[%s](%q)", rightSchema.TypeName, rightSchema.TypeName, s.file)
-		case "tsv":
-			var delim byte
-			var err error
-			rightSchema, rightStructDef, delim, err = lib.SampleTSVSchema(s.file, "", 0)
-			if err != nil {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: %w", err))
-			}
-			readCode = fmt.Sprintf("right%s := typed.ReadDelim[%s](%q%s)", rightSchema.TypeName, rightSchema.TypeName, s.file, typedDelimArg(delim))
-		default:
+		rightSchema, rightStructDef, readExpr, readImports, err := sideFileTypedRead(s.file, "")
+		if err != nil {
 			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: '%s' on %s files not yet supported in typed mode — use <(ssql from %s)", s.name, filepath.Ext(s.file), s.file))
+				fmt.Errorf("ssql generate go -typed: '%s' on %w", s.name, err))
 		}
+		readCode := fmt.Sprintf("right%s := %s", rightSchema.TypeName, readExpr)
 		// Build a synthesized init fragment for the right side and an
 		// inline func fragment that wraps it.
 		rightInit := lib.NewInitFragment(
 			fmt.Sprintf("right%s", rightSchema.TypeName),
 			readCode,
-			[]string{"github.com/rosscartlidge/ssql/v4/typed"},
+			readImports,
 			fmt.Sprintf("ssql from %s", s.file),
 		)
 		rightInit.OutputTypedSchema = rightSchema
@@ -212,10 +189,14 @@ func generateSideCode(s sideSource) error {
 	// nothing, a left join matched nothing) with exit status 0.
 	// .jsonl goes through the schema-aware reader: a `_schema` header
 	// line (ssql tee output) is not a record.
-	var initCode string
 	imports := []string{"fmt", "os"}
 	lower := strings.ToLower(s.file)
+	initCode, delimited, err := sideDelimReadCode("records", "*flagJoin", s.file)
+	if err != nil {
+		return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("%s: %w", s.name, err))
+	}
 	switch {
+	case delimited:
 	case strings.HasSuffix(lower, ".jsonl"):
 		initCode = `joinHandle, err := os.Open(*flagJoin)
 	if err != nil {
@@ -227,8 +208,6 @@ func generateSideCode(s sideSource) error {
 		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib", "github.com/rosscartlidge/ssql/v4")
 	case strings.HasSuffix(lower, ".json"):
 		initCode = joinReadTemplate("ReadJSON")
-	case strings.HasSuffix(lower, ".tsv"):
-		initCode = joinReadTemplate("ReadTSV")
 	default:
 		initCode = joinReadTemplate("ReadCSV")
 	}

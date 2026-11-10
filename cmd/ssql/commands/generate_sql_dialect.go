@@ -360,6 +360,51 @@ var sqlForRust bool
 // path for DuckDB and DataFusion (both read a file by name), a table for
 // Postgres, which cannot read files in a query — the table is named after
 // the file and the prologue carries the CREATE TABLE + \copy to load it.
+// sqlSideFileSource is a side input FILE (join, except, intersect, union,
+// traverse -start-file) as the engine reads it. A file with a schema
+// sidecar is translated as `from FILE` — the read_csv types, the date
+// formats, the Postgres table's types, DataFusion's refusal — as
+// `<(ssql from FILE)` would be, and side is that query, for the plan
+// tree (generate rust lowers a side from it, not from the bare file);
+// until 2026-11-11 it was the bare file, typed by the engine's own
+// sniffing (a decimal:2 column read as a double). Without a sidecar it
+// is the plain source, as before, and side is nil.
+func sqlSideFileSource(file string) (src string, side *sqlQuery, err error) {
+	overrides, _, err := sideFileTyping(file)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(overrides) == 0 {
+		src, err = dialectSource(file)
+		return src, nil, err
+	}
+	if side, err = sqlSideFileQuery(file); err != nil {
+		return "", nil, err
+	}
+	if sqlDialectCur == dialectDuckDB {
+		// A read_csv(…) beside the main source's read_csv(…) is an
+		// ambiguous reference to "read_csv"; a subquery is a scope of
+		// its own, as a procsub side's is. (Postgres reads a loaded
+		// table with its own name; DataFusion refused the types above.)
+		return "(SELECT * FROM " + side.fromClause + ")", side, nil
+	}
+	return side.fromClause, side, nil
+}
+
+// sqlSideFileQuery is a named side file translated as `from FILE`, as a
+// process substitution's `<(ssql from FILE)` would be: its own query,
+// with its own row order, so the main pipeline's order state is kept.
+func sqlSideFileQuery(file string) (*sqlQuery, error) {
+	mainOrder := sqlOrder
+	defer func() { sqlOrder = mainOrder }()
+	sqlOrder = sqlOrderState{}
+	side := &sqlQuery{}
+	if err := translateFrom(side, []string{file}); err != nil {
+		return nil, err
+	}
+	return side, nil
+}
+
 func dialectSource(file string) (string, error) {
 	return dialectSourceTyped(file, nil)
 }

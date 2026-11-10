@@ -71,7 +71,15 @@ func parseFormatFlags(ctx *cf.Context) (map[string]string, error) {
 // The user's -format wins over a sidecar's (already merged by
 // resolveSidecarTypes).
 func applyTimeFormats(overrides map[string]string, formats map[string]string) map[string]string {
-	fromTimeFormats = formats
+	overrides, fromTimeFormats = formatImpliedTypes(overrides, formats)
+	return overrides
+}
+
+// formatImpliedTypes is applyTimeFormats without the source's global: the
+// overrides with `time` for each formatted column that has no type, and
+// the formats to read them with (nil when a -type contradicts one).
+func formatImpliedTypes(overrides map[string]string, formats map[string]string) (map[string]string, map[string]string) {
+	kept := formats
 	for col := range formats {
 		if overrides == nil {
 			overrides = map[string]string{}
@@ -80,10 +88,10 @@ func applyTimeFormats(overrides map[string]string, formats map[string]string) ma
 			overrides[col] = "time"
 		} else if t != "time" {
 			// A -type that says otherwise is a contradiction the user wrote.
-			fromTimeFormats = nil
+			kept = nil
 		}
 	}
-	return overrides
+	return overrides, kept
 }
 
 // timeFormatsFromArgs reads `-format COL PATTERN` pairs from a stage's

@@ -42,15 +42,15 @@ func emitTypedUnion(inputVar string, leftSchema *lib.TypedSchema, additionalFile
 		} else {
 			// Regular file: sample its schema and synthesize an init
 			// fragment that reads it.
-			if !strings.HasSuffix(strings.ToLower(file), ".csv") {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: 'union' on non-CSV files not yet supported in typed mode"))
-			}
+			// Sampled under the file's sidecar typing, as `from FILE` reads
+			// it, and named the left type so the reader yields left rows.
 			var err error
-			rightSchema, _, err = lib.SampleCSVSchema(file, leftSchema.TypeName, 0)
+			var readExpr string
+			var readImports []string
+			rightSchema, _, readExpr, readImports, err = sideFileTypedRead(file, leftSchema.TypeName)
 			if err != nil {
 				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: %w", err))
+					fmt.Errorf("ssql generate go -typed: union: %w", err))
 			}
 			if err := assertCompatibleSchemas(leftSchema, rightSchema); err != nil {
 				return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: union: %w", err))
@@ -59,8 +59,8 @@ func emitTypedUnion(inputVar string, leftSchema *lib.TypedSchema, additionalFile
 			// the schemas match). No new struct definition needed.
 			rightInit := lib.NewInitFragment(
 				fmt.Sprintf("unionFile%d", i+1),
-				fmt.Sprintf("unionFile%d := typed.ReadCSV[%s](%q)", i+1, leftSchema.TypeName, file),
-				[]string{"github.com/rosscartlidge/ssql/v4/typed"},
+				fmt.Sprintf("unionFile%d := %s", i+1, readExpr),
+				readImports,
 				fmt.Sprintf("ssql from %s", file),
 			)
 			rightInit.OutputTypedSchema = leftSchema

@@ -35,6 +35,15 @@ func readAuxInput(path string) (iter.Seq[ssql.Record], *lib.Schema, error) {
 
 	switch format {
 	case "csv", "tsv":
+		// typed as `from FILE` types it: its schema sidecar, if any
+		overrides, formats, err := sideFileTyping(path)
+		if err != nil {
+			return nil, nil, err
+		}
+		cfg, err := sideCSVConfig(overrides, formats, format == "tsv")
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: sidecar %w", path, err)
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening %s: %w", path, err)
@@ -44,12 +53,12 @@ func readAuxInput(path string) (iter.Seq[ssql.Record], *lib.Schema, error) {
 		if format == "csv" {
 			headers, _ = readCSVHeadersFromReader(f)
 			f.Seek(0, 0)
-			records = ssql.ReadCSVFromReader(f)
+			records = ssql.ReadCSVFromReader(f, cfg)
 		} else {
 			line, _ := bufio.NewReader(f).ReadString('\n')
 			headers = splitDelimHeader(strings.TrimRight(line, "\r\n"))
 			f.Seek(0, 0)
-			records = ssql.ReadTSVFromReader(f)
+			records = ssql.ReadTSVFromReaderWithConfig(f, cfg)
 		}
 		records = closeAfter(records, f)
 		return withPeekedSchema(records, headers)

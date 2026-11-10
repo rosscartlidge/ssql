@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Help at the cursor headed a nested command by its last word**: Alt-h, and hover in `ssql lsp`, on `ssql from csv …` showed "ssql csv - Read CSV…" where `-help` says "ssql from csv". Fixed in autocli v4.23.1 (`HelpAt` now shares `-help`'s heading).
+- **A file given directly to `join`, `traverse -start-file`, `union`, `merge`, `except` or `intersect` ignored its schema sidecar** in every lane, so `join a.csv` read a declared `decimal:2` or text column by sampling where `join <(ssql from csv a.csv)` read the declared type. A named side file is now read as `from FILE` reads it. In `generate sql` the same bug hit bare `ssql from a.csv` (it was the bare file, typed by the engine's sniffing), and `union -file a.csv` was refused with a message about JSONL; both now translate as `from csv`. ([DFC146](doc/research/dfc146_csv_schema_sidecars.md))
+- **A schema sidecar naming a column the file does not have was blamed on `-type`**: "-type names column(s) not in the header", for a flag the user never gave. The message now names the sidecar (or `-format`, or `-type`, whichever named the column) and the way past it. A file given to `join` and the other side-input commands is checked the same way, and `from tsv FILE -type TYPO int` is refused instead of silently ignored outside schema mode.
 - **The API reference said a sidecar's non-ISO date format is refused**; it has been honoured as the column's cell pattern since DFC147.
 
 ## [4.145.0] - 2026-11-10

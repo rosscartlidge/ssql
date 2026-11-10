@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"iter"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -172,61 +171,15 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 	needsLibImport := false
 
 	for _, file := range additionalFiles {
-		// Check if this is a non-regular file (e.g., /dev/fd/N, named pipe)
-		// In generation mode, these contain code fragments from the inner command
-		fileInfo, statErr := os.Stat(file)
-		if statErr == nil && !fileInfo.Mode().IsRegular() {
-			fileFragments, err := lib.ReadCodeFragmentsFromFile(file)
-			if err == nil && len(fileFragments) > 0 {
-				// Wrap subprocess fragments in a func fragment.
-				// Each becomes its own function, encapsulating all internal variables.
-				// Use index-based name since NextFuncName() resets per process.
-				funcName := fmt.Sprintf("unionSource%d", len(sourceCalls)+1)
-				funcFrag := lib.NewFuncFragment(funcName, fileFragments, getCommandString())
-				if err := lib.WriteCodeFragment(funcFrag); err != nil {
-					return fmt.Errorf("writing func fragment from %s: %w", file, err)
-				}
-				sourceCalls = append(sourceCalls, funcName+"()")
-				continue
-			}
+		// a process substitution becomes a func fragment (self-contained,
+		// so its variables cannot collide); a named file is read as
+		// `from FILE` reads it, sidecar included (sideSourceFragment)
+		expr, needsLib, err := sideSourceFragment("union", len(sourceCalls)+1, file)
+		if err != nil {
+			return err
 		}
-
-		// Regular files: extension-inferred read, matching exec.
-		varName := fmt.Sprintf("unionFile%d", len(sourceCalls)+1)
-		var code string
-		var imports []string
-		unionFmt := ""
-		if fi, ok := formatForPath(file); ok {
-			unionFmt = fi.Name
-		}
-		switch unionFmt {
-		case "csv":
-			code = fmt.Sprintf(`%s, err := ssql.ReadCSV(%q)
-	if err != nil {
-		return fmt.Errorf("opening %s: %%w", err)
-	}`, varName, file, file)
-			imports = []string{"fmt", "os"}
-		case "tsv":
-			code = fmt.Sprintf(`%s, err := ssql.ReadTSV(%q)
-	if err != nil {
-		return fmt.Errorf("opening %s: %%w", err)
-	}`, varName, file, file)
-			imports = []string{"fmt", "os"}
-		default:
-			needsLibImport = true
-			code = fmt.Sprintf(`%sHandle, err := os.Open(%q)
-	if err != nil {
-		return fmt.Errorf("opening %s: %%w", err)
-	}
-	defer %sHandle.Close()
-	%s := lib.ReadJSONLWithSchema(%sHandle).Records`, varName, file, file, varName, varName, varName)
-			imports = []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}
-		}
-		fileFrag := lib.NewInitFragment(varName, code, imports, "")
-		if err := lib.WriteCodeFragment(fileFrag); err != nil {
-			return fmt.Errorf("writing file read fragment: %w", err)
-		}
-		sourceCalls = append(sourceCalls, varName)
+		needsLibImport = needsLibImport || needsLib
+		sourceCalls = append(sourceCalls, expr)
 	}
 
 	// Build a filter-compatible closure so it works with Chain().

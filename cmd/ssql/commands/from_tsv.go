@@ -256,7 +256,7 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 		if err != nil {
 			headers = strings.Split(line, string(delim))
 		}
-		if err := checkTypeOverrideColumns(headers, types.overrides, "from tsv"); err != nil {
+		if err := checkTypeOverrideColumns(headers, types.overrides, "from tsv", fromWithoutSidecar); err != nil {
 			return err
 		}
 		// hand the header line back so the reader sees the whole file
@@ -287,6 +287,17 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 		}
 		defer file.Close()
 		tsvHeaders, in = peekDelimitedHeader(file, '\t')
+	}
+	// the columns -type and a sidecar name must be in the header, as in
+	// schema mode above (unchecked here until 2026-11-11: a typo was
+	// silently ignored); the peek splits on tab, the reader detects the
+	// delimiter, so a one-field peek is split the reader's way
+	checkHeaders := tsvHeaders
+	if len(checkHeaders) == 1 {
+		checkHeaders = splitDelimHeader(checkHeaders[0])
+	}
+	if err := checkTypeOverrideColumns(checkHeaders, types.overrides, "from tsv", fromWithoutSidecar); err != nil {
+		return err
 	}
 	records = ssql.ReadTSVFromReaderWithConfig(in, types.cfg)
 	return writeDelimitedSource(records, tsvHeaders, types.columns, inputFile, "from tsv")

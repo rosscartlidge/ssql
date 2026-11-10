@@ -127,7 +127,7 @@ func translateTraverse(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment
 			clear(sqlColumnKinds)
 			maps.Copy(sqlColumnKinds, edgeKinds)
 		} else {
-			src, err := dialectSource(f.startFile)
+			src, _, err := sqlSideFileSource(f.startFile)
 			if err != nil {
 				return err
 			}
