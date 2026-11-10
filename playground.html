@@ -149,9 +149,9 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <!-- ?v= busts the browser cache per deploy: a stale fs-polyfill.js with a
      fresh playground.html made runs die silently (missing new helpers). -->
-<script src="fs-polyfill.js?v=b6d4ef29"></script>
-<script src="wasm_exec.js?v=b6d4ef29"></script>
-<script src="ssql-ui.js?v=b6d4ef29"></script>
+<script src="fs-polyfill.js?v=a3ca9706"></script>
+<script src="wasm_exec.js?v=a3ca9706"></script>
+<script src="ssql-ui.js?v=a3ca9706"></script>
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
@@ -374,7 +374,7 @@ let wasmReady = false;
 
 async function initWasm() {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=b6d4ef29'), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=a3ca9706'), go.importObject);
     go.run(result.instance);
 
     // Wait for ssqlReady
