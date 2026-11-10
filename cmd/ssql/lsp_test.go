@@ -350,6 +350,10 @@ func TestLSP(t *testing.T) {
 	if h := hoverText(c.at("textDocument/hover", uri, doc, at(4, "so"))); !strings.HasPrefix(h, "ssql sort") {
 		t.Errorf("hover on sort is not sort's help: %.80q", h)
 	}
+	// A nested command's help is headed with its whole path, as -help heads it.
+	if h := hoverText(c.at("textDocument/hover", uri, doc, at(0, "ssql from cs"))); !strings.HasPrefix(h, "ssql from csv - ") {
+		t.Errorf("hover on csv is not headed \"ssql from csv\": %.80q", h)
+	}
 
 	edits, _ := c.request("textDocument/formatting", map[string]any{"textDocument": map[string]any{"uri": uri}}).([]any)
 	var newTexts []string

@@ -18,9 +18,10 @@ func RegisterConventions(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql conventions -category evaluation", "How update/filter expressions are evaluated").
 		Example("ssql conventions -category data", "Schema header, numeric types, field ordering").
 		Example("ssql conventions -category nested", "Lists and objects in fields: json type, dotted paths, explode/flatten").
+		Example("ssql conventions -category sidecar", "Column types kept beside a CSV in datapackage.json or CSVW metadata").
 		Flag("-category", "-c").
 		String().
-		Completer(&cf.StaticCompleter{Options: []string{"evaluation", "data", "pipeline", "nested", "codegen"}}).
+		Completer(&cf.StaticCompleter{Options: conventionCategories}).
 		Global().
 		Default("").
 		Help("Show detailed help for a category").
@@ -69,6 +70,12 @@ Data model:
     pins a run; tz(ts, "Australia/Sydney") picks a zone for one expression
     (DFC147). bucket and resample snap to the Unix epoch, zone-free.
 
+Schema sidecars (column types kept beside a CSV):
+  - from FILE / from csv / from tsv take column types from a datapackage.json
+    or CSVW FILE-metadata.json beside the file, instead of sampling; -type and
+    -format win per column, -no-sidecar ignores it, -sidecar FILE names one.
+  - to csv FILE -sidecar writes one; ssqlType carries decimal:S, int128, inet.
+
 Pipeline:
   - every data command reads stdin and writes stdout (Unix pipelines).
   - process substitution feeds a second source: join <(ssql from FILE) … .
@@ -96,10 +103,15 @@ Code generation:
   - generate go | sql | ssql all consume the same fragment stream and read NO
     data — they operate on the pipeline structure, so they're instant.
 
-Use: ssql conventions -category <name>   # evaluation | data | pipeline | nested | codegen
+Use: ssql conventions -category <name>   # evaluation | data | pipeline | nested | sidecar | codegen
 
-Full reference: doc/EXPRESSIONS.md, doc/cli-codelab.md, doc/cli-nested-data.md, doc/api-reference.md
+Full reference: doc/EXPRESSIONS.md, doc/cli-codelab.md, doc/cli-nested-data.md, doc/csv-sidecars.md, doc/api-reference.md
 `
+
+// conventionCategories are the -category names, in the order the overview's
+// "Use:" line lists them; printConventionCategory has a case for each
+// (TestConventionCategories).
+var conventionCategories = []string{"evaluation", "data", "pipeline", "nested", "sidecar", "codegen"}
 
 func printConventionCategory(ctx *cf.Context, category string) error {
 	switch strings.ToLower(category) {
@@ -111,11 +123,13 @@ func printConventionCategory(ctx *cf.Context, category string) error {
 		fmt.Fprint(ctx.Stdout(), conventionPipeline)
 	case "nested", "structured", "json":
 		fmt.Fprint(ctx.Stdout(), conventionNested)
+	case "sidecar", "sidecars", "datapackage", "csvw":
+		fmt.Fprintf(ctx.Stdout(), "%s", conventionSidecar) // the text has a strftime %d
 	case "codegen", "code":
 		fmt.Fprint(ctx.Stdout(), conventionCodegen)
 	default:
 		fmt.Fprintf(ctx.Stdout(), "Unknown category: %s\n\n", category)
-		fmt.Fprintln(ctx.Stdout(), "Available categories: evaluation, data, pipeline, nested, codegen")
+		fmt.Fprintln(ctx.Stdout(), "Available categories: "+strings.Join(conventionCategories, ", "))
 	}
 	return nil
 }
@@ -303,6 +317,54 @@ what generate sql translates
   refuse nested values. The Go lanes (record, typed, parallel) run all of it.
 
 Codelab: doc/cli-nested-data.md   Design: doc/research/dfc144_non_scalar_values.md
+`
+
+const conventionSidecar = `SCHEMA SIDECARS (column types kept beside a CSV):
+
+  A CSV holds names and text; a reader samples rows to guess the types, and a
+  sample misses a float on row ten thousand, a local date, a code like 007.
+  A sidecar is a JSON file beside the data that states the types once.
+
+where ssql looks
+  from FILE, from csv and from tsv on ONE local file take the first of
+    FILE-metadata.json    (W3C CSV on the Web)
+    csv-metadata.json     (CSVW, for the directory)
+    datapackage.json      (Frictionless; a resource whose "path" names FILE)
+  It applies wherever the pipeline runs: exec, schema mode and completion,
+  generate go and generate sql. Several files, stdin or a URL: name one with
+  -sidecar FILE (a bare {"fields": [...]} Table Schema works there too).
+  join/merge/union reading a file directly do not look yet: use
+  join <(ssql from csv FILE).
+
+who wins
+  -type COL TYPE and -format COL PATTERN beat the sidecar for that column;
+  -no-sidecar ignores it. Columns it leaves out are sampled as usual.
+
+the smallest datapackage.json
+  {"resources": [{"path": "sales.csv", "schema": {"fields": [
+      {"name": "code",   "type": "string"},
+      {"name": "amount", "type": "number", "ssqlType": "decimal:2"},
+      {"name": "sold",   "type": "date", "format": "%d/%m/%Y"}]}}]}
+
+types
+  integer → int   number → float   boolean → bool   date/datetime → time
+  object/array/json → json   string → string (stays text)   any → sampled
+  ssqlType, beside the standard type, wins over it: decimal:S (with
+  "number"), int128 (with "integer"), inet (with "string"). Other tools
+  ignore the key and see the standard type.
+  A date format is the column's cell pattern: strftime in Frictionless,
+  a Unicode pattern (dd/MM/yyyy) in CSVW; none or ISO reads RFC 3339.
+
+refused, loudly
+  a dialect without a header row, a delimiter other than comma or tab, an
+  unknown type, an unparsable date format, a column not in the header.
+
+writing one
+  to csv FILE -sidecar writes datapackage.json beside FILE (keeping the
+  package's other resources). generate schema -datapackage -pipeline '…'
+  prints the schema a pipeline would write, reading no data.
+
+Reference: doc/csv-sidecars.md   Design: doc/research/dfc146_csv_schema_sidecars.md
 `
 
 const conventionCodegen = `CODE GENERATION:

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ssql conventions -category sidecar`**, and [CSV Schema Sidecars](doc/csv-sidecars.md), a reference for the file that types a CSV: the smallest `datapackage.json` and CSVW file that work, where ssql looks and what overrides it, the type map, the `ssqlType` key ssql adds for decimals, int128 and inet, date formats, what is refused, and writing one.
+
+### Fixed
+
+- **Help at the cursor headed a nested command by its last word**: Alt-h, and hover in `ssql lsp`, on `ssql from csv …` showed "ssql csv - Read CSV…" where `-help` says "ssql from csv". Fixed in autocli v4.23.1 (`HelpAt` now shares `-help`'s heading).
+- **The API reference said a sidecar's non-ISO date format is refused**; it has been honoured as the column's cell pattern since DFC147.
+
 ## [4.145.0] - 2026-11-10
 
 ### Added

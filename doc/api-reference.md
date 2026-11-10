@@ -1574,8 +1574,14 @@ sidecar (DFC146): W3C CSV on the Web metadata (`X.csv-metadata.json`, or
 `TypeOverrides` turns the result into `CSVConfig.TypeOverrides` (via
 `ParseFieldType`), so the reader takes the sidecar's types instead of
 sampling. Types map: integer → int, number/decimal/double → float,
-boolean → bool, date/datetime/time → time (ISO forms; any other `format`
-is refused), object/array/json → json, string → string, any → infer. A
+boolean → bool, date/datetime/time → time (an ISO `format` or none reads
+RFC 3339; any other is the column's cell pattern, strftime in
+Frictionless and a Unicode pattern in CSVW, carried by `TimeFormats`;
+one ssql cannot parse is refused), object/array/json → json, string →
+string, any → infer. An `ssqlType` key beside the standard type
+(`decimal:S`, `int128`, `inet`) wins over it; the writer adds one for
+those types. The file format is described in
+[CSV Schema Sidecars](csv-sidecars.md). A
 `dialect` without a header row, or with a delimiter the reader is not
 using, is refused with the remedy. `WriteCSVSidecar` writes the CSV and
 a package describing it, typing columns from the values written (or

@@ -23,6 +23,7 @@ Do these in order; each assumes the one before it.
 - [API Reference](api-reference.md) — the `Record` Go library
 - [Typed Reference](typed-reference.md) — the `ssql/typed` struct API
 - [Expression Language](EXPRESSIONS.md) — expression syntax for `-if-expr`, `-set-expr` and `group-by -expr`
+- [CSV Schema Sidecars](csv-sidecars.md) — the `datapackage.json` / CSVW file that types a CSV: where ssql looks, the type map, the `ssqlType` extension, writing one
 - [Troubleshooting](cli-troubleshooting.md) — inspecting a pipeline with ssql itself; common errors and what they mean
 
 ## Background

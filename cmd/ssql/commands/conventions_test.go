@@ -12,7 +12,7 @@ import (
 // the headline cross-cutting rules.
 func TestConventionsReference(t *testing.T) {
 	for _, want := range []string{
-		"Evaluation", "Data model", "Pipeline", "Code generation",
+		"Evaluation", "Data model", "Schema sidecars", "Pipeline", "Code generation",
 		"ORIGINAL row", // the update-snapshot rule (the proof-of-need)
 		"_schema",      // the JSONL header convention
 		"SSQL_MODE",    // codegen modes
@@ -21,14 +21,17 @@ func TestConventionsReference(t *testing.T) {
 			t.Errorf("ConventionsReference missing %q", want)
 		}
 	}
+	use := "# " + strings.Join(conventionCategories, " | ")
+	if !strings.Contains(ConventionsReference, use) {
+		t.Errorf("the overview's Use: line does not list %q", use)
+	}
 }
 
 // TestConventionsCategoryDispatch confirms every category the completer offers
 // resolves to non-trivial detail (no silent unknown-category), and that the
 // headline update semantics live in the evaluation category.
 func TestConventionsCategoryDispatch(t *testing.T) {
-	categories := []string{"evaluation", "data", "pipeline", "codegen"}
-	for _, c := range categories {
+	for _, c := range conventionCategories {
 		var buf bytes.Buffer
 		ctx := &cf.Context{}
 		ctx.SetStdout(&buf)
@@ -36,7 +39,7 @@ func TestConventionsCategoryDispatch(t *testing.T) {
 			t.Fatalf("printConventionCategory(%q): %v", c, err)
 		}
 		out := buf.String()
-		if strings.Contains(out, "Unknown category") || len(strings.TrimSpace(out)) < 40 {
+		if strings.Contains(out, "Unknown category") || len(strings.TrimSpace(out)) < 200 {
 			t.Errorf("category %q produced no real detail:\n%s", c, out)
 		}
 	}

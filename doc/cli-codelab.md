@@ -748,8 +748,10 @@ The same discovery honours a W3C CSV on the Web file
 else published: a column it types `string` stays text whatever the
 cells look like, a `date` column arrives as a time. Your own `-type`
 wins over the sidecar, `-no-sidecar` ignores it, and `-sidecar FILE`
-names one that lives elsewhere. To see the schema a pipeline would
-write without writing data:
+names one that lives elsewhere. [CSV Schema Sidecars](csv-sidecars.md)
+is the reference: the smallest file that works, the type map and the
+`ssqlType` key ssql adds for decimals, int128 and inet. To see the
+schema a pipeline would write without writing data:
 
 ```bash
 ssql generate schema -datapackage -pipeline 'ssql from employees.csv | ssql group-by dept -avg salary avg_salary'
