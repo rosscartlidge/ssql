@@ -1,11 +1,15 @@
 package commands
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -47,26 +51,10 @@ func registerGeneratePretty(cmd *cf.SubcommandBuilder) {
 			if err != nil {
 				return fmt.Errorf("reading fragments: %w", err)
 			}
-			// As written: the zone a source pinned for itself and the
-			// argv a command rewrote for itself come off (as the explore
-			// preview does), so what is printed is what was typed.
-			for _, frag := range fragments {
-				dropResolvedZone(frag)
-				restoreAsWritten(frag)
-			}
-			raw, err := pipelineDocFromFragments(fragments)
+			text, over, err := prettyFromFragments(ctx.Command, fragments, width)
 			if err != nil {
 				return err
 			}
-			data, err := json.Marshal(raw)
-			if err != nil {
-				return err
-			}
-			stages, err := parsePipelineDoc(data)
-			if err != nil {
-				return err
-			}
-			text, over := prettyPipeline(ctx.Command, stages, width)
 			for _, o := range over {
 				fmt.Fprintf(os.Stderr, "ssql generate pretty: line %d is %d columns: %s is longer than a line and cannot be split without changing it\n", o.line, o.cols, o.word)
 			}
@@ -74,6 +62,85 @@ func registerGeneratePretty(cmd *cf.SubcommandBuilder) {
 			return nil
 		}).
 		Done()
+}
+
+// prettyFromFragments lays out the pipeline the fragments describe, as
+// written: the zone a source pinned for itself and the argv a command
+// rewrote for itself come off (as the explore preview does), so what is
+// printed is what was typed.
+func prettyFromFragments(root *cf.Command, fragments []*lib.CodeFragment, width int) (string, []prettyOverflow, error) {
+	for _, frag := range fragments {
+		dropResolvedZone(frag)
+		restoreAsWritten(frag)
+	}
+	raw, err := pipelineDocFromFragments(fragments)
+	if err != nil {
+		return "", nil, err
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	stages, err := parsePipelineDoc(data)
+	if err != nil {
+		return "", nil, err
+	}
+	text, over := prettyPipeline(root, stages, width)
+	return text, over, nil
+}
+
+// PrettyLineWidth is the width the editor binding and the language
+// server lay a pipeline out at (Ross, 2026-11-10: a fixed 80, since the
+// file outlives the terminal it was typed in).
+const PrettyLineWidth = 80
+
+// prettyLineTimeout bounds describing a pipeline for PrettyLine: the
+// editor key waits for it, and so does the terminal.
+const prettyLineTimeout = 10 * time.Second
+
+// PrettyLine is a shell line with its ssql pipeline laid out, for the
+// editor binding (-pretty-line) and the language server's formatting.
+// Text before the pipeline (`cat x |`) stays on a line of its own, and
+// text after it (`| less`, `> out.txt`) follows the last stage. The
+// pipeline is described in fragment mode, which runs it under bash, so
+// it is laid out only when pipelineSafeToDescribe allows: a `$(…)` on
+// the line never runs because a key was pressed. The error says why the
+// line is left as it is.
+func PrettyLine(line string, root *cf.Command, width int) (string, error) {
+	prefix, segment, suffix, err := SplitPipeline(line)
+	if err != nil {
+		return "", err
+	}
+	if !pipelineSafeToDescribe(segment) {
+		return "", fmt.Errorf("a pipeline is laid out only when it is ssql commands alone, with no command substitution, redirection or second command")
+	}
+	var stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), prettyLineTimeout)
+	defer cancel()
+	out, err := describePipeline(ctx, segment, "record", "pretty", &stderr)
+	if err != nil {
+		// The refusing stage's own message, not the shell's exit status.
+		if msg := firstStderrLine(stderr.Bytes(), err); msg != "" {
+			return "", errors.New(msg)
+		}
+		return "", err
+	}
+	fragments, err := lib.ReadCodeFragmentsFromReader(bytes.NewReader(out))
+	if err != nil {
+		return "", fmt.Errorf("reading fragments: %w", err)
+	}
+	text, _, err := prettyFromFragments(root, fragments, width)
+	if err != nil {
+		return "", err
+	}
+	text = strings.TrimSuffix(text, "\n")
+	if prefix != "" {
+		text = prefix + "\n" + text
+	}
+	if suffix != "" {
+		text += " " + suffix
+	}
+	return text, nil
 }
 
 // prettyOverflow is a line that runs past the width, and the word that

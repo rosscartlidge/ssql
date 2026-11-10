@@ -20,9 +20,34 @@ func TestUpstreamSafeToRun(t *testing.T) {
 		"ssql from csv a.csv; rm x":                                                    false,
 		"ssql from csv a.csv | ssql where -if x eq 'open":                              false,
 		"ssql generate go -run -pipeline 'x'":                                          false,
+		// bash substitutes inside double quotes, and `\'` opens no quote.
+		`ssql from csv a.csv | ssql where -if x eq "$(rm x)"`:     false,
+		"ssql from csv a.csv | ssql where -if x eq \"`rm x`\"":    false,
+		`ssql from csv a.csv | ssql where -if x eq \' $(rm x) \'`: false,
+		`ssql from csv a.csv | ssql where -if x eq "a\"b"`:        true,
+		`ssql from csv a.csv | ssql where -if x eq 'a$(b)'`:       true,
+		`ssql from csv a.csv | ssql where -if x eq a\|b`:          true,
 	} {
 		if got := upstreamSafeToRun(src); got != want {
 			t.Errorf("upstreamSafeToRun(%q) = %v, want %v", src, got, want)
+		}
+	}
+}
+
+// TestPipelineSafeToDescribe: fragment mode writes no sink, so a sink
+// naming a file may be described; the shell rules are the same.
+func TestPipelineSafeToDescribe(t *testing.T) {
+	for src, want := range map[string]bool{
+		"ssql from csv a.csv | ssql to csv out.csv":                          true,
+		"ssql from csv a.csv | ssql tee t.jsonl | ssql to parquet o.parquet": true,
+		"ssql from csv a.csv | ssql generate go":                             false,
+		"ssql serve":                                                         false,
+		`ssql from csv a.csv | ssql where -if x eq "$(rm x)"`:                false,
+		"ssql from csv a.csv | ssql to csv out.csv > x":                      false,
+		"ssql from csv a.csv | less":                                         false,
+	} {
+		if got := pipelineSafeToDescribe(src); got != want {
+			t.Errorf("pipelineSafeToDescribe(%q) = %v, want %v", src, got, want)
 		}
 	}
 }

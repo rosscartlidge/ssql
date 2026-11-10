@@ -19,6 +19,17 @@ import (
 // <(...) / (...) are left intact. Always returns at least one segment.
 func splitTopLevelPipes(s string) []string {
 	var segs []string
+	for _, sp := range topLevelStageSpans(s) {
+		segs = append(segs, s[sp[0]:sp[1]])
+	}
+	return segs
+}
+
+// topLevelStageSpans is splitTopLevelPipes as byte ranges of s, for a
+// caller that needs to know where each stage is (the language server's
+// diagnostics).
+func topLevelStageSpans(s string) [][2]int {
+	var segs [][2]int
 	depth, start := 0, 0
 	var quote byte
 	for i := 0; i < len(s); i++ {
@@ -43,11 +54,11 @@ func splitTopLevelPipes(s string) []string {
 				i++
 				continue
 			}
-			segs = append(segs, s[start:i])
+			segs = append(segs, [2]int{start, i})
 			start = i + 1
 		}
 	}
-	return append(segs, s[start:])
+	return append(segs, [2]int{start, len(s)})
 }
 
 // SplitPipeline divides a shell line into the part before the ssql

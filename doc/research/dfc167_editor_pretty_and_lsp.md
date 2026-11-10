@@ -91,21 +91,17 @@ is left alone. The key then behaves exactly as bash's own.
 `v` and Ctrl-X Ctrl-E keep their meaning. The binding changes only what the editor opens
 with. An opt-out is the same as for every binding: don't source it.
 
-### 2.2 Open: what history records
+### 2.2 Settled: what history records
 
 Bash adds the line to history before `fc` opens it, and after this binding that line has
-newlines in it. With `cmdhist` on (the default) and `lithist` off, bash stores a multi-line
-command on one line, rewriting each newline. The question is whether it keeps the
-`\`-newline, which is safe, or drops it, which joins two words. Pressing Up afterwards must
-give a pipeline that runs.
+newlines in it. The question was whether history keeps the `\`-newline (safe) or drops
+the newline and keeps the backslash (which would join two words).
 
-This gets checked in a pty first. If history mangles the text, the fallback is to run the
-editor from the `bind -x` function itself:
-1. write the pretty text to a temp file named `*.ssql.sh`;
-2. run `$VISUAL` on it, as fzf's bindings run their own program;
-3. put the result in `READLINE_LINE` for Enter to run.
-
-The cost of the fallback is one Enter after `:wq`.
+**Checked in a pty, 2026-11-10, bash 5.2.21:** with `cmdhist` on and `lithist` off,
+history stores the pipeline joined onto one line with the backslash-newline gone
+(`echo one   two |   tr a-z A-Z`), and Up then Enter runs it to the same output. The macro
+is the binding; the fallback (running the editor from the `bind -x` function) was not
+needed. `TestEditKeybindingPTY` keeps the answer.
 
 ### 2.3 Tests
 
@@ -249,8 +245,9 @@ The same server works on a saved pipeline script.
 | Neovim end to end | `nvim --headless` with a minimal `init.lua` using `vim.lsp.enable`, `vim.lsp.buf_request_sync` for completion, and `vim.lsp.buf.format`; skipped when `nvim` is absent | the server attached to the wrong filetype |
 | the binding | the pty test in §2.3 | §2.3 |
 
-**Neovim is not installed on the development machine** (vim 9.1 is). The end-to-end gate
-needs it, from apt or a release tarball under `~/.local`.
+**Neovim:** the development machine has 0.12.6 from the release tarball, in
+`~/.local/nvim-linux-x86_64` (Ubuntu 24.04's apt has 0.9.5, older than the 0.11 the
+configuration needs). The end-to-end test skips without `nvim`.
 
 ## 5. Order of work
 
@@ -270,19 +267,78 @@ needs it, from apt or a release tarball under `~/.local`.
 
 - **Decided (Ross, 2026-11-10): Neovim's built-in LSP client** is the target. No vim-only
   omnifunc: LSP reaches Neovim, VS Code, helix and emacs with the same server.
-- **Open, for Ross:**
-  - **Taking over `v`.** Do `v` and Ctrl-X Ctrl-E take over bash's own keys (the
-    recommendation, since the fall-back is bash's own behaviour), or does the binding get its
-    own key and leave `v` alone?
-  - **The layout width.** The pretty width at the prompt could be `$COLUMNS` instead of 80.
-    The recommendation is 80, as asked: the file outlives the terminal.
-  - **Diagnostics.** Do they run a pipeline's fragment mode on every pause? It reads source
-    headers only, but over `ssh` sources it reaches the remote host. The recommendation:
-    diagnostics skip a pipeline whose sources are remote, saying so in a hint.
+- **Decided (Ross, 2026-11-10, in plan mode, each as recommended):**
+  - **The editor key** takes over `v` and Ctrl-X Ctrl-E; a line that is not an ssql
+    pipeline opens unchanged.
+  - **The width** is a fixed 80; Neovim's `textwidth`, sent as `initializationOptions`,
+    overrides it for formatting.
+  - **Remote sources:** nothing that reaches another host runs while you type; the stage
+    gets a hint instead.
+  - **The order:** the binding, then the position map and the server.
 - **Later:**
   - word-level diagnostic ranges (a structured parse error from autocli);
   - `textDocument/signatureHelp` for a flag's arguments;
   - `codeAction` for "optimise this pipeline" (Ctrl-T) and "show the Go" (Alt-g).
+
+## 6a. Built (2026-11-10)
+
+Both parts, with these departures from §2–§3:
+
+- **The rewrite is a protocol flag, `-pretty-line LINE`** (`PrettyLine`,
+  `generate_pretty.go`), not shell in the binding. Laying a pipeline out runs it in fragment
+  mode under bash, so a `$(…)` on the line would run when `v` is pressed, which bash's own key
+  never does. `PrettyLine` lays out only what `pipelineSafeToDescribe` (`value_source.go`)
+  accepts: ssql commands alone, no substitution, redirection or second command. A sink
+  naming a file is fine, since fragment mode writes nothing (`to csv`, `tee`, `to parquet`
+  and `to xlsx` each checked to leave no file). The language server's formatting calls the
+  same function.
+- **That guard found a hole in Ctrl-O's.** `upstreamSafeToRun` skipped everything inside
+  quotes, but bash runs `$(…)` and backticks inside double quotes, and an unquoted `\'`
+  opened a "quote" bash never sees. Both are fixed in the shared `shellCommandTexts`, with
+  test rows watched to fail.
+- **Diagnostics run no shell.** §3.4 proposed `generate json -pipeline`, which runs the text
+  under bash and reports the first error without saying which stage raised it. Instead
+  `docStagesFromText` (`lsp_text.go`) turns the text into a pipeline document: stages from
+  `splitTopLevelPipes`, words from `tokenizeStage`, values from `shellWordValue`, whose
+  oracle is bash's own `printf`. A word whose value depends on the shell (`$x`, a glob, a
+  backtick) leaves the pipeline unchecked. The document is then checked the way
+  `ssql run -check` checks one:
+  - autocli's `Check` on each stage's argv (`checkPipelineDoc`), which runs nothing;
+  - `checkPipelineFields`, which runs the source under `SSQL_MODE=schema` and each later
+    command on that header alone, with no rows.
+
+  Every error names its stage, so the mark lands on the stage that refuses. A pipeline fed
+  from stdin (a `cat x |` before it, or `-`) gets the syntax check only, since there is no
+  schema to check its fields against.
+- **What reaches another host is a table the commands package owns** (`remoteReach`,
+  `remote_reach.go`): `from ssh`, `from catalog`, `merge -catalog`, and any argument that
+  is a URL. `TestRemoteReachCoversSSHCallers` fails on a file that builds a remote command or
+  runs ssh without a row; it found `from.go`'s local pushdown on its first run, which is
+  listed with its reason.
+- **What fragment mode reaches, traced:** `from ssh` in fragment mode runs no ssh and opens no
+  connection; a URL source fetches its header. Formatting and the editor key, which the
+  user asks for, describe both; diagnostics and completion, which happen while typing,
+  describe neither.
+- **The oracle for the map** is the server itself: `TestLSPMatchesOneLine` asks for
+  completion at the end and hover at the start of every word of `TestGeneratePretty`'s
+  pipelines, laid out at widths 40 and 80, and requires the same answers as at the same
+  word of the one-liner. With the newline-after-`|` rule removed it failed 36 times.
+- **`ssql` where a stage starts.** Ross pressed Ctrl-X Ctrl-O at the end of a line ending in
+  ` |` and got "Pattern not found", which was accurate, since the next stage had not begun.
+  Completion now offers `ssql` there (with the blank it needs), after a `<(`, and on a word
+  `ssql` begins with.
+- **Tests:**
+  - `TestEditKeybindingPTY`, in emacs and vi;
+  - `TestLogicalCommands` and `TestShellWordValue`, with bash as the oracle;
+  - `TestLSP`, over pipes;
+  - `TestLSPInNeovim`, with Neovim 0.12.6 headless, on a `bash-fc-…` file.
+
+  Each was watched to fail:
+  - the rewrite dropped from the macro;
+  - the safety check removed, after which the `$(…)` ran and the editor got `name eq Ann`;
+  - the map broken;
+  - the upstream taken one stage early;
+  - the configuration's filetype changed.
 
 ## 7. References
 

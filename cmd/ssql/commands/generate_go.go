@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"regexp"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -648,6 +649,14 @@ func runScriptForFragments(scriptPath, mode string) ([]byte, error) {
 // # comments and leading-| continuations work in both forms. label
 // names the flag in error messages.
 func runPipelineForFragments(src, mode, label string) ([]byte, error) {
+	return describePipeline(context.Background(), src, mode, label, os.Stderr)
+}
+
+// describePipeline is runPipelineForFragments with the stages' stderr
+// sent to stderr and the run bounded by ctx: the editor binding and the
+// language server read a refusal's own message from it rather than
+// letting it reach the terminal.
+func describePipeline(ctx context.Context, src, mode, label string, stderr io.Writer) ([]byte, error) {
 	pipeline := preprocessScript(src)
 	if pipeline == "" {
 		return nil, fmt.Errorf("ssql generate %s: contains no pipeline", label)
@@ -673,9 +682,9 @@ func runPipelineForFragments(src, mode, label string) ([]byte, error) {
 	// assembler then generates code referencing an undeclared
 	// `records` variable. With pipefail, any stage's non-zero exit
 	// fails the whole pipeline.
-	cmd := exec.Command("bash", "-c", "set -o pipefail; "+pipeline)
+	cmd := exec.CommandContext(ctx, "bash", "-c", "set -o pipefail; "+pipeline)
 	cmd.Env = setEnvVar(os.Environ(), "SSQL_MODE", mode)
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = stderr
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("ssql generate %s: pipeline failed (mode=%s): %w", label, mode, err)

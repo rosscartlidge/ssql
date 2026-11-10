@@ -10,6 +10,26 @@ import (
 	"testing"
 )
 
+// prettyCases are the pipelines generate pretty is tested on, and the
+// language server's position map with them (TestLSPMatchesOneLine): a
+// join's clauses, a process substitution, a union, long expressions.
+var prettyCases = []struct {
+	name, pipeline string
+	stages         int // top-level stages
+}{
+	{"short", "ssql from csv emp.csv | ssql to csv", 2},
+	{"join clauses", "ssql from csv emp.csv | ssql join dept.csv -on dept dept -as floor floor_a - -on dept dept -as floor floor_b | ssql include id name dept salary floor_a floor_b | ssql where -if salary gt 50 -if floor_a ge 1 | ssql to csv", 5},
+	{"process substitution", `ssql from csv emp.csv | ssql join <(ssql from csv dept.csv | ssql where -if floor gt 0 | ssql update -set-expr label 'dept + "-" + string(floor)') -using dept | ssql update -set-expr bonus 'salary * 0.1 + (salary > 100 ? 5 : 0)' -set-expr band 'salary >= 110 ? "high" : (salary >= 95 ? "mid" : "low")' | ssql sort -desc salary | ssql to csv`, 5},
+	{"union", "ssql from csv emp.csv | ssql union -file <(ssql from csv emp.csv | ssql where -if dept eq ops | ssql update -set name renamed_for_the_union_branch) | ssql sort id name | ssql to csv", 4},
+	{"long expression", `ssql from csv emp.csv | ssql where -if-expr 'salary > 95 && dept == "eng" && name != "zed" && id > 0 && id < 1000' | ssql to csv`, 3},
+}
+
+// prettyFixtures are the files prettyCases read.
+var prettyFixtures = map[string]string{
+	"emp.csv":  "id,name,dept,salary\n1,ann,eng,100\n2,bob,ops,90\n3,cy,eng,120\n",
+	"dept.csv": "dept,floor\neng,3\nops,1\n",
+}
+
 // TestGeneratePretty: `generate pretty` writes the pipeline as written,
 // one stage to a line, within -width columns, as a bash pipeline. The
 // oracle that it changes nothing is the pipeline document: the pretty
@@ -20,10 +40,7 @@ import (
 func TestGeneratePretty(t *testing.T) {
 	bin := corpusBin(t)
 	dir := t.TempDir()
-	for name, body := range map[string]string{
-		"emp.csv":  "id,name,dept,salary\n1,ann,eng,100\n2,bob,ops,90\n3,cy,eng,120\n",
-		"dept.csv": "dept,floor\neng,3\nops,1\n",
-	} {
+	for name, body := range prettyFixtures {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -51,16 +68,7 @@ func TestGeneratePretty(t *testing.T) {
 		return string(out)
 	}
 
-	cases := []struct {
-		name, pipeline string
-		stages         int // top-level stages
-	}{
-		{"short", "ssql from csv emp.csv | ssql to csv", 2},
-		{"join clauses", "ssql from csv emp.csv | ssql join dept.csv -on dept dept -as floor floor_a - -on dept dept -as floor floor_b | ssql include id name dept salary floor_a floor_b | ssql where -if salary gt 50 -if floor_a ge 1 | ssql to csv", 5},
-		{"process substitution", `ssql from csv emp.csv | ssql join <(ssql from csv dept.csv | ssql where -if floor gt 0 | ssql update -set-expr label 'dept + "-" + string(floor)') -using dept | ssql update -set-expr bonus 'salary * 0.1 + (salary > 100 ? 5 : 0)' -set-expr band 'salary >= 110 ? "high" : (salary >= 95 ? "mid" : "low")' | ssql sort -desc salary | ssql to csv`, 5},
-		{"union", "ssql from csv emp.csv | ssql union -file <(ssql from csv emp.csv | ssql where -if dept eq ops | ssql update -set name renamed_for_the_union_branch) | ssql sort id name | ssql to csv", 4},
-		{"long expression", `ssql from csv emp.csv | ssql where -if-expr 'salary > 95 && dept == "eng" && name != "zed" && id > 0 && id < 1000' | ssql to csv`, 3},
-	}
+	cases := prettyCases
 	warned := regexp.MustCompile(`line (\d+) is (\d+) columns`)
 	for _, c := range cases {
 		wantDoc, _ := run(t, "generate", "json", "-compact", "-pipeline", c.pipeline)
@@ -137,6 +145,37 @@ func TestGeneratePretty(t *testing.T) {
 		want := "ssql from csv emp.csv |\n  ssql join dept.csv -using dept |\n  ssql to csv\n"
 		if out != want {
 			t.Errorf("got\n%s\nwant\n%s", out, want)
+		}
+	})
+	t.Run("pretty-line", func(t *testing.T) {
+		// The editor binding's rewrite: the text around the pipeline stays,
+		// and the result runs under bash to the one-liner's output.
+		line := "cat emp.csv | ssql from csv - | ssql where -if salary gt 95 | ssql include name salary | ssql to csv | head -2"
+		out, _ := run(t, "-pretty-line", line)
+		want := "cat emp.csv |\nssql from csv - |\n  ssql where -if salary gt 95 |\n  ssql include name salary |\n  ssql to csv | head -2\n"
+		if out != want {
+			t.Errorf("got\n%s\nwant\n%s", out, want)
+		}
+		if got, wantOut := bash(t, out), bash(t, line); got != wantOut {
+			t.Errorf("bash output differs\n got %q\nwant %q", got, wantOut)
+		}
+		// Left as it is, with the reason: not ssql, half typed, or a line
+		// whose description would run a command substitution.
+		marker := filepath.Join(dir, "substituted")
+		for _, l := range []string{
+			"ls -l",
+			"ssql from csv emp.csv | ssql where -if salary",
+			`ssql from csv emp.csv | ssql where -if name eq "$(touch ` + marker + `)" | ssql to csv`,
+			"ssql from csv emp.csv | ssql to csv; rm emp.csv",
+		} {
+			cmd := exec.Command(bin, "-pretty-line", l)
+			cmd.Dir = dir
+			if b, err := cmd.CombinedOutput(); err == nil {
+				t.Errorf("-pretty-line %q succeeded:\n%s", l, b)
+			}
+		}
+		if _, err := os.Stat(marker); err == nil {
+			t.Error("-pretty-line ran a command substitution")
 		}
 	})
 	t.Run("narrow width refused", func(t *testing.T) {

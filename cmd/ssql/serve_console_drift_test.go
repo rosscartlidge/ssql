@@ -29,6 +29,7 @@ var consoleExcluded = map[string]string{
 	"To":          "console registers its own stream-only subset of `to` (no file-writing sinks)",
 	"Generate":    "codegen is a CLI/dev workflow, not an operator action",
 	"Serve":       "cannot serve from inside a session",
+	"Lsp":         "a language server for an editor, speaking JSON-RPC on its own stdio",
 	"Version":     "meta — not a pipeline stage",
 	"Functions":   "meta — expression function reference (could be added)",
 	"Macro":       "`macro check FILE` reads server-side file paths (as Join); the console's update/where read the server's own macros file (DFC152 §5)",

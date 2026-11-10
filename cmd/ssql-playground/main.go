@@ -260,6 +260,7 @@ func buildCommand() *cf.Command {
 	cmd = commands.RegisterTo(cmd)
 	cmd = commands.RegisterGenerate(cmd)
 	cmd = commands.RegisterServe(cmd)
+	cmd = commands.RegisterLsp(cmd)
 	cmd = commands.RegisterRun(cmd)
 
 	return cmd.Handler(func(ctx *cf.Context) error {

@@ -96,8 +96,55 @@ func hasRecord(path string) bool {
 // or chains a second command. Anything else is sampled from its source
 // file instead.
 func upstreamSafeToRun(src string) bool {
-	// cmds are the command texts; text after a `)` continues the command
-	// the <(…) sat in (`join <(…) -using k`), so it is not one.
+	return ssqlCommandsOnly(src, writingSubcommands)
+}
+
+// pipelineSafeToDescribe reports whether src may be run in fragment mode
+// (SSQL_MODE=record) without the user asking, as the editor binding and
+// the language server do: the shell text is upstreamSafeToRun's, but a
+// sink may name a file, since in fragment mode a command describes
+// itself and writes nothing (`to csv out.csv`, `tee x` and `to parquet`
+// each leave no file, checked 2026-11-10). generate and serve still may
+// not run.
+func pipelineSafeToDescribe(src string) bool {
+	return ssqlCommandsOnly(src, map[string]bool{"serve": true, "generate": true})
+}
+
+// ssqlCommandsOnly reports whether every command in src — each top-level
+// stage and each stage inside a <(…) — is ssql (or ssql_gpu) running a
+// subcommand not in refused, and nothing redirects output, substitutes a
+// command or chains a second command. bash still substitutes `$(…)` and
+// backticks inside double quotes, and a backslash outside single quotes
+// makes the next character literal (`\'` opens no quote).
+func ssqlCommandsOnly(src string, refused map[string]bool) bool {
+	cmds, ok := shellCommandTexts(src)
+	if !ok {
+		return false
+	}
+	n := 0
+	for _, c := range cmds {
+		c = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(c), "<"))
+		if c == "" {
+			continue
+		}
+		words := tokenizeStage(c)
+		if len(words) < 2 || (words[0] != "ssql" && words[0] != "ssql_gpu") {
+			return false
+		}
+		if refused[words[1]] {
+			return false
+		}
+		n++
+	}
+	return n > 0
+}
+
+// shellCommandTexts splits src into its command texts, false when src
+// holds anything that runs more than a pipeline of simple commands: a
+// redirection, `;` or `&`, a command substitution (also inside double
+// quotes), or an unclosed quote. Text after a `)` continues the command
+// the <(…) sat in (`join <(…) -using k`), so it is not one.
+func shellCommandTexts(src string) ([]string, bool) {
 	var cmds []string
 	var cur strings.Builder
 	var quote byte
@@ -109,11 +156,31 @@ func upstreamSafeToRun(src string) bool {
 		cur.Reset()
 		continuation = closing
 	}
+	substitutes := func(i int) bool {
+		return src[i] == '`' || (src[i] == '$' && i+1 < len(src) && src[i+1] == '(')
+	}
 	for i := 0; i < len(src); i++ {
 		c := src[i]
 		switch {
-		case quote != 0:
-			if c == quote {
+		case quote == '\'':
+			if c == '\'' {
+				quote = 0
+			}
+			cur.WriteByte(c)
+			continue
+		case c == '\\':
+			// Outside single quotes a backslash makes the next byte literal.
+			cur.WriteByte(c)
+			if i+1 < len(src) {
+				i++
+				cur.WriteByte(src[i])
+			}
+			continue
+		case quote == '"':
+			if substitutes(i) {
+				return nil, false
+			}
+			if c == '"' {
 				quote = 0
 			}
 			cur.WriteByte(c)
@@ -122,8 +189,8 @@ func upstreamSafeToRun(src string) bool {
 			quote = c
 			cur.WriteByte(c)
 			continue
-		case c == '>' || c == ';' || c == '&' || c == '`' || (c == '$' && i+1 < len(src) && src[i+1] == '('):
-			return false
+		case c == '>' || c == ';' || c == '&' || substitutes(i):
+			return nil, false
 		case c == '|' || c == '(' || c == ')':
 			cut(c == ')')
 			continue
@@ -131,25 +198,10 @@ func upstreamSafeToRun(src string) bool {
 		cur.WriteByte(c)
 	}
 	if quote != 0 {
-		return false
+		return nil, false
 	}
 	cut(false)
-	n := 0
-	for _, c := range cmds {
-		c = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(c), "<"))
-		if c == "" {
-			continue
-		}
-		words := tokenizeStage(c)
-		if len(words) < 2 || (words[0] != "ssql" && words[0] != "ssql_gpu") {
-			return false
-		}
-		if writingSubcommands[words[1]] {
-			return false
-		}
-		n++
-	}
-	return n > 0
+	return cmds, true
 }
 
 // writingSubcommands are the ssql subcommands that write somewhere other

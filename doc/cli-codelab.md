@@ -171,6 +171,12 @@ keys are not bound at all, because Esc leaves insert mode there: use
 Ctrl-X h, and Ctrl-X and the letter for the other Alt keys below. Alt-H
 (Ctrl-X H) lists every key ssql binds.
 
+A pipeline grows long. Bash's editor key, Ctrl-X Ctrl-E (`v` in vi
+command mode), opens the line in your editor, and with ssql's bindings
+the pipeline arrives laid out one stage to a line; save and quit, and
+bash runs it. Neovim users can have completion and help in there too:
+see [Editing a pipeline in your editor](cli-shell.md#editing-a-pipeline-in-your-editor).
+
 From here on, whenever a flag or field name is mentioned, remember you
 never have to type it from memory.
 

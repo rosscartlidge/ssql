@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bash's editor key opens the pipeline laid out** (`ssql -edit-keybinding`, part of `-shell-init`): Ctrl-X Ctrl-E, or `v` in vi command mode, opens the line in `$VISUAL` with its ssql pipeline one stage to a line within 80 columns, and bash runs it when you save and quit, as before. Text around the pipeline stays where it was; a line that is not ssql, is half typed, or holds a `$(…)` opens unchanged. ([DFC167](doc/research/dfc167_editor_pretty_and_lsp.md))
+- **`ssql lsp`, a language server for the ssql pipelines in shell files**: completion of `ssql` where a stage starts, of commands, flags, and the fields and values flowing in from upstream (and of fields and functions inside an expression), hover with a flag's or command's help, a mark on a stage that would be refused with the stage's own message, and formatting with `generate pretty`. `ssql lsp -nvim-config` prints the Neovim (0.11+) configuration. It runs nothing that holds a `$(…)`, a redirection or a command other than ssql, and nothing that reaches another host while you type. ([DFC167](doc/research/dfc167_editor_pretty_and_lsp.md))
+
+### Fixed
+
+- **Ctrl-O's value completion could run a command substitution inside double quotes**: the guard deciding whether the upstream may run skipped everything quoted, but bash still runs `$(…)` and backticks in `"…"`, and an unquoted `\'` opened a "quote" bash never saw. Both now keep the upstream from running.
+
 ## [4.144.0] - 2026-11-10
 
 ### Added

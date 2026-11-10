@@ -21,6 +21,8 @@ import (
 //	-help-at-cursor BEFORE    → the same for the word under the cursor, BEFORE
 //	                            being the line up to it (stage + words found here)
 //	-split-pipeline LINE      → prefix / ssql pipeline / suffix, one per line
+//	-pretty-line LINE         → LINE with its ssql pipeline laid out (the
+//	                            editor binding, v / Ctrl-X Ctrl-E)
 //
 // args is os.Args[1:]; root builds the command tree (called lazily — only
 // -help-at needs it). Returns handled=false when args don't start with a
@@ -47,6 +49,14 @@ func HandleCursorProtocol(args []string, root func() *cf.Command) (stdout, stder
 			return "", fmt.Sprintf("ssql: %v\n", err), 1, true
 		}
 		return prefix + "\n" + segment + "\n" + suffix + "\n", "", 0, true
+	case "-pretty-line":
+		// The line with its ssql pipeline laid out (PrettyLine), for the
+		// editor binding; exit 1 and the reason when it stays as it is.
+		text, err := PrettyLine(args[1], root(), PrettyLineWidth)
+		if err != nil {
+			return "", fmt.Sprintf("ssql: %v\n", err), 1, true
+		}
+		return text + "\n", "", 0, true
 	case "-help-at":
 		pos, err := strconv.Atoi(args[1])
 		if err != nil {

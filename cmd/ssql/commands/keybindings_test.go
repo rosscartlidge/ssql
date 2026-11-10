@@ -15,7 +15,7 @@ var bindLineRe = regexp.MustCompile(`bind -m ([\w-]+) -x '"([^"]+)": (\w+)'`)
 
 // emittedScripts is every key-binding script ssql emits.
 func emittedScripts() []string {
-	return []string{FieldKeybindingScript, OptimiseKeybindingScript, CodeKeybindingScript, RunKeybindingScript, HelpKeybindingScript}
+	return []string{FieldKeybindingScript, OptimiseKeybindingScript, CodeKeybindingScript, RunKeybindingScript, HelpKeybindingScript, EditKeybindingScript}
 }
 
 // TestKeyBindingsInSync is the anti-drift guard over the scripts as
@@ -36,6 +36,13 @@ func TestKeyBindingsInSync(t *testing.T) {
 	}
 	want := map[[3]string]bool{}
 	for _, kb := range KeyBindings {
+		if kb.Edit {
+			// The rewrite is bound on the hidden sequence in emacs and
+			// vi-command only; TestEditKeyIsAMacro checks the macro.
+			want[[3]string{"emacs", editRewriteSeq, kb.Fn}] = true
+			want[[3]string{"vi-command", editRewriteSeq, kb.Fn}] = true
+			continue
+		}
 		vi := kb.Seq
 		want[[3]string{"emacs", kb.Seq, kb.Fn}] = true
 		if kb.ViSeq != "" {
@@ -79,5 +86,35 @@ func TestKeyBindingsHelpListsAll(t *testing.T) {
 func TestHelpKeybindingEmbedsCheatSheet(t *testing.T) {
 	if !strings.Contains(HelpKeybindingScript, KeyBindingsHelp()) {
 		t.Error("HelpKeybindingScript does not embed KeyBindingsHelp() — generation is broken")
+	}
+}
+
+// TestEditKeyIsAMacro: an Edit row's key is bound, in emacs and in vi
+// command mode only, to the macro of its rewrite and bash's own editor
+// command — a bind -x alone would rewrite the line and never open the
+// editor, and v bound in vi-insert would stop the letter v being typed.
+func TestEditKeyIsAMacro(t *testing.T) {
+	n := 0
+	for _, kb := range KeyBindings {
+		if !kb.Edit {
+			continue
+		}
+		n++
+		for _, want := range []string{
+			`bind -m emacs '"` + editOpenSeq + `": edit-and-execute-command'`,
+			`bind -m emacs '"` + kb.Seq + `": "` + editRewriteSeq + editOpenSeq + `"'`,
+			`bind -m vi-command '"` + editOpenSeq + `": vi-edit-and-execute-command'`,
+			`bind -m vi-command '"` + kb.ViSeq + `": "` + editRewriteSeq + editOpenSeq + `"'`,
+		} {
+			if !strings.Contains(EditKeybindingScript, want) {
+				t.Errorf("EditKeybindingScript lacks %s", want)
+			}
+		}
+		if strings.Contains(EditKeybindingScript, "vi-insert") {
+			t.Errorf("an editor key is bound in vi-insert, where %q is text", kb.ViSeq)
+		}
+	}
+	if n == 0 {
+		t.Fatal("no Edit row in KeyBindings")
 	}
 }

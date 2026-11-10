@@ -26,18 +26,33 @@ type KeyBinding struct {
 	Fn      string // bash function bound, e.g. _ssql_show_go
 	Emitter string // flag that emits the binding script, e.g. -code-keybinding
 	Desc    string // one-line description for the cheat-sheet
+	// Edit marks a key that takes over bash's own editor key (Seq in
+	// emacs, ViSeq in vi command mode only, where v is a command): Fn
+	// rewrites the line on the hidden editRewriteSeq, then bash's
+	// edit-and-execute-command runs on editOpenSeq, so bash still opens
+	// $VISUAL and runs the file on exit. A bind -x function cannot call a
+	// readline command, so the key is a macro of the two.
+	Edit bool
 }
+
+// The hidden sequences an Edit row's macro is made of, unbound in a
+// default bash in both emacs and vi-command.
+const (
+	editRewriteSeq = `\C-x\C-p`
+	editOpenSeq    = `\C-x\C-q`
+)
 
 // KeyBindings is the ordered family. Order here is the display order in the
 // Alt-H cheat-sheet. When you add a binding, add it here — the cheat-sheet
 // and the bind lines follow, and the consistency test checks the scripts.
 var KeyBindings = []KeyBinding{
-	{"Ctrl-O", "\\C-o", "", "", "_ssql_complete_field", "-field-keybinding", "complete a field name from the upstream pipeline schema"},
-	{"Ctrl-T", "\\C-t", "", "", "_ssql_optimise_pipeline", "-optimise-keybinding", "optimise the ssql pipeline on the line, in place"},
-	{"Alt-g", "\\eg", "Ctrl-X g", "\\C-xg", "_ssql_show_go", "-code-keybinding", "show the typed Go this pipeline generates (without running)"},
-	{"Alt-r", "\\er", "Ctrl-X r", "\\C-xr", "_ssql_typed_run", "-run-keybinding", "compile the pipeline as typed Go and run it"},
-	{"Alt-h", "\\eh", "Ctrl-X h", "\\C-xh", "_ssql_help_at", "-help-keybinding", "help for the flag / command under the cursor"},
-	{"Alt-H", "\\eH", "Ctrl-X H", "\\C-xH", "_ssql_help_keys", "-help-keybinding", "list these key bindings"},
+	{"Ctrl-O", "\\C-o", "", "", "_ssql_complete_field", "-field-keybinding", "complete a field name from the upstream pipeline schema", false},
+	{"Ctrl-T", "\\C-t", "", "", "_ssql_optimise_pipeline", "-optimise-keybinding", "optimise the ssql pipeline on the line, in place", false},
+	{"Alt-g", "\\eg", "Ctrl-X g", "\\C-xg", "_ssql_show_go", "-code-keybinding", "show the typed Go this pipeline generates (without running)", false},
+	{"Alt-r", "\\er", "Ctrl-X r", "\\C-xr", "_ssql_typed_run", "-run-keybinding", "compile the pipeline as typed Go and run it", false},
+	{"Alt-h", "\\eh", "Ctrl-X h", "\\C-xh", "_ssql_help_at", "-help-keybinding", "help for the flag / command under the cursor", false},
+	{"Alt-H", "\\eH", "Ctrl-X H", "\\C-xH", "_ssql_help_keys", "-help-keybinding", "list these key bindings", false},
+	{Key: "Ctrl-X Ctrl-E", Seq: "\\C-x\\C-e", ViKey: "v in command mode", ViSeq: "v", Fn: "_ssql_pretty_line", Emitter: "-edit-keybinding", Desc: "open the line in your editor, the ssql pipeline laid out one stage to a line", Edit: true},
 }
 
 // Label is the row's keys as the help shows them: "Alt-g / Ctrl-X g".
@@ -56,6 +71,10 @@ func KeyBindLines(fn string) string {
 	var b strings.Builder
 	for _, kb := range KeyBindings {
 		if kb.Fn != fn {
+			continue
+		}
+		if kb.Edit {
+			b.WriteString(editBindLines(kb))
 			continue
 		}
 		vi := kb.Seq
@@ -80,6 +99,22 @@ func KeyBindLines(fn string) string {
 		}
 		fmt.Fprintf(&b, "bind -m vi-insert -x '\"%s\": %s'\n", vi, fn)
 		fmt.Fprintf(&b, "bind -m vi-command -x '\"%s\": %s'\n", vi, fn)
+	}
+	return b.String()
+}
+
+// editBindLines binds an Edit row: in emacs and vi-command, Fn on the
+// hidden rewrite sequence, bash's editor command on the hidden open
+// sequence, and the row's key as the macro of the two.
+func editBindLines(kb KeyBinding) string {
+	var b strings.Builder
+	for _, m := range []struct{ keymap, key, open string }{
+		{"emacs", kb.Seq, "edit-and-execute-command"},
+		{"vi-command", kb.ViSeq, "vi-edit-and-execute-command"},
+	} {
+		fmt.Fprintf(&b, "bind -m %s -x '\"%s\": %s'\n", m.keymap, editRewriteSeq, kb.Fn)
+		fmt.Fprintf(&b, "bind -m %s '\"%s\": %s'\n", m.keymap, editOpenSeq, m.open)
+		fmt.Fprintf(&b, "bind -m %s '\"%s\": \"%s%s\"'\n", m.keymap, m.key, editRewriteSeq, editOpenSeq)
 	}
 	return b.String()
 }
