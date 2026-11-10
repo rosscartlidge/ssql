@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.145.0] - 2026-11-10
+
 ### Added
 
 - **Bash's editor key opens the pipeline laid out** (`ssql -edit-keybinding`, part of `-shell-init`): Ctrl-X Ctrl-E, or `v` in vi command mode, opens the line in `$VISUAL` with its ssql pipeline one stage to a line within 80 columns, and bash runs it when you save and quit, as before. Text around the pipeline stays where it was; a line that is not ssql, is half typed, or holds a `$(…)` opens unchanged. ([DFC167](doc/research/dfc167_editor_pretty_and_lsp.md))
