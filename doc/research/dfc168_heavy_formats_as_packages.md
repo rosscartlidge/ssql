@@ -261,6 +261,79 @@ not assumed (CLAUDE.md: benchmark a change to a hot loop against HEAD
 even when it "cannot" cost anything). The gate is the typed Parquet
 benchmark against a HEAD worktree, plus the scale gate's Parquet cases.
 
+### 4.6 Exec mode: the CLI keeps every format, and pays for it at startup
+
+Exec mode is the `ssql` binary, and §4.4 links every format into it, so
+nothing a user sees changes:
+
+- **Commands call the format packages directly.** The command code for
+  `from parquet`, `to xlsx` and `join x.parquet` lives in
+  `cmd/ssql/commands`, which may import anything. It calls
+  `parquet.ReadFiles` itself and needs no registry.
+- **The registry fills before `main`.** Each format package registers in
+  its `init`, so the root package's own seams (§4.2: a catalog's Parquet
+  entry, for example) find their format in every CLI process.
+- **Each stage is a process of the same binary.** In
+  `ssql from x.parquet | ssql where … | ssql to xlsx out.xlsx`, every stage
+  has every format, as today.
+- **The slim CLI** (playground, WebVM, `to explore -wasm`) leaves §4.4's
+  import file out. Its registry stays empty and `from parquet` refuses
+  loudly, as the stubs do today.
+
+What the split does not change is the cost of initialising the heavy
+packages in every process. Go has no lazy package loading: every
+package's `init` runs before `main`, even for `ssql version`. Measured on
+2026-11-11 (v4.146.0, 100 starts of `ssql version`, and
+`GODEBUG=inittrace=1`):
+
+| Binary | Size | Per process start | Package init |
+|---|---|---|---|
+| full `ssql` | 51 MB | 11.8 ms | 8.1 ms, allocating 4.4 MB |
+| slim `ssql` | 12 MB | 3.7 ms | 1.2 ms |
+
+Where the init time goes, largest first:
+
+- **`arrow/go/v18/arrow/compute`, 2.8 ms.** It registers its kernels.
+  Arrow's own `parquet/pqarrow` imports it, so ssql cannot drop it while it
+  reads Parquet through pqarrow.
+- **excelize, 1.3 ms.**
+- **snappy, arrow flight, gRPC and protobuf**, a few tenths of a
+  millisecond each.
+
+Every exec-mode stage pays about 8 ms of CPU for this. So do every Tab
+completion (`ssql -complete`) and every process Ctrl-O starts to sample
+an upstream. A six-stage pipeline spends ~50 ms of CPU on it, mostly
+concurrent across the stages, so little wall time. It is below what
+anyone notices when typing, but it is paid everywhere.
+
+**The optional handoff.** Exec-mode stages are already processes, which
+makes this the one place where §3.1's fork/exec fits:
+
+- a lean `ssql` that links no heavy format starts in ~4 ms;
+- a stage whose command reads or writes Parquet, Arrow or XLSX re-execs
+  itself in a full binary installed beside it from the same release
+  (found next to `os.Executable()`, never on `PATH`, which keeps it
+  version-matched and out of reach of PATH hijacking);
+- the command owns the decision (DFC115). The handoff happens inside the
+  command once its arguments are parsed, so nothing else re-parses its
+  arguments to decide.
+
+What it would cost:
+
+- **Two binaries per release** in the `.deb`, the `go install` line
+  (`ssql` plus `ssql-full`, or a `-formats` binary), `make install-local`,
+  and the goreleaser assets.
+- **A failure mode where one binary is missing.** It must refuse loudly,
+  naming the binary to install.
+- **The `from ssh` and catalog remote-binary resolution**
+  (`RemoteBinPrologue`) learning a second name.
+
+It saves ~8 ms of CPU per process. It is a separate change from §4.1–4.5,
+and none of the rest depends on it. This DFC recommends recording it here
+and not building it unless the per-process cost becomes visible: for
+example completion latency on a slow machine, or a pipeline of many short
+stages run in a loop.
+
 ## 5. Compatibility: a v4 bridge or a v5 move
 
 Moving `ssql.ReadParquet` to `parquet.Read` breaks every library user who
@@ -332,6 +405,10 @@ is paid and they are all ssql's own code.
    - `generate go -run` and `-build` link 1.4 → ~0.5 s;
    - a non-Parquet binary goes from 43 to ~8 MB;
    - library users build faster.
+5. **The exec-mode handoff (§4.6).** Record it and leave it unbuilt
+   (recommended: ~8 ms per process, against a second binary in every
+   release), or build a lean `ssql` that re-execs a full binary for the
+   heavy-format stages.
 
 ## 8. Plan
 
