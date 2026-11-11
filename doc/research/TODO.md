@@ -163,10 +163,32 @@ Tracked issues and feature gaps discovered during development.
   translation yet); `resample -time X -value X` is now refused in every
   lane, so the resample time cells test only the refusal (an override
   naming another value column would test the axes).
-- [ ] **The full cmd/ssql suite slowed from ~450 s to ~1,350 s** around
-  v4.138.0 (1342 s in the inet gate, 1374 s on 2026-11-06, against ~450 s
-  under `make lanes` the same hours). Not investigated; time the slowest
-  tests (`go test -json` elapsed) against a v4.137.2 worktree (DFC164 §5.2).
+- [ ] **The full cmd/ssql suite takes ~1,465 s, and most of it is linking
+  generated programs** (measured 2026-11-11). There was no jump at v4.138.0:
+  the "~450 s" was `make lanes`, a subset. Gate logs show steady growth,
+  ~920 s on 2026-10-14, ~1,060 s late October, ~1,340 s early November.
+  Tests added since 2026-10-15 account for ~260 s and the older tests grew
+  ~285 s. A `GOFLAGS=-toolexec` log of one run counted 2,559 links of
+  generated programs, 6,805 s summed (2.66 s each under contention), with a
+  link running for 1,064 s of the 1,475 s wall. Every program links the whole
+  library (arrow, parquet, excelize, and grpc through arrow's pqarrow → flight):
+  44 MB and ~1.4 s to link alone, where `-tags slim` links 5.8 MB in ~0.35 s.
+  By test: TestPipelineEquivalence ~1,444 links in 294 s (its subtests
+  parallel); TestPipelineCorpus 206, TestFlagExprMetamorphic 211,
+  TestPipelinePermutations 209; TestIntOverflowEveryLane 67 links serially
+  in 117 s. Twenty pty/keybinding tests take 216 s serially and link almost
+  nothing. Options, largest first:
+  1. ~~build test programs with `-tags slim` when the program uses no
+     arrow/parquet/xlsx/http~~ DONE 2026-11-11 (`slim_build_test.go`: a
+     source scan of the slim-tagged files' names, a full rebuild on a
+     wrong guess);
+  2. ~~`t.Parallel()` for the serial build-heavy tests and the pty
+     tests~~ DONE 2026-11-11 (30 tests; `TestRecordCodegenUnknownFieldIsLoud`
+     moved off the shared `/tmp/ssql_test`). Suite 1,465 → 556 s, green twice;
+  3. `-ldflags=-s -w` on test builds: 1.4 → 0.9 s a link;
+  4. the heavy formats out of the root and `typed` packages, so a program
+     links only what it reads: [DFC168](./dfc168_heavy_formats_as_packages.md),
+     awaiting Ross's decisions (§7). It replaces option 1's stopgap.
 - [ ] **Declared types in DFC133's random differential** (DFC163 §2.3):
   the generator declares `-type col decimal:2|int128|time|inet` per
   column, with one typed program per run over a sample.

@@ -175,6 +175,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC165 | 2026-11-07 | 2026-11-07 | [The lookup pipeline's extra CPU: typed Go against DuckDB](./dfc165_lookup_pipeline_cpu_typed_vs_duckdb.md) |
 | DFC166 | 2026-11-10 | 2026-11-10 | [Where the System Time Goes: Memory in the Generated Go and Rust Programs](./dfc166_memory_go_vs_rust.md) |
 | DFC167 | 2026-11-10 | 2026-11-10 | [Editing a Pipeline in the Editor: Pretty on the Way In, a Language Server Inside](./dfc167_editor_pretty_and_lsp.md) |
+| DFC168 | 2026-11-11 | 2026-11-11 | [Heavy formats as packages a program imports](./dfc168_heavy_formats_as_packages.md) |
 
 <!-- DFC-INDEX-END -->
 
