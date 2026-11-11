@@ -16,6 +16,7 @@ import (
 // stays time, text that looks numeric stays text) — and `generate
 // schema -datapackage` prints the same schema for a pipeline.
 func TestSidecarRoundTrip(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	root := mustRepoRoot(t)
 	dir := t.TempDir()

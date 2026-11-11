@@ -64,6 +64,7 @@ sys.exit(0 if (ok_e and ok_v) else 1)
 // TestFieldProcsubPTY exercises Ctrl-O completing a join right-side field from
 // its process-substitution source, through a real pty in emacs and vi.
 func TestFieldProcsubPTY(t *testing.T) {
+	t.Parallel()
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not available — skipping real-pty procsub test")

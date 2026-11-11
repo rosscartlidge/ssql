@@ -359,6 +359,7 @@ func TestHeaderDoesNotDependOnRowOrder(t *testing.T) {
 // the panic was a string). -invalid missing keeps the row and says how
 // many values it could not convert.
 func TestCastIsStrict(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}

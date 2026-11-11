@@ -18,6 +18,7 @@ import (
 // not compile (`ctx` undefined; the Stream form after a serial source),
 // and an empty input left a 0-byte file.
 func TestToParquetTypesAllLanes(t *testing.T) {
+	t.Parallel()
 	bin := corpusBin(t)
 	dir := t.TempDir()
 	csv := "id,ts,name\n" +

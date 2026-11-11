@@ -72,6 +72,7 @@ sys.exit(0 if (ok_long and ok_short) else 1)
 // TestHelpPagerPTY: without tmux, Alt-h's long answers open in the pager
 // and short ones print inline — through a real 24-row pty.
 func TestHelpPagerPTY(t *testing.T) {
+	t.Parallel()
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not available — skipping real-pty pager test")

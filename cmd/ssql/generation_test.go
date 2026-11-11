@@ -2571,11 +2571,10 @@ func TestCatalogAggregationPushdown(t *testing.T) {
 // record lane checked nothing. Every stage that validates fields in exec
 // has a row; a valid sibling proves the check lets real fields through.
 func TestRecordCodegenUnknownFieldIsLoud(t *testing.T) {
-	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
-	if err := buildCmd.Run(); err != nil {
-		t.Fatalf("Failed to build ssql: %v", err)
-	}
-	defer os.Remove("/tmp/ssql_test")
+	t.Parallel()
+	// the shared corpus binary: /tmp/ssql_test is rebuilt and removed by
+	// the other generation tests, so a parallel test cannot use it
+	bin := corpusBin(t)
 	data := corpusData(t)
 	emp := filepath.Join(data, "employees.csv")
 	stages := []struct{ stage, bad, good string }{
@@ -2596,7 +2595,7 @@ func TestRecordCodegenUnknownFieldIsLoud(t *testing.T) {
 		{"fill", "fill -default nosuch 0", "fill -default city x"}, // exec refuses a -default on a missing field (DFC133)
 		{"extract", "extract -field nosuch -re '(?P<a>.)'", "extract -field name -re '(?P<a>.)'"},
 		{"unpivot", "unpivot -id dept -value nosuch", "unpivot -id dept -value age"},
-		{"where", "sort age | /tmp/ssql_test where -if nosuch eq 1", "sort age | /tmp/ssql_test where -if age gt 1"},
+		{"where", "sort age | " + bin + " where -if nosuch eq 1", "sort age | " + bin + " where -if age gt 1"},
 		{"fft", "fft -field nosuch", "fft -field salary"},
 		{"spectrogram", "spectrogram -field nosuch -window-size 4 -hop 2", "spectrogram -field salary -window-size 4 -hop 2"},
 		{"describe", "describe nosuch", "describe age"},
@@ -2607,8 +2606,9 @@ func TestRecordCodegenUnknownFieldIsLoud(t *testing.T) {
 			bad  bool
 		}{{s.bad, true}, {s.good, false}} {
 			t.Run(c.text, func(t *testing.T) {
+				t.Parallel()
 				cmd := exec.Command("bash", "-c",
-					`(export SSQL_MODE=record; /tmp/ssql_test from `+emp+` | /tmp/ssql_test `+c.text+` | /tmp/ssql_test to jsonl) | /tmp/ssql_test generate go -run`)
+					`(export SSQL_MODE=record; `+bin+` from `+emp+` | `+bin+` `+c.text+` | `+bin+` to jsonl) | `+bin+` generate go -run`)
 				cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR="+mustRepoRoot(t))
 				out, err := cmd.CombinedOutput()
 				want := s.stage + " references unknown field(s): nosuch (available:"

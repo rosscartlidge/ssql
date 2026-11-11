@@ -13,6 +13,7 @@ import (
 // notice, no attempt to compile). The actual compile-and-run path is
 // exercised by TestRunKeybindingPTY and by the generate-go corpus.
 func TestRunKeybinding(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	dir := t.TempDir()
 	binDir := filepath.Join(dir, "bin")

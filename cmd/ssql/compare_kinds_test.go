@@ -17,6 +17,7 @@ import (
 // literal on an int column compares as a number, a numeric-looking literal
 // on a text column compares as text.
 func TestMixedKindComparisonsAreLoud(t *testing.T) {
+	t.Parallel()
 	bin := corpusBin(t)
 	dir := t.TempDir()
 	csvPath := filepath.Join(dir, "mk.csv")

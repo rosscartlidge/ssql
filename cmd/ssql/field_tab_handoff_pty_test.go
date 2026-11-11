@@ -72,6 +72,7 @@ sys.exit(0 if (ok_e and ok_v) else 1)
 // TestFieldTabHandoffPTY exercises the Tab→Ctrl-O field-completion hand-off
 // through a real pty in both emacs and vi modes.
 func TestFieldTabHandoffPTY(t *testing.T) {
+	t.Parallel()
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not available — skipping real-pty tab-handoff test")

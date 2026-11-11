@@ -70,6 +70,7 @@ print(json.dumps(out))
 // A line that is not ssql, and a pipeline holding a $(…), reach the editor
 // unchanged, and the $(…) never runs before the editor opens.
 func TestEditKeybindingPTY(t *testing.T) {
+	t.Parallel()
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not available — skipping real-pty editor-key test")

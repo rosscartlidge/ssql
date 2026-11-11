@@ -67,6 +67,7 @@ sys.exit(0 if (ok_e and ok_v) else 1)
 // keyseq-timeout — the conditions an ESC-prefixed single key (Alt-r) must
 // survive.
 func TestRunKeybindingPTY(t *testing.T) {
+	t.Parallel()
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not available — skipping real-pty run test")

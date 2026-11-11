@@ -14,6 +14,7 @@ import (
 // UTC) — and the other sinks honour it in exec. The sinks have no SQL
 // lane, so this stands in for an equivalence case.
 func TestSinkTimeFormatLanes(t *testing.T) {
+	t.Parallel()
 	bin := corpusBin(t)
 	data := corpusData(t)
 	root := mustRepoRoot(t)

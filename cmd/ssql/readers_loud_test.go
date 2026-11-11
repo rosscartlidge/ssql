@@ -103,6 +103,7 @@ func assertLoudFailure(t *testing.T, lane, out string, err error, wants ...strin
 const lateAgg = " | %s group-by -sum v total -count n | %s to table"
 
 func TestLateMismatchIsLoudInEveryLane(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	dir := lateFixtures(t)
 	agg := fmt.Sprintf(lateAgg, bin, bin)
@@ -138,6 +139,7 @@ func TestLateMismatchIsLoudInEveryLane(t *testing.T) {
 // must work in every lane (typed codegen refused it until v4.91.0, and
 // `from tsv` / `from jsonl` had no such flag) and give the same answer.
 func TestTypeOverrideMakesEveryLaneAgree(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	dir := lateFixtures(t)
 	agg := fmt.Sprintf(lateAgg, bin, bin)
@@ -177,6 +179,7 @@ func TestTypeOverrideMakesEveryLaneAgree(t *testing.T) {
 }
 
 func TestMissingFileIsLoudInTypedCode(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	dir := lateFixtures(t)
 	agg := fmt.Sprintf(lateAgg, bin, bin)
@@ -213,6 +216,7 @@ func TestMissingFileIsLoudInTypedCode(t *testing.T) {
 // schema-unaware reader until v4.91.0, so the header became a phantom
 // record (TODO item from 2026-09-04).
 func TestUnionMergeSideFileSchemaHeaderIsNotARecord(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	dir := t.TempDir()
 	a := "id,v\n1,10\n2,20\n3,30\n"
@@ -251,6 +255,7 @@ func TestUnionMergeSideFileSchemaHeaderIsNotARecord(t *testing.T) {
 // `if err != nil { return nil }`: a missing file was an empty right side
 // and the program exited 0 (inner join: no rows; left join: no matches).
 func TestJoinMissingRightFileIsLoud(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.csv"), []byte("id,v\n1,10\n2,20\n"), 0o644); err != nil {
@@ -304,6 +309,7 @@ func TestJoinMissingRightFileIsLoud(t *testing.T) {
 // readers' empty-cell rule, DFC124). The record lane must agree with
 // exec.
 func TestJSONLAbsentValueIsLoudInTyped(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	dir := t.TempDir()
 	for name, last := range map[string]string{

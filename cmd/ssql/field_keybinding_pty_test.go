@@ -144,6 +144,7 @@ sys.exit(0 if (ok_e and ok_v and ok_ev and ok_vv and ok_dv and ok_m) else 1)
 // keyseq-timeout. Guards against the regressions hit during development:
 // wrong/missing keymap, and chord self-insert under a snappy-Esc timeout.
 func TestFieldKeybindingPTY(t *testing.T) {
+	t.Parallel()
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not available — skipping real-pty completion test")

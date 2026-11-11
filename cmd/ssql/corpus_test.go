@@ -1015,6 +1015,7 @@ func TestPipelineCorpus(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.Name, func(t *testing.T) {
+			t.Parallel() // each mode's program builds in its own temp module
 			runCorpusCase(t, c)
 		})
 	}

@@ -100,6 +100,7 @@ func TestIntOverflowEveryLane(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs generated programs")
 	}
+	t.Parallel()
 	bin := corpusBin(t)
 	duckdb := duckdbBinary()
 
@@ -157,6 +158,7 @@ func TestIntOverflowEveryLane(t *testing.T) {
 
 	for name, pipeline := range overflow {
 		t.Run("overflow_"+name, func(t *testing.T) {
+			t.Parallel()
 			// exec
 			out, err := shell(pipeline + " | " + bin + " to jsonl")
 			if err == nil || !overflowed(out) {
@@ -197,6 +199,7 @@ func TestIntOverflowEveryLane(t *testing.T) {
 
 	for name, c := range sums {
 		t.Run("int_sum_exact_past_2_53_"+name, func(t *testing.T) {
+			t.Parallel()
 			want := c.want // odd: no float64 holds it (DuckDB -json quotes its HUGEINT)
 			check := func(lane, out string) {
 				if !strings.Contains(out, want) {
@@ -253,6 +256,7 @@ func TestIntOverflowEveryLane(t *testing.T) {
 // parser used to go through float64; the Fibonacci list exploded to
 // floats from fib(79) on, and 2^53+1 to 2^53).
 func TestWideIntegersThroughNestedValues(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("builds and runs generated programs")
 	}

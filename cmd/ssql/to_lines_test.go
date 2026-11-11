@@ -15,6 +15,7 @@ import (
 // reaching run is a named error; an unknown field is loud in exec and in
 // generate mode.
 func TestToLinesAllLanes(t *testing.T) {
+	t.Parallel()
 	bin := corpusBin(t)
 	dir := t.TempDir()
 	files := map[string]string{

@@ -68,6 +68,7 @@ func orderCanon(t *testing.T, raw string) string {
 // Before the order keys, `-first` here answered 954250 where the answer is 0, and
 // a different number on the next run.
 func TestOrderReadingOverALargeInput(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("writes a 3 M row file")
 	}

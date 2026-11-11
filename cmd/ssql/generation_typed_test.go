@@ -118,16 +118,27 @@ func goBuildRunGenerated(t *testing.T, module string, files map[string]string, e
 	if out, err := tidy.CombinedOutput(); err != nil {
 		t.Fatalf("go mod tidy: %v\n%s", err, out)
 	}
-	build := exec.Command("go", "build", "-o", "prog", ".")
-	build.Dir = dir
-	if out, err := build.CombinedOutput(); err != nil {
-		return string(out), err, nil
+	buildRun := func(tags ...string) (string, error, error) {
+		build := exec.Command("go", append(append([]string{"build"}, tags...), "-o", "prog", ".")...)
+		build.Dir = dir
+		if out, err := build.CombinedOutput(); err != nil {
+			return string(out), err, nil
+		}
+		run := exec.Command(filepath.Join(dir, "prog"))
+		run.Dir = dir
+		run.Env = append(os.Environ(), env...)
+		b, err := run.CombinedOutput()
+		return string(b), nil, err
 	}
-	run := exec.Command(filepath.Join(dir, "prog"))
-	run.Dir = dir
-	run.Env = append(os.Environ(), env...)
-	b, err := run.CombinedOutput()
-	return string(b), nil, err
+	// slim when the program reaches nothing slim leaves out
+	// (slim_build_test.go); a wrong guess is built again in full
+	if buildSlim(t, files) {
+		out, buildErr, runErr := buildRun("-tags", "slim")
+		if buildErr == nil && !slimRefused(out) {
+			return out, nil, runErr
+		}
+	}
+	return buildRun()
 }
 
 func TestTypedFromToCSV(t *testing.T) {
@@ -1080,6 +1091,7 @@ func TestTypedRollupIsNative(t *testing.T) {
 // struct sampled from its elements (2026-10-09; it kept the record path
 // with a reason before).
 func TestTypedFromJSONL(t *testing.T) {
+	t.Parallel()
 	bin := buildSSQLForTypedTest(t)
 	dir := t.TempDir()
 	plain := filepath.Join(dir, "e.jsonl")

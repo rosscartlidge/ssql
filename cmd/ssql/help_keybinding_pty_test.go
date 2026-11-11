@@ -90,6 +90,7 @@ sys.exit(0 if (ok_e and ok_v) else 1)
 // real pseudo-terminal in both emacs and vi modes under a low keyseq-timeout
 // — the conditions an ESC-prefixed single key (Alt-h) must survive.
 func TestHelpKeybindingPTY(t *testing.T) {
+	t.Parallel()
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not available — skipping real-pty help test")

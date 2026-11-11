@@ -20,6 +20,7 @@ import (
 // -exclude-right) give the same rows in exec and record codegen; typed
 // and SQL refuse them loudly rather than drop them.
 func TestJoinCollisionIsLoudEverywhere(t *testing.T) {
+	t.Parallel()
 	bin := corpusBin(t)
 	dir := t.TempDir()
 	left := filepath.Join(dir, "L.csv")

@@ -72,6 +72,7 @@ func dump[T any](seq iter.Seq2[T, error]) error {
 }
 
 func TestLibraryMode(t *testing.T) {
+	t.Parallel()
 	bin := corpusBin(t)
 	data := corpusData(t)
 	orders := data + "/orders.csv"
