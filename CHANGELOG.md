@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.146.0] - 2026-11-11
+
 ### Added
 
 - **`ssql conventions -category sidecar`**, and [CSV Schema Sidecars](doc/csv-sidecars.md), a reference for the file that types a CSV: the smallest `datapackage.json` and CSVW file that work, where ssql looks and what overrides it, the type map, the `ssqlType` key ssql adds for decimals, int128 and inet, date formats, what is refused, and writing one.
