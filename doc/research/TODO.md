@@ -8,6 +8,17 @@ Last modified: 2026-11-15
 
 Tracked issues and feature gaps discovered during development.
 
+## Bugs found 2026-11-15 (DFC169 §4.0)
+
+- [ ] **`group-by` in schema mode drops an unknown group field silently.**
+  The pipeline `SSQL_MODE=schema; ssql from employees.csv | ssql group-by
+  department -count n | ssql generate schema` answers `n`, exit 0. Exec
+  fails loudly ("unknown field(s): department (available: …)"), and so
+  does `where` in schema mode. Fix it, then sweep every command's
+  field-taking flags for the same gap: an unknown field per flag from
+  `-spec-json`, schema lane against exec lane. The DFC169 FAQ's
+  pre-flight relies on schema mode being as strict as exec.
+
 ## Bugs found 2026-11-03 (DFC162 §1)
 
 - [x] **Parquet struct column silently shifts or drops columns.** FIXED
