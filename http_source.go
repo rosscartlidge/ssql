@@ -51,6 +51,7 @@ type HTTPFile struct {
 
 	mu         sync.RWMutex
 	prefetched []prefetchedRange // see Prefetch
+	maxRange   int64             // SetPrefetchMaxRange; 0 is httpPrefetchMaxRange
 }
 
 type prefetchedRange struct {
@@ -128,7 +129,11 @@ func (h *HTTPFile) Size() int64 { return h.size }
 // not. A read outside every range still goes to the network, so
 // correctness never depends on the ranges being exact.
 func (h *HTTPFile) Prefetch(ranges []ByteRange) error {
-	ranges = coalesceRanges(ranges, httpPrefetchMaxRange)
+	limit := h.maxRange
+	if limit <= 0 {
+		limit = httpPrefetchMaxRange
+	}
+	ranges = coalesceRanges(ranges, limit)
 	got := make([]prefetchedRange, len(ranges))
 	errs := make([]error, len(ranges))
 	sem := make(chan struct{}, httpPrefetchConcurrency)
@@ -172,7 +177,12 @@ func (h *HTTPFile) Prefetch(ranges []ByteRange) error {
 // httpPrefetchMaxRange caps a coalesced range: adjacent chunks merge
 // into one request up to this size, so a small file is a round trip or
 // two while a large one still spreads across concurrent requests.
-var httpPrefetchMaxRange int64 = 4 << 20 // a var so the concurrency gate can force several ranges
+const httpPrefetchMaxRange int64 = 4 << 20
+
+// SetPrefetchMaxRange caps the size of one coalesced Prefetch request
+// for this file (default 4 MB). Smaller ranges mean more requests in
+// flight at once; the Parquet concurrency gate uses it to force several.
+func (h *HTTPFile) SetPrefetchMaxRange(n int64) { h.maxRange = n }
 
 // coalesceRanges sorts the ranges and merges ones that touch or
 // overlap while the merged range stays within limit (a single range

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -69,14 +68,7 @@ func registerToXLSX(cmd *cf.SubcommandBuilder) {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			// Build XLSX config
-			var xlsxConfig []ssql.XLSXConfig
-			if sheet != "" {
-				xlsxConfig = append(xlsxConfig, ssql.XLSXConfig{SheetName: sheet})
-			}
-
-			// Write as XLSX
-			if err := ssql.WriteXLSX(records, outputFile, xlsxConfig...); err != nil {
+			if err := writeXLSX(records, outputFile, sheet); err != nil {
 				return fmt.Errorf("writing XLSX file: %w", err)
 			}
 
@@ -109,18 +101,18 @@ func generateToXLSXCode(filename string, sheet string) error {
 	}
 	var code string
 	if sheet != "" {
-		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, *flagOutput, ssql.XLSXConfig{SheetName: %q}); err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error writing XLSX: %%v\n", err)
+		code = fmt.Sprintf(`if err := xlsx.Write(%s, *flagOutput, xlsx.Config{SheetName: %q}); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing XLSX: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, sheet)
 	} else {
-		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, *flagOutput); err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error writing XLSX: %%v\n", err)
+		code = fmt.Sprintf(`if err := xlsx.Write(%s, *flagOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing XLSX: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
 	}
 
-	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os", xlsxImport}, getCommandString())
 
 	stampSinkFile(frag, filename, nil)
 	frag.Params = params

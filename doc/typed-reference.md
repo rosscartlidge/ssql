@@ -210,56 +210,72 @@ memory-bandwidth ceiling.
 func ReadDelimSafeFromReader[T any](r io.Reader, opts ...DelimOption) iter.Seq2[T, error]
 ```
 
-### Parquet
+### Parquet (package parquet)
+
+Typed Parquet lives in `github.com/rosscartlidge/ssql/v4/parquet` with
+the record API, so a typed CSV program links no Arrow (DFC168; until
+v4.147 these were `typed.ReadParquet` and friends):
 
 ```go
-func ReadParquet[T any](filename string, opts ...ParquetOption) iter.Seq[T]
-func ReadParquetSafe[T any](filename string, opts ...ParquetOption) iter.Seq2[T, error]
-func ReadParquetFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOption) iter.Seq[T]
-func ReadParquetSafeFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOption) iter.Seq2[T, error]
-func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) Stream[T]
-func ReadParquetFiles[T any](paths []string, opts ...ParquetOption) iter.Seq[T]                    // several files or globs, in order; one shared schema
-func ReadParquetFilesParallel[T any](paths []string, n int, opts ...ParquetOption) Stream[T]      // shards share out every file's row groups
-func ReadParquetSources[T any](sources []ParquetSource, opts ...ParquetOption) iter.Seq[T]        // files with per-file constant columns (a catalog's hive keys, its columns, the shard field), set on every row of the file into string fields of T; a constant with no field, or a path-derived one that is also a file column, is a ReadError naming the file
-func ReadParquetSourcesParallel[T any](sources []ParquetSource, n int, opts ...ParquetOption) Stream[T]
-func CatalogParquetSources(entries []ssql.CatalogEntry, shardField string) ([]ParquetSource, error)   // a loaded catalog's local Parquet shards as sources (ssql.CatalogRecordMetadata's columns); a shard elsewhere or in another format is an error
-type ParquetSource struct { Path string; Constants []ParquetConstant }
-type ParquetConstant struct { Name, Value string; FromPath bool }                                  // FromPath: a hive key — a file column of the same name is a clash, not an override
+import "github.com/rosscartlidge/ssql/v4/parquet"
 
-func WriteParquet[T any](seq iter.Seq[T], filename string) error
-func WriteParquetToWriter[T any](seq iter.Seq[T], w io.Writer) error
-func (s Stream[T]) WriteParquet(filename string) error
-func (s Stream[T]) WriteParquetToWriter(w io.Writer) error
+func ReadTyped[T any](filename string, opts ...Option) iter.Seq[T]
+func ReadTypedSafe[T any](filename string, opts ...Option) iter.Seq2[T, error]
+func ReadTypedFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...Option) iter.Seq[T]
+func ReadTypedSafeFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...Option) iter.Seq2[T, error]
+func ReadTypedParallel[T any](filename string, n int, opts ...Option) typed.Stream[T]
+func ReadTypedFiles[T any](paths []string, opts ...Option) iter.Seq[T]                    // several files or globs, in order; one shared schema
+func ReadTypedFilesParallel[T any](paths []string, n int, opts ...Option) typed.Stream[T]      // shards share out every file's row groups
+func ReadSources[T any](sources []Source, opts ...Option) iter.Seq[T]        // files with per-file constant columns (a catalog's hive keys, its columns, the shard field), set on every row of the file into string fields of T; a constant with no field, or a path-derived one that is also a file column, is a ReadError naming the file
+func ReadSourcesParallel[T any](sources []Source, n int, opts ...Option) typed.Stream[T]
+func CatalogSources(entries []ssql.CatalogEntry, shardField string) ([]Source, error)   // a loaded catalog's local Parquet shards as sources (ssql.CatalogRecordMetadata's columns); a shard elsewhere or in another format is an error
+type Source struct { Path string; Constants []Constant }
+type Constant struct { Name, Value string; FromPath bool }                                  // FromPath: a hive key — a file column of the same name is a clash, not an override
 
-func ParquetStrict() ParquetOption              // reject schema mismatches
-func ParquetColumns(names ...string) ParquetOption  // read only the listed columns
+func WriteTyped[T any](seq iter.Seq[T], filename string, opts ...WriteOption) error
+func WriteTypedTo[T any](seq iter.Seq[T], w io.Writer, opts ...WriteOption) error
+func WriteStream[T any](s typed.Stream[T], filename string, opts ...WriteOption) error   // one row group per shard
+func WriteStreamTo[T any](s typed.Stream[T], w io.Writer, opts ...WriteOption) error
+
+func Strict() Option                 // reject schema mismatches
+func Columns(names ...string) Option // read only the listed columns
 ```
 
-A file that cannot be opened or read panics with a `*ReadError`, as
-the CSV readers do (the Parquet readers yielded nothing until
+A file that cannot be opened or read panics with a `*typed.ReadError`,
+as the CSV readers do (the Parquet readers yielded nothing until
 2026-10-11, so a missing file read as an empty table). The `Safe`
 variants still report errors through the sequence.
 
-Snappy compression by default. Reads use the existing
-`github.com/apache/arrow/go/v18/parquet` dependency that ssql
-already imports for Record-mode Parquet.
+Snappy compression by default.
 
-**`ParquetColumns` is the primary lever.** Restricting a 14.6 M-row
+**`parquet.Columns` is the primary lever.** Restricting a 14.6 M-row
 group-by to its one key column made it 10× faster
 ([Performance, Measured](performance.md) §2 has the run). For wide tables it's the difference
 between Parquet feeling fast and feeling like CSV-with-extra-steps.
 
-The parallel reader assigns Parquet row groups to shards
-round-robin; each shard owns its own `pqarrow.FileReader`. Peak
-memory is roughly `nShards × max-row-group-size`. If the file has
-fewer row groups than `n`, `n` is reduced to match — Parquet
-doesn't allow splitting within a row group without re-decoding it.
+The parallel reader gives each shard a contiguous run of row groups
+(so the shards concatenated are the file); each shard owns its own
+`pqarrow.FileReader`. Peak memory is roughly
+`nShards × max-row-group-size`. If the file has fewer row groups than
+`n`, `n` is reduced to match — Parquet doesn't allow splitting within a
+row group without re-decoding it.
 
-Write options (shared with the record package):
+Write options (shared with the record writers):
 
 ```go
-func WithCompression(name string) ParquetWriteOption   // snappy (default), gzip, zstd, none
-func WithRowGroupSize(n int) ParquetWriteOption        // default 1_000_000; one row group is one ReadParquetParallel shard
+func WithCompression(name string) WriteOption   // snappy (default), gzip, zstd, none
+func WithRowGroupSize(n int) WriteOption        // default 1_000_000; one row group is one ReadTypedParallel shard
+```
+
+A format package outside `typed` builds its parallel readers and
+writers on these:
+
+```go
+func FromShards[T any](shards []iter.Seq[T]) Stream[T]                  // shards that are contiguous runs of the source, in order
+func (s Stream[T]) ShardSeqs() []iter.Seq[T]
+func (s Stream[T]) EachShard(fn func(i int, shard iter.Seq[T]))          // concurrently; a shard's panic is re-raised in the caller
+func ColumnName(f reflect.StructField) (name string, skip bool)          // the column a field reads and writes (ssql tag, csv tag, field name)
+func DecimalFieldScale(f reflect.StructField) (int, error)               // an ssql.Decimal field's tag scale
 ```
 
 ### Operations
@@ -328,12 +344,12 @@ A `Stream[T]` is a pipeline of `T` partitioned across `n` worker shards.
 It is a separate type from `iter.Seq[T]` because its contract differs:
 output order is shard-concatenation order, not input order, and each
 stage runs in a goroutine per shard. The readers produce one directly
-(`ReadCSVParallel`, `ReadDelimParallel`, `ReadParquetParallel`,
+(`ReadCSVParallel`, `ReadDelimParallel`, `parquet.ReadTypedParallel`,
 `ReadJSONLParallel`); `ParallelBatched` shards an existing sequence
 (`Parallel` is its per-row ancestor, kept for reference). The
 parallel joins, set operations, top-k and `GroupByParallel` take a
 `Stream` on the left and return a `Stream` or a merged `iter.Seq`; the
-`Stream` sinks (`WriteCSV`, `WriteDelim`, `WriteParquet` methods) format
+`Stream` sinks (the `WriteCSV` and `WriteDelim` methods, `parquet.WriteStream`) format
 each shard into its own buffer and dump the buffers in shard order,
 skipping the per-row fan-in. `Serial()` is the boundary back to the
 serial API: a `sort`, `distinct` or `to table` downstream forces it, and

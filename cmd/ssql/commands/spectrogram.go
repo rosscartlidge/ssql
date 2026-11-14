@@ -123,7 +123,7 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			var err error
 
 			if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
-				signal, err = ssql.ExtractSignalFromArrow(inputFile, field)
+				signal, err = extractSignalFromArrow(inputFile, field)
 				if err != nil {
 					return fmt.Errorf("extracting signal from Arrow: %w", err)
 				}
@@ -190,7 +190,7 @@ func generateSpectrogramCode(inputFile, field string, windowSize, hopSize int, w
 
 	// If reading directly from Arrow file, generate optimized code
 	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
-		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
+		code := fmt.Sprintf(`signal, err := arrow.ExtractSignal(%q, %q)
 	if err != nil {
 		return fmt.Errorf("Error extracting signal: %%w", err)
 	}
@@ -203,7 +203,7 @@ func generateSpectrogramCode(inputFile, field string, windowSize, hopSize int, w
 	spectrogramRecords := ssql.SpectrogramToRecords(spectrogramBins)`,
 			inputFile, field, optsCode)
 
-		frag := lib.NewInitFragment("spectrogramRecords", code, []string{"os"}, getCommandString())
+		frag := lib.NewInitFragment("spectrogramRecords", code, []string{"os", arrowImport}, getCommandString())
 		return lib.WriteCodeFragment(frag)
 	}
 

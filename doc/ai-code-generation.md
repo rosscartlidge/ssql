@@ -78,27 +78,33 @@ if err != nil {
     log.Fatalf("Failed to read JSON: %v", err)
 }
 
+// Arrow, Parquet and Excel are packages of their own, imported only by a
+// program that uses them (a CSV program links none of them):
+//   import "github.com/rosscartlidge/ssql/v4/arrow"
+//   import "github.com/rosscartlidge/ssql/v4/parquet"
+//   import "github.com/rosscartlidge/ssql/v4/xlsx"
+
 // Arrow reading (10-20x faster than CSV for large datasets)
-data, err := ssql.ReadArrow("file.arrow")
+data, err := arrow.Read("file.arrow")
 if err != nil {
     log.Fatalf("Failed to read Arrow: %v", err)
 }
 
 // Excel (XLSX) reading
-data, err := ssql.ReadXLSX("file.xlsx")
+data, err := xlsx.Read("file.xlsx")
 if err != nil {
     log.Fatalf("Failed to read XLSX: %v", err)
 }
 
 // XLSX with specific sheet
-data, err := ssql.ReadXLSX("file.xlsx", ssql.XLSXConfig{SheetName: "Sales"})
+data, err := xlsx.Read("file.xlsx", xlsx.Config{SheetName: "Sales"})
 
 // List sheet names
-sheets, err := ssql.ReadXLSXSheetNames("file.xlsx")
+sheets, err := xlsx.SheetNames("file.xlsx")
 
 // Parquet (a file, not stdin); read only the columns you use on wide files
-data, err := ssql.ReadParquet("file.parquet")
-data, err := ssql.ReadParquetColumns("file.parquet", []string{"dept", "salary"})
+data, err := parquet.Read("file.parquet")
+data, err := parquet.ReadColumns("file.parquet", []string{"dept", "salary"})
 
 // Text lines: one record per line with line_number (from 1) and line
 lines, err := ssql.ReadLines("app.log")
@@ -119,14 +125,14 @@ signal, meta, err := ssql.ExtractSignalFromWAV("audio.wav")
 
 ```go
 // Write Arrow (10-20x faster than CSV)
-err = ssql.WriteArrow(records, "output.arrow")
+err = arrow.Write(records, "output.arrow")
 
 // Write XLSX
-err = ssql.WriteXLSX(records, "output.xlsx")
-err = ssql.WriteXLSX(records, "output.xlsx", ssql.XLSXConfig{SheetName: "Results"})
+err = xlsx.Write(records, "output.xlsx")
+err = xlsx.Write(records, "output.xlsx", xlsx.Config{SheetName: "Results"})
 
 // Write Parquet
-err = ssql.WriteParquet(records, "output.parquet")
+err = parquet.Write(records, "output.parquet")
 
 // Write WAV audio: 16-bit PCM mono from an amplitude field; the third argument is the sample rate
 err = ssql.WriteWAV(records, "output.wav", 44100)
@@ -1156,11 +1162,11 @@ When processing natural language requests, map phrases to ssql operations:
 18. **"combine/union"** → `ssql.Concat()` + optionally `ssql.DistinctBy()`
 18a. **"not in / never / missing from" (anti-join, EXCEPT)** → `ssql.Except(right, ssql.FieldsKey("id"), ssql.FieldsKey("id"), false)` (whole row: `ssql.WholeRow` on both sides); **"also in / at least one" (semi-join, INTERSECT)** → `ssql.Intersect(...)`
 18b. **"as of / latest quote before / most recent reading at"** → `ssql.AsofJoin(right, ssql.AsofConfig{...})`
-18c. **"parquet"** → `ssql.ReadParquet()`, `ssql.ReadParquetColumns()`, `ssql.WriteParquet()`; **"log lines / raw text"** → `ssql.ReadLines()` + `ssql.ExtractRecords()`
+18c. **"parquet"** → `parquet.Read()`, `parquet.ReadColumns()`, `parquet.Write()` (import `github.com/rosscartlidge/ssql/v4/parquet`); **"log lines / raw text"** → `ssql.ReadLines()` + `ssql.ExtractRecords()`
 18d. **"fast / large file / known columns"** → the `ssql/typed` API (`typed.ReadCSV[T]`, `typed.Where`, `typed.GroupBy`)
 19. **"extract signal"** → `ssql.ExtractSignal(records, field)`
-20. **"read/write excel"** → `ssql.ReadXLSX()`, `ssql.WriteXLSX()`
-21. **"read/write arrow"** → `ssql.ReadArrow()`, `ssql.WriteArrow()`
+20. **"read/write excel"** → `xlsx.Read()`, `xlsx.Write()` (import `github.com/rosscartlidge/ssql/v4/xlsx`)
+21. **"read/write arrow"** → `arrow.Read()`, `arrow.Write()` (import `github.com/rosscartlidge/ssql/v4/arrow`)
 22. **"rank/row number/top N per group"** → `ssql.Window([]ssql.WindowConfig{{Specs: []ssql.WindowSpec{{Function: ssql.WRowNumber(), ...}}}})`
 23. **"running total/cumulative sum"** → `ssql.Window(...)` with `ssql.WSum(field)`
 24. **"moving average/rolling"** → `ssql.Window(...)` with `ssql.WAvg(field)` and custom `Frame`

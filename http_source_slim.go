@@ -33,6 +33,7 @@ func (h *HTTPFile) Requests() int64                              { return 0 }
 func (h *HTTPFile) Size() int64                                  { return 0 }
 func (h *HTTPFile) Prefetch(ranges []ByteRange) error            { return nil }
 func (h *HTTPFile) DropPrefetched()                              {}
+func (h *HTTPFile) SetPrefetchMaxRange(n int64)                  {}
 func (h *HTTPFile) ReadAt(p []byte, off int64) (int, error)      { return 0, io.EOF }
 func (h *HTTPFile) Read(p []byte) (int, error)                   { return 0, io.EOF }
 func (h *HTTPFile) Seek(offset int64, whence int) (int64, error) { return 0, nil }

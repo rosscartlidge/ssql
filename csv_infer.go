@@ -32,7 +32,7 @@ const DefaultInferRows = 1000
 // schema header is already on the wire, so the type cannot widen
 // mid-stream; the honest options are to fail or to be told the type).
 //
-// The unsafe readers (ReadCSV, ReadCSVFromReader, ReadXLSX) panic with
+// The unsafe readers (ReadCSV, ReadCSVFromReader, xlsx.Read) panic with
 // a *CellError, per their documented fail-fast contract; the *Safe
 // readers yield it. The CLI recovers it into a normal error that names
 // the override flag.

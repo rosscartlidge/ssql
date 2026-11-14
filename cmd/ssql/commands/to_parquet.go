@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -88,14 +87,12 @@ func registerToParquet(cmd *cf.SubcommandBuilder) {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			opts := []ssql.ParquetWriteOption{
-				ssql.WithRowGroupSize(rowGroupSize),
-				ssql.WithCompression(compression),
-			}
+			var fields []string
+			var types map[string]string
 			if s := schemaAndRecords.Schema; s != nil {
-				opts = append(opts, ssql.WithColumnTypes(s.Fields, s.Types))
+				fields, types = s.Fields, s.Types
 			}
-			if err := ssql.WriteParquet(records, outputFile, opts...); err != nil {
+			if err := writeParquet(records, outputFile, rowGroupSize, compression, fields, types); err != nil {
 				return fmt.Errorf("writing Parquet file: %w", err)
 			}
 
@@ -138,22 +135,22 @@ func generateToParquetCode(filename string, rowGroupSize int, compression string
 	params := []lib.CodeParam{
 		{Name: "output", Default: filename, Help: "output Parquet file", VarName: "flagOutput"},
 	}
-	optsArg := fmt.Sprintf(", typed.WithRowGroupSize(%d), typed.WithCompression(%q)", rowGroupSize, compression)
+	optsArg := fmt.Sprintf(", parquet.WithRowGroupSize(%d), parquet.WithCompression(%q)", rowGroupSize, compression)
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
-	// to_parquet's record-mode path uses ssql.WriteParquet below.
+	// to_parquet's record-mode path uses parquet.Write below.
 	if typedMode() && prevSchema != nil {
-		// Stream → call Stream.WriteParquet (per-shard one row group);
-		// iter.Seq[T] → call typed.WriteParquet (single row group of
+		// Stream → parquet.WriteStream (per-shard one row group);
+		// iter.Seq[T] → parquet.WriteTyped (single row group of
 		// configured size).
-		streamCode := fmt.Sprintf(`if err := %s.WriteParquet(*flagOutput%s); err != nil {
+		streamCode := fmt.Sprintf(`if err := parquet.WriteStream(%s, *flagOutput%s); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, optsArg)
-		serialCode := fmt.Sprintf(`if err := typed.WriteParquet(%s, *flagOutput%s); err != nil {
+		serialCode := fmt.Sprintf(`if err := parquet.WriteTyped(%s, *flagOutput%s); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, optsArg)
-		imports := []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/typed"}
+		imports := []string{"fmt", "os", parquetImport}
 		code := serialCode
 		if prevIsStream {
 			code = streamCode
@@ -176,12 +173,12 @@ func generateToParquetCode(filename string, rowGroupSize int, compression string
 		return lib.WriteCodeFragment(frag)
 	}
 
-	code := fmt.Sprintf(`if err := ssql.WriteParquet(%s, *flagOutput, ssql.WithRowGroupSize(%d), ssql.WithCompression(%q)); err != nil {
+	code := fmt.Sprintf(`if err := parquet.Write(%s, *flagOutput, parquet.WithRowGroupSize(%d), parquet.WithCompression(%q)); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, rowGroupSize, compression)
 
-	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os", parquetImport}, getCommandString())
 
 	stampSinkFile(frag, filename, map[string]any{"compression": compression, "row_group_size": int64(rowGroupSize)})
 	frag.Params = params

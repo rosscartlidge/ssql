@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **Parquet, Arrow and XLSX are packages of their own**: `github.com/rosscartlidge/ssql/v4/parquet`, `…/arrow` and `…/xlsx`. The root and `typed` packages no longer import Apache Arrow, Parquet or excelize, so a program links them only when it imports the format, and `ssql generate go` imports exactly the formats a pipeline reads or writes. A generated CSV program now links in 0.6 s at 11.5 MB, against 1.5 s and 46 MB before. The old names are gone, with no forwarders: ssql has no outside users yet, so this is a minor release ([DFC168](doc/research/dfc168_heavy_formats_as_packages.md)). The renames:
+
+  | Before | Now |
+  |---|---|
+  | `ssql.ReadParquet`, `ReadParquetColumns`, `ReadParquetFiles`, `ReadParquetFromReader` | `parquet.Read`, `ReadColumns`, `ReadFiles`, `ReadFrom` |
+  | `ssql.WriteParquet`, `WriteParquetToWriter`, `ParquetWriteOption` | `parquet.Write`, `WriteTo`, `WriteOption` |
+  | `ssql.WithRowGroupSize`, `WithCompression`, `WithColumnTypes` | `parquet.WithRowGroupSize`, `WithCompression`, `WithColumnTypes` |
+  | `ssql.CheckParquetSchemas`, `ParquetRowCount`, `ParquetSchemaFields` | `parquet.CheckSchemas`, `RowCount`, `SchemaFields` |
+  | `typed.ReadParquet[T]`, `ReadParquetSafe`, `ReadParquetFiles`, `ReadParquetParallel`, `ReadParquetFilesParallel`, `ReadParquetFromReaderAt`, `ReadParquetSafeFromReaderAt` | `parquet.ReadTyped[T]`, `ReadTypedSafe`, `ReadTypedFiles`, `ReadTypedParallel`, `ReadTypedFilesParallel`, `ReadTypedFromReaderAt`, `ReadTypedSafeFromReaderAt` |
+  | `typed.WriteParquet[T]`, `WriteParquetToWriter` | `parquet.WriteTyped[T]`, `WriteTypedTo` |
+  | `Stream[T].WriteParquet`, `Stream[T].WriteParquetToWriter` | `parquet.WriteStream(s, …)`, `parquet.WriteStreamTo(s, …)` |
+  | `typed.ParquetOption`, `ParquetStrict`, `ParquetColumns`, `typed.WithRowGroupSize`, `typed.WithCompression` | `parquet.Option`, `Strict`, `Columns`, `parquet.WithRowGroupSize`, `parquet.WithCompression` |
+  | `typed.ParquetSource`, `ParquetConstant`, `ReadParquetSources`, `ReadParquetSourcesParallel`, `CatalogParquetSources` | `parquet.Source`, `Constant`, `ReadSources`, `ReadSourcesParallel`, `CatalogSources` |
+  | `ssql.ReadArrow`, `ReadArrowFromReader`, `WriteArrow`, `WriteArrowToWriter`, `ArrowWriteOption`, `WithArrowColumnTypes`, `ReadAtSeeker` | `arrow.Read`, `ReadFrom`, `Write`, `WriteTo`, `WriteOption`, `WithColumnTypes`, `ReadAtSeeker` |
+  | `ssql.ExtractSignalFromArrow`, `ExtractSignalFromArrowReader` | `arrow.ExtractSignal`, `ExtractSignalFrom` |
+  | `ssql.ReadXLSX`, `WriteXLSX`, `ReadXLSXSheetNames`, `XLSXConfig`, `DefaultXLSXConfig` | `xlsx.Read`, `Write`, `SheetNames`, `Config`, `DefaultConfig` |
+
+- **A catalog's local Parquet shards are read in process only when package parquet is linked**: `ssql.ProcessCatalogShards` on a local Parquet shard in a program that does not import it fails, naming the import to add (`import _ "github.com/rosscartlidge/ssql/v4/parquet"`). The CLI and generated catalog programs link it.
+- **`HTTPFile.SetPrefetchMaxRange`** sets one file's coalesced prefetch request size; it replaces a package variable that tests reassigned.
+
+### Fixed
+
+- **A generated `to xlsx` program did not compile**: its error branch named an undefined `ctx`. No test had built one; `TestGeneratedProgramLinksOnlyItsFormats` builds and runs a program per format, in record and typed mode.
+
 ## [4.146.0] - 2026-11-11
 
 ### Added

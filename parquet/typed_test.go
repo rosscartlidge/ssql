@@ -1,6 +1,4 @@
-//go:build !slim
-
-package typed
+package parquet
 
 import (
 	"bytes"
@@ -10,6 +8,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/rosscartlidge/ssql/v4/typed"
 )
 
 type pqRow struct {
@@ -27,10 +27,10 @@ func TestParquetRoundTrip(t *testing.T) {
 		{Name: "carol", Age: 28, Salary: 60000.25, Active: true, Dept: "D1"},
 	}
 	path := filepath.Join(t.TempDir(), "out.parquet")
-	if err := WriteParquet(slices.Values(in), path); err != nil {
+	if err := WriteTyped(slices.Values(in), path); err != nil {
 		t.Fatalf("WriteParquet: %v", err)
 	}
-	got := slices.Collect(ReadParquet[pqRow](path))
+	got := slices.Collect(ReadTyped[pqRow](path))
 	if !slices.Equal(got, in) {
 		t.Errorf("ReadParquet round-trip:\n got %#v\nwant %#v", got, in)
 	}
@@ -42,10 +42,10 @@ func TestParquetWriteToWriterRead(t *testing.T) {
 		{Name: "bob", Age: 25, Salary: 40000, Active: false, Dept: "D2"},
 	}
 	var buf bytes.Buffer
-	if err := WriteParquetToWriter(slices.Values(in), &buf); err != nil {
+	if err := WriteTypedTo(slices.Values(in), &buf); err != nil {
 		t.Fatalf("WriteParquetToWriter: %v", err)
 	}
-	got := slices.Collect(ReadParquetFromReaderAt[pqRow](bytes.NewReader(buf.Bytes())))
+	got := slices.Collect(ReadTypedFromReaderAt[pqRow](bytes.NewReader(buf.Bytes())))
 	if !slices.Equal(got, in) {
 		t.Errorf("ReadParquetFromReaderAt round-trip: got %#v, want %#v", got, in)
 	}
@@ -53,10 +53,10 @@ func TestParquetWriteToWriterRead(t *testing.T) {
 
 func TestParquetEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.parquet")
-	if err := WriteParquet(slices.Values([]pqRow{}), path); err != nil {
+	if err := WriteTyped(slices.Values([]pqRow{}), path); err != nil {
 		t.Fatalf("WriteParquet empty: %v", err)
 	}
-	got := slices.Collect(ReadParquet[pqRow](path))
+	got := slices.Collect(ReadTyped[pqRow](path))
 	if len(got) != 0 {
 		t.Errorf("ReadParquet empty: got %d rows, want 0", len(got))
 	}
@@ -68,12 +68,12 @@ func TestParquetColumnsFilter(t *testing.T) {
 		{Name: "bob", Age: 25, Salary: 40000, Active: false, Dept: "D2"},
 	}
 	path := filepath.Join(t.TempDir(), "cols.parquet")
-	if err := WriteParquet(slices.Values(in), path); err != nil {
+	if err := WriteTyped(slices.Values(in), path); err != nil {
 		t.Fatalf("WriteParquet: %v", err)
 	}
 
 	// Read only Name and Age — the other fields stay zero.
-	got := slices.Collect(ReadParquet[pqRow](path, ParquetColumns("Name", "Age")))
+	got := slices.Collect(ReadTyped[pqRow](path, Columns("Name", "Age")))
 	want := []pqRow{
 		{Name: "alice", Age: 30},
 		{Name: "bob", Age: 25},
@@ -86,7 +86,7 @@ func TestParquetColumnsFilter(t *testing.T) {
 func TestParquetStrictMissingField(t *testing.T) {
 	in := []pqRow{{Name: "alice", Age: 30}}
 	path := filepath.Join(t.TempDir(), "strict_missing.parquet")
-	if err := WriteParquet(slices.Values(in), path); err != nil {
+	if err := WriteTyped(slices.Values(in), path); err != nil {
 		t.Fatalf("WriteParquet: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func TestParquetStrictMissingField(t *testing.T) {
 	type pqRowSubset struct {
 		Name string
 	}
-	for v, err := range ReadParquetSafe[pqRowSubset](path, ParquetStrict()) {
+	for v, err := range ReadTypedSafe[pqRowSubset](path, Strict()) {
 		_ = v
 		if err == nil {
 			t.Fatalf("expected strict error, got nil")
@@ -116,17 +116,17 @@ func TestParquetParallelMatchesSerial(t *testing.T) {
 		}
 	}
 	path := filepath.Join(t.TempDir(), "parallel.parquet")
-	if err := WriteParquet(slices.Values(in), path); err != nil {
+	if err := WriteTyped(slices.Values(in), path); err != nil {
 		t.Fatalf("WriteParquet: %v", err)
 	}
 
-	serial := slices.Collect(ReadParquet[pqRow](path))
+	serial := slices.Collect(ReadTyped[pqRow](path))
 	if len(serial) != len(in) {
 		t.Fatalf("serial: got %d rows, want %d", len(serial), len(in))
 	}
 
 	for _, n := range []int{1, 2, 4} {
-		stream := ReadParquetParallel[pqRow](path, n)
+		stream := ReadTypedParallel[pqRow](path, n)
 		par := slices.Collect(stream.Serial())
 		if len(par) != len(serial) {
 			t.Errorf("n=%d: row count %d, want %d", n, len(par), len(serial))
@@ -141,12 +141,12 @@ func TestStreamWriteParquetRoundTrip(t *testing.T) {
 		{Name: "carol", Age: 28, Salary: 60000, Active: true, Dept: "D1"},
 		{Name: "dave", Age: 33, Salary: 70000, Active: false, Dept: "D3"},
 	}
-	stream := ParallelFromSlice(in, 3)
+	stream := typed.ParallelFromSlice(in, 3)
 	path := filepath.Join(t.TempDir(), "stream.parquet")
-	if err := stream.WriteParquet(path); err != nil {
+	if err := WriteStream(stream, path); err != nil {
 		t.Fatalf("Stream.WriteParquet: %v", err)
 	}
-	got := slices.Collect(ReadParquet[pqRow](path))
+	got := slices.Collect(ReadTyped[pqRow](path))
 	if len(got) != len(in) {
 		t.Errorf("Stream.WriteParquet: got %d rows, want %d", len(got), len(in))
 	}
@@ -185,10 +185,10 @@ func TestParquetTimestamps(t *testing.T) {
 	t2 := time.Date(2026, 4, 29, 11, 30, 0, 0, time.UTC)
 	in := []pqTimeRow{{When: t1, Value: 100}, {When: t2, Value: 200}}
 	path := filepath.Join(t.TempDir(), "time.parquet")
-	if err := WriteParquet(slices.Values(in), path); err != nil {
+	if err := WriteTyped(slices.Values(in), path); err != nil {
 		t.Fatalf("WriteParquet: %v", err)
 	}
-	got := slices.Collect(ReadParquet[pqTimeRow](path))
+	got := slices.Collect(ReadTyped[pqTimeRow](path))
 	if len(got) != 2 {
 		t.Fatalf("time round-trip: got %d rows", len(got))
 	}
@@ -213,11 +213,11 @@ func TestParquetFiles(t *testing.T) {
 			rows = append(rows, pqRow{Name: "u", Age: int64(f*100 + i), Dept: "D"})
 		}
 		want = append(want, rows...)
-		if err := WriteParquet(slices.Values(rows), filepath.Join(dir, fmt.Sprintf("part-%d.parquet", f)), WithRowGroupSize(2)); err != nil {
+		if err := WriteTyped(slices.Values(rows), filepath.Join(dir, fmt.Sprintf("part-%d.parquet", f)), WithRowGroupSize(2)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got := slices.Collect(ReadParquetFiles[pqRow]([]string{filepath.Join(dir, "part-*.parquet")}))
+	got := slices.Collect(ReadTypedFiles[pqRow]([]string{filepath.Join(dir, "part-*.parquet")}))
 	if !slices.Equal(got, want) {
 		t.Errorf("serial over a glob:\n got %v\nwant %v", got, want)
 	}
@@ -230,31 +230,31 @@ func TestParquetFiles(t *testing.T) {
 		return out
 	}
 	for _, n := range []int{1, 3, 8} {
-		par := slices.Collect(ReadParquetFilesParallel[pqRow]([]string{filepath.Join(dir, "part-*.parquet")}, n).Serial())
+		par := slices.Collect(ReadTypedFilesParallel[pqRow]([]string{filepath.Join(dir, "part-*.parquet")}, n).Serial())
 		if !slices.Equal(ages(par), ages(want)) {
 			t.Errorf("parallel n=%d: %v, want %v", n, ages(par), ages(want))
 		}
 	}
 
 	type other struct{ Name string }
-	if err := WriteParquet(slices.Values([]other{{"x"}}), filepath.Join(dir, "zz.parquet")); err != nil {
+	if err := WriteTyped(slices.Values([]other{{"x"}}), filepath.Join(dir, "zz.parquet")); err != nil {
 		t.Fatal(err)
 	}
 	mustReadError := func(what string, fn func()) {
 		t.Helper()
 		defer func() {
 			r := recover()
-			if _, ok := r.(*ReadError); !ok {
+			if _, ok := r.(*typed.ReadError); !ok {
 				t.Errorf("%s: recovered %v (%T), want a *ReadError", what, r, r)
 			}
 		}()
 		fn()
 	}
 	mustReadError("mismatch", func() {
-		_ = slices.Collect(ReadParquetFiles[pqRow]([]string{filepath.Join(dir, "*.parquet")}))
+		_ = slices.Collect(ReadTypedFiles[pqRow]([]string{filepath.Join(dir, "*.parquet")}))
 	})
-	mustReadError("missing serial", func() { _ = slices.Collect(ReadParquet[pqRow](filepath.Join(dir, "nope.parquet"))) })
-	mustReadError("missing parallel", func() { ReadParquetParallel[pqRow](filepath.Join(dir, "nope.parquet"), 2) })
+	mustReadError("missing serial", func() { _ = slices.Collect(ReadTyped[pqRow](filepath.Join(dir, "nope.parquet"))) })
+	mustReadError("missing parallel", func() { ReadTypedParallel[pqRow](filepath.Join(dir, "nope.parquet"), 2) })
 }
 
 // TestReadParquetBatchesAreInvisible: the readers decode a row group in
@@ -272,14 +272,14 @@ func TestReadParquetBatchesAreInvisible(t *testing.T) {
 		rows = append(rows, row{ID: i, Name: fmt.Sprintf("n%03d", i), V: float64(i) / 4})
 	}
 	path := filepath.Join(t.TempDir(), "b.parquet")
-	if err := WriteParquet(slices.Values(rows), path, WithRowGroupSize(11)); err != nil {
+	if err := WriteTyped(slices.Values(rows), path, WithRowGroupSize(11)); err != nil {
 		t.Fatal(err)
 	}
 	saved := parquetBatchRows
 	parquetBatchRows = 4 // several batches per row group, the last one short
 	defer func() { parquetBatchRows = saved }()
 	var serial []row
-	for r := range ReadParquet[row](path) {
+	for r := range ReadTyped[row](path) {
 		serial = append(serial, r)
 	}
 	if !reflect.DeepEqual(serial, rows) {
@@ -287,7 +287,7 @@ func TestReadParquetBatchesAreInvisible(t *testing.T) {
 	}
 	for _, n := range []int{1, 2, 5} {
 		var par []row
-		for _, shard := range ReadParquetParallel[row](path, n).shards {
+		for _, shard := range ReadTypedParallel[row](path, n).ShardSeqs() {
 			for r := range shard {
 				par = append(par, r)
 			}
@@ -298,7 +298,7 @@ func TestReadParquetBatchesAreInvisible(t *testing.T) {
 	}
 	// Stopping early releases cleanly (no panic from a released batch).
 	n := 0
-	for range ReadParquet[row](path) {
+	for range ReadTyped[row](path) {
 		if n++; n == 6 {
 			break
 		}

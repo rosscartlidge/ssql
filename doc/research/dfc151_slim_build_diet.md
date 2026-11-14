@@ -2,7 +2,7 @@
 
 Reference: DFC151
 Created: 2026-10-15
-Last modified: 2026-10-15
+Last modified: 2026-11-14
 
 [Back to Index](./README.md)
 
@@ -284,3 +284,13 @@ release.
   piece of work.
 - Keep building the WASI and native-slim release artifacts?
 - WebVM: slim as documented, or full as shipped?
+
+## Note (2026-11-14): the library's slim stubs are gone
+
+[DFC168](./dfc168_heavy_formats_as_packages.md) moved Parquet, Arrow and
+XLSX out of the root and `typed` packages into packages of their own, so
+the library no longer needs a slim twin for them. `arrow_slim.go`,
+`parquet_slim.go` and `xlsx_slim.go` are deleted. The slim CLI refuses
+those formats through `cmd/ssql/commands/formats_slim.go`; only
+`http_source_slim.go` remains in the library. `TestSlimBuildDependencies`
+still gates what the slim binary links.

@@ -82,7 +82,7 @@ func completionFieldValueSource(source, field string, maxSamples, maxRecords int
 	var closer io.Closer
 	switch {
 	case known && fi.Name == "parquet":
-		seq, err := ssql.ReadParquetColumns(source, []string{field})
+		seq, err := readParquetColumns(source, []string{field})
 		if err != nil {
 			return nil, err
 		}

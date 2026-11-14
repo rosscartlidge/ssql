@@ -54,7 +54,7 @@ func fromRecordsCountOne(format, file string) (int64, error) {
 			}
 		}
 		if f == "parquet" {
-			return ssql.ParquetRowCount(file) // footer via Range: cheap
+			return parquetRowCount(file) // footer via Range: cheap
 		}
 		return 0, fmt.Errorf("no cheap record count over http for %s — a remote line count would download the file; use `| ssql count`", file)
 	}
@@ -68,7 +68,7 @@ func fromRecordsCountOne(format, file string) (int64, error) {
 	}
 	switch f {
 	case "parquet":
-		return ssql.ParquetRowCount(file)
+		return parquetRowCount(file)
 	case "csv", "tsv":
 		lines, err := ssql.CountFileLines(file)
 		if err != nil {

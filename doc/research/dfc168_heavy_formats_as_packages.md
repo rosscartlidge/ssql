@@ -2,7 +2,7 @@
 
 Reference: DFC168
 Created: 2026-11-11
-Last modified: 2026-11-11
+Last modified: 2026-11-14
 
 [Back to Index](./README.md)
 
@@ -233,6 +233,10 @@ imports of `ssql/v4/parquet`, `ssql/v4/arrow` and `ssql/v4/xlsx`, gated
 
 ### 4.5 Typed Parquet across the registry (only if §5's bridge is chosen)
 
+**Not needed (§7, 2026-11-14):** the names move without a bridge, so
+typed Parquet lives in package `parquet` as ordinary generics. Kept as the
+design to reach for if a bridge is ever wanted.
+
 A generic function cannot be stored in a registry. The typed reader is
 already nearly non-generic underneath:
 
@@ -336,6 +340,12 @@ stages run in a loop.
 
 ## 5. Compatibility: a v4 bridge or a v5 move
 
+**Decided (§7, 2026-11-14): neither. Break in a v4 minor.** ssql has no
+outside users yet, so the names leave `ssql` and `typed` outright, with
+no forwarders and no `/v5` path change, and the CHANGELOG carries a
+"Breaking" rename table. A and B below are the analysis that preceded the
+decision.
+
 Moving `ssql.ReadParquet` to `parquet.Read` breaks every library user who
 calls it. There are two ways to do it.
 
@@ -410,6 +420,20 @@ is paid and they are all ssql's own code.
    release), or build a lean `ssql` that re-execs a full binary for the
    heavy-format stages.
 
+### 7.1 Ross's answers (plan mode, 2026-11-14)
+
+| Decision | Answer |
+|---|---|
+| 1. Compatibility | Break in a v4 minor: no outside users, so no bridge and no v5 (§5) |
+| 2. `net/http` | Stays in the root package |
+| 3. Paths | Top level: `ssql/v4/parquet`, `ssql/v4/arrow`, `ssql/v4/xlsx` |
+| 3. Names | Short: `parquet.Read`, `xlsx.Write`, `parquet.ReadTyped[T]`; the Stream methods become `parquet.WriteStream(s, …)` |
+| 4. Timing | Now |
+| 5. Exec-mode handoff | Recorded, not built |
+
+The rename table, old name to new, is in the CHANGELOG entry of the
+release that ships it.
+
 ## 8. Plan
 
 1. Measure the baseline: `generate go -run` wall time for a CSV pipeline
@@ -428,3 +452,63 @@ is paid and they are all ssql's own code.
    - DFC151, a note that the slim stubs are gone;
    - the CHANGELOG.
 7. Measure again, and add the results to this DFC.
+
+## 9. Built (2026-11-14)
+
+Built as §7.1 decided: the names moved, with no bridge.
+
+- **Packages.**
+  - `parquet` holds `record.go`, `typed.go` and `catalog.go`.
+  - `arrow` holds `arrow.go`.
+  - `xlsx` holds `xlsx.go`.
+  - `internal/arrowconv` holds the record↔Arrow conversion that `arrow` and
+    `parquet`'s record side share.
+  - The XLSX reader's typing became the root package's
+    `RecordsFromStringRows`, the CSV reader's inference over a sheet of
+    strings.
+- **`typed`** exports what a format package outside it needs:
+  - `FromShards`;
+  - `Stream.ShardSeqs`;
+  - `Stream.EachShard`, which carries the `shardGroup` panic propagation;
+  - `ColumnName`;
+  - `DecimalFieldScale`.
+- **The registry is one hook.**
+  - `ssql.RegisterParquetReader` is set by `parquet`'s `init` and used by
+    the catalog's local fast path.
+  - Without the hook, the error names the import to add.
+  - Generated record catalog programs blank-import `parquet`.
+- **The CLI** reaches the formats in exec mode through
+  `commands/formats.go`. Its slim twin refuses, so the library's slim stubs
+  are gone; only `http_source_slim.go` remains.
+- **Codegen.**
+  - Each fragment names its format's import (`commands/format_imports.go`).
+  - Both assemblers now drop an ssql-module import the body never names
+    (`dropUnusedModuleImports`, using `go/scanner` so a comment is not a
+    use). A typed stage made only of Stream methods had declared `typed`
+    without using it, which was invisible while every typed source called
+    `typed.ReadX`.
+- **Found on the way:** a generated `to xlsx` program had never compiled
+  (`ctx.Stderr()` undefined).
+- **The test-suite stopgap** (`slim_build_test.go`) is deleted.
+- **`TestGeneratedProgramLinksOnlyItsFormats`** builds and runs one program
+  per format, in record and typed mode, and reads `go version -m`. It was
+  watched to fail:
+  - a blank Arrow import in the root package turned every CSV case red;
+  - the `ctx` bug turned the xlsx sink red.
+
+Measured (24 cores, warm build cache, `generate go -build` of
+`from employees.csv | where | to csv`):
+
+| | Before | After |
+|---|---|---|
+| CSV program, record: build | 1.47 s | 0.62 s |
+| CSV program, record: size | 46.1 MB | 11.5 MB |
+| CSV program, record: per run (200 runs, 15-row file) | 10.3 ms | 3.5 ms |
+| CSV program, typed: build | 1.55 s | 0.65 s |
+| xlsx program: build | 1.47 s | 0.73 s (14.9 MB) |
+| Parquet program: build | 1.47 s | 1.46 s (unchanged: it links Arrow) |
+| typed Parquet over 660 MB, where + group-by | 0.16–0.34 s | 0.15–0.21 s, same output |
+| record Parquet over 660 MB | 5.19–5.24 s | 5.28–5.41 s, same output |
+
+The Parquet rows are within run-to-run noise. The move changed what links,
+not the decoders.

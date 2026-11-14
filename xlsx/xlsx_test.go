@@ -1,11 +1,10 @@
-//go:build !slim
-
-package ssql
+package xlsx
 
 import (
 	"os"
 	"testing"
 
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -54,16 +53,16 @@ func TestReadXLSX(t *testing.T) {
 		},
 	)
 
-	records, err := ReadXLSX(path)
+	records, err := Read(path)
 	if err != nil {
 		t.Fatalf("ReadXLSX error: %v", err)
 	}
 
 	var count int
 	for r := range records {
-		name := GetOr(r, "name", "")
-		age := GetOr(r, "age", int64(0))
-		city := GetOr(r, "city", "")
+		name := ssql.GetOr(r, "name", "")
+		age := ssql.GetOr(r, "age", int64(0))
+		city := ssql.GetOr(r, "city", "")
 
 		switch count {
 		case 0:
@@ -109,15 +108,15 @@ func TestReadXLSXSpecificSheet(t *testing.T) {
 	}
 
 	// Read the Sales sheet
-	records, err := ReadXLSX(path, XLSXConfig{SheetName: "Sales"})
+	records, err := Read(path, Config{SheetName: "Sales"})
 	if err != nil {
 		t.Fatalf("ReadXLSX error: %v", err)
 	}
 
 	var count int
 	for r := range records {
-		product := GetOr(r, "product", "")
-		revenue := GetOr(r, "revenue", float64(0))
+		product := ssql.GetOr(r, "product", "")
+		revenue := ssql.GetOr(r, "revenue", float64(0))
 
 		if product != "Widget" || revenue != 100.50 {
 			t.Errorf("Got product=%q revenue=%v", product, revenue)
@@ -139,7 +138,7 @@ func TestReadXLSXTypeInference(t *testing.T) {
 		},
 	)
 
-	records, err := ReadXLSX(path)
+	records, err := Read(path)
 	if err != nil {
 		t.Fatalf("ReadXLSX error: %v", err)
 	}
@@ -148,10 +147,10 @@ func TestReadXLSXTypeInference(t *testing.T) {
 	for r := range records {
 		switch count {
 		case 0:
-			name := GetOr(r, "name", "")
-			cnt := GetOr(r, "count", int64(0))
-			price := GetOr(r, "price", float64(0))
-			active := GetOr(r, "active", "")
+			name := ssql.GetOr(r, "name", "")
+			cnt := ssql.GetOr(r, "count", int64(0))
+			price := ssql.GetOr(r, "price", float64(0))
+			active := ssql.GetOr(r, "active", "")
 
 			if name != "Alice" {
 				t.Errorf("Expected name=Alice, got %q", name)
@@ -165,7 +164,7 @@ func TestReadXLSXTypeInference(t *testing.T) {
 			// excelize renders bools as TRUE/FALSE strings in GetRows
 			if active != "TRUE" && active != "true" && active != "1" {
 				// Check if it parsed as bool
-				if b, ok := Get[bool](r, "active"); ok {
+				if b, ok := ssql.Get[bool](r, "active"); ok {
 					if !b {
 						t.Errorf("Expected active=true, got false")
 					}
@@ -183,19 +182,19 @@ func TestReadXLSXTypeInference(t *testing.T) {
 }
 
 func TestWriteXLSX(t *testing.T) {
-	r1 := MakeMutableRecord().
+	r1 := ssql.MakeMutableRecord().
 		String("name", "Alice").
 		Int("age", 30).
 		Float("salary", 95000.50).
 		Freeze()
 
-	r2 := MakeMutableRecord().
+	r2 := ssql.MakeMutableRecord().
 		String("name", "Bob").
 		Int("age", 25).
 		Float("salary", 75000.00).
 		Freeze()
 
-	records := func(yield func(Record) bool) {
+	records := func(yield func(ssql.Record) bool) {
 		if !yield(r1) {
 			return
 		}
@@ -203,7 +202,7 @@ func TestWriteXLSX(t *testing.T) {
 	}
 
 	path := t.TempDir() + "/output.xlsx"
-	if err := WriteXLSX(records, path); err != nil {
+	if err := Write(records, path); err != nil {
 		t.Fatalf("WriteXLSX error: %v", err)
 	}
 
@@ -213,15 +212,15 @@ func TestWriteXLSX(t *testing.T) {
 	}
 
 	// Read it back
-	readBack, err := ReadXLSX(path)
+	readBack, err := Read(path)
 	if err != nil {
 		t.Fatalf("ReadXLSX error reading back: %v", err)
 	}
 
 	var count int
 	for r := range readBack {
-		name := GetOr(r, "name", "")
-		age := GetOr(r, "age", int64(0))
+		name := ssql.GetOr(r, "name", "")
+		age := ssql.GetOr(r, "age", int64(0))
 
 		switch count {
 		case 0:
@@ -242,27 +241,27 @@ func TestWriteXLSX(t *testing.T) {
 }
 
 func TestWriteXLSXCustomSheet(t *testing.T) {
-	r1 := MakeMutableRecord().String("item", "Widget").Int("qty", 10).Freeze()
+	r1 := ssql.MakeMutableRecord().String("item", "Widget").Int("qty", 10).Freeze()
 
-	records := func(yield func(Record) bool) {
+	records := func(yield func(ssql.Record) bool) {
 		yield(r1)
 	}
 
 	path := t.TempDir() + "/custom.xlsx"
-	if err := WriteXLSX(records, path, XLSXConfig{SheetName: "Inventory"}); err != nil {
+	if err := Write(records, path, Config{SheetName: "Inventory"}); err != nil {
 		t.Fatalf("WriteXLSX error: %v", err)
 	}
 
 	// Read back from the specific sheet
-	readBack, err := ReadXLSX(path, XLSXConfig{SheetName: "Inventory"})
+	readBack, err := Read(path, Config{SheetName: "Inventory"})
 	if err != nil {
 		t.Fatalf("ReadXLSX error: %v", err)
 	}
 
 	var count int
 	for r := range readBack {
-		item := GetOr(r, "item", "")
-		qty := GetOr(r, "qty", int64(0))
+		item := ssql.GetOr(r, "item", "")
+		qty := ssql.GetOr(r, "qty", int64(0))
 		if item != "Widget" || qty != 10 {
 			t.Errorf("Got item=%q qty=%d", item, qty)
 		}
@@ -286,7 +285,7 @@ func TestReadXLSXSheetNames(t *testing.T) {
 		t.Fatalf("Failed to create test XLSX: %v", err)
 	}
 
-	names, err := ReadXLSXSheetNames(path)
+	names, err := SheetNames(path)
 	if err != nil {
 		t.Fatalf("ReadXLSXSheetNames error: %v", err)
 	}
@@ -306,10 +305,10 @@ func TestReadXLSXSheetNames(t *testing.T) {
 }
 
 func TestWriteXLSXEmpty(t *testing.T) {
-	records := func(yield func(Record) bool) {}
+	records := func(yield func(ssql.Record) bool) {}
 
 	path := t.TempDir() + "/empty.xlsx"
-	if err := WriteXLSX(records, path); err != nil {
+	if err := Write(records, path); err != nil {
 		t.Fatalf("WriteXLSX error on empty records: %v", err)
 	}
 
@@ -320,7 +319,7 @@ func TestWriteXLSXEmpty(t *testing.T) {
 }
 
 func TestReadXLSXNonExistentFile(t *testing.T) {
-	_, err := ReadXLSX("/tmp/does_not_exist.xlsx")
+	_, err := Read("/tmp/does_not_exist.xlsx")
 	if err == nil {
 		t.Error("Expected error for non-existent file")
 	}
@@ -332,7 +331,7 @@ func TestReadXLSXNonExistentSheet(t *testing.T) {
 		[][]any{{"1"}},
 	)
 
-	_, err := ReadXLSX(path, XLSXConfig{SheetName: "DoesNotExist"})
+	_, err := Read(path, Config{SheetName: "DoesNotExist"})
 	if err == nil {
 		t.Error("Expected error for non-existent sheet")
 	}

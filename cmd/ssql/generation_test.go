@@ -420,13 +420,13 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			name:           "from xlsx",
 			cmdLine:        "SSQLGO=1 /tmp/ssql_test from /tmp/test_all_commands.xlsx",
 			expectFragment: true,
-			wantSubstring:  `ssql.ReadXLSX`,
+			wantSubstring:  `xlsx.Read(`,
 		},
 		{
 			name:           "to xlsx",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to xlsx /tmp/out.xlsx`,
 			expectFragment: true,
-			wantSubstring:  `ssql.WriteXLSX`,
+			wantSubstring:  `xlsx.Write(`,
 		},
 		{
 			name:           "from ssh",

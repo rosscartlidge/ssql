@@ -74,7 +74,7 @@ if err != nil {
 
 Then check that it:
 
-- reads with `ssql.ReadCSV` (or `ReadJSON`, `ReadParquet`, …) and checks the error
+- reads with `ssql.ReadCSV` (or `ssql.ReadJSON`, `parquet.Read`, …) and checks the error
 - reads fields with `ssql.GetOr(r, "age", int64(0))` — CSV numbers are `int64` or `float64`, never strings — and builds records with `ssql.MakeMutableRecord()…Freeze()`; there is no map access
 - uses `ssql.Select`, `ssql.Where`, `ssql.Limit` (not `Map`, `Filter`, `Take`), `ssql.GroupByFields` then `ssql.Aggregate` with the same group name, and parameterless `ssql.Count()`
 - imports `github.com/rosscartlidge/ssql/v4` and only the packages it uses

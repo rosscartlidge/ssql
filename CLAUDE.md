@@ -358,6 +358,8 @@ ssql from data.parquet | ssql where -if age gt 25 | ssql to parquet output.parqu
 ```
 **Note:** Parquet requires a file (random-access format) — no stdin support.
 
+**Heavy formats are packages (DFC168):** Parquet (record and typed), Arrow and XLSX live in `ssql/v4/parquet`, `ssql/v4/arrow` and `ssql/v4/xlsx`. The root and `typed` packages must never import Apache Arrow, Parquet or excelize again: every program would link 30 MB and 1 s more (a generated CSV program went from 46 MB and 1.5 s to 11.5 MB and 0.6 s). A fragment that uses a format adds its import path (`parquetImport` and the others in `commands/format_imports.go`); exec-mode commands reach a format through `commands/formats.go`, whose slim twin refuses; the root package reaches Parquet only through the hook `RegisterParquetReader` (the catalog's local fast path). `TestGeneratedProgramLinksOnlyItsFormats` builds a program per format and fails on one that links a format its pipeline does not use.
+
 ## SQL Generation
 
 `generate sql` produces DuckDB-compatible SQL from the same pipeline fragments as `generate go`:

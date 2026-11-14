@@ -1,36 +1,23 @@
-//go:build !slim
-
-package ssql
+package parquet
 
 import (
 	"reflect"
 	"slices"
 	"testing"
+
+	ssql "github.com/rosscartlidge/ssql/v4"
 )
 
-// testdata/nested_uuid.parquet was written by DuckDB 1.5:
-//
-//	COPY (SELECT * FROM (VALUES
-//	  (1, {'x': 10, 'y': 'a'}, '6ba7b810-9dad-11d1-80b4-00c04fd430c8'::UUID, [1, 2], MAP {'k': 1}, 100),
-//	  (2, {'x': 20, 'y': 'b'}, NULL, [], MAP {}, 200)) t(n, s, u, l, mp, m))
-//	TO 'nested_uuid.parquet'
-//
-// Six fields over eight leaves (s has two, l one, mp two), so a reader
-// that hands pqarrow field indices where it takes leaf indices reads
-// the wrong columns past s (it dropped m and cut s short; a partial map
-// panicked), and u is a UUID logical type over 16-byte binary (DFC162 §1).
-const nestedUUIDParquet = "testdata/nested_uuid.parquet"
-
 func TestReadParquetNestedAndUUID(t *testing.T) {
-	recs, err := ReadParquet(nestedUUIDParquet)
+	recs, err := Read(nestedUUIDParquet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := slices.Collect(recs)
 	want := []map[string]any{
-		{"n": int64(1), "s": JSONString(`{"x":10,"y":"a"}`), "u": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-			"l": JSONString(`[1,2]`), "mp": JSONString(`{"k":1}`), "m": int64(100)},
-		{"n": int64(2), "s": JSONString(`{"x":20,"y":"b"}`), "l": JSONString(`[]`), "mp": JSONString(`{}`), "m": int64(200)},
+		{"n": int64(1), "s": ssql.JSONString(`{"x":10,"y":"a"}`), "u": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+			"l": ssql.JSONString(`[1,2]`), "mp": ssql.JSONString(`{"k":1}`), "m": int64(100)},
+		{"n": int64(2), "s": ssql.JSONString(`{"x":20,"y":"b"}`), "l": ssql.JSONString(`[]`), "mp": ssql.JSONString(`{}`), "m": int64(200)},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d rows, want %d", len(got), len(want))
@@ -48,7 +35,7 @@ func TestReadParquetNestedAndUUID(t *testing.T) {
 	}
 
 	// A projection that starts past the nested fields reads those columns.
-	recs, err = ReadParquetColumns(nestedUUIDParquet, []string{"m", "u", "s"})
+	recs, err = ReadColumns(nestedUUIDParquet, []string{"m", "u", "s"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +43,11 @@ func TestReadParquetNestedAndUUID(t *testing.T) {
 	if keys := slices.Collect(first.KeysIter()); !slices.Equal(keys, []string{"m", "u", "s"}) {
 		t.Errorf("projected fields %v, want [m u s]", keys)
 	}
-	if m, u, s := GetOr(first, "m", int64(0)), GetOr(first, "u", ""), GetOr(first, "s", JSONString("")); m != 100 || u != "6ba7b810-9dad-11d1-80b4-00c04fd430c8" || s != `{"x":10,"y":"a"}` {
+	if m, u, s := ssql.GetOr(first, "m", int64(0)), ssql.GetOr(first, "u", ""), ssql.GetOr(first, "s", ssql.JSONString("")); m != 100 || u != "6ba7b810-9dad-11d1-80b4-00c04fd430c8" || s != `{"x":10,"y":"a"}` {
 		t.Errorf("projected row: m=%v u=%q s=%q", m, u, s)
 	}
 
-	names, types, err := ParquetSchemaFields(nestedUUIDParquet)
+	names, types, err := SchemaFields(nestedUUIDParquet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +68,7 @@ func TestReadParquetNestedAndUUID(t *testing.T) {
 // non-finite number is absent in ssql), and a decimal keeps its scale's
 // digits (12.50, where DuckDB writes 12.5 — the same number).
 func TestReadParquetNestedJSON(t *testing.T) {
-	recs, err := ReadParquet("testdata/nested_deep.parquet")
+	recs, err := Read("../testdata/nested_deep.parquet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +79,7 @@ func TestReadParquetNestedJSON(t *testing.T) {
 		"lf": `[[1.5,2.25,null],[]]`,
 		"ld": `[12.50]`,
 	} {
-		got := GetOr(r, field, JSONString(""))
+		got := ssql.GetOr(r, field, ssql.JSONString(""))
 		if string(got) != want {
 			t.Errorf("%s: got %s, want %s", field, got, want)
 		}

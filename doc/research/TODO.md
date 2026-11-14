@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-11
+Last modified: 2026-11-14
 
 [Back to Index](./README.md)
 
@@ -186,9 +186,11 @@ Tracked issues and feature gaps discovered during development.
      tests~~ DONE 2026-11-11 (30 tests; `TestRecordCodegenUnknownFieldIsLoud`
      moved off the shared `/tmp/ssql_test`). Suite 1,465 → 556 s, green twice;
   3. `-ldflags=-s -w` on test builds: 1.4 → 0.9 s a link;
-  4. the heavy formats out of the root and `typed` packages, so a program
-     links only what it reads: [DFC168](./dfc168_heavy_formats_as_packages.md),
-     awaiting Ross's decisions (§7). It replaces option 1's stopgap.
+  4. ~~the heavy formats out of the root and `typed` packages, so a program
+     links only what it reads~~ DONE 2026-11-14:
+     [DFC168](./dfc168_heavy_formats_as_packages.md) §9. Option 1's stopgap
+     is deleted; the suite is 559 s without it (556 s with it), and a
+     generated CSV program links in 0.6 s at 11.5 MB.
 - [ ] **Declared types in DFC133's random differential** (DFC163 §2.3):
   the generator declares `-type col decimal:2|int128|time|inet` per
   column, with one typed program per run over a sample.

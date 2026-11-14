@@ -64,7 +64,7 @@ func TestGenerateGoOptimisesByDefault(t *testing.T) {
 				t.Errorf("[%s] optimised source lacks %q:\n%s", mode, want, src[:min(len(src), 1500)])
 			}
 		}
-		pruned := map[string]string{"typed": `typed.ParquetColumns("dept")`, "record": `[]string{"dept"}`}[mode]
+		pruned := map[string]string{"typed": `parquet.Columns("dept")`, "record": `[]string{"dept"}`}[mode]
 		if !strings.Contains(src, pruned) {
 			t.Errorf("[%s] generated read is not pruned to dept (want %s)", mode, pruned)
 		}
@@ -85,7 +85,7 @@ func TestGenerateGoPlusOTurnsOptimiserOff(t *testing.T) {
 			t.Errorf("+O source still carries %q", reject)
 		}
 	}
-	if !strings.Contains(src, "typed.ReadParquetParallel[") {
+	if !strings.Contains(src, "parquet.ReadTypedParallel[") {
 		t.Errorf("+O source should read the parquet unpruned:\n%s", src[:min(len(src), 1200)])
 	}
 }

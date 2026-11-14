@@ -154,7 +154,7 @@ func TestCatalogHive(t *testing.T) {
 	// compiled the whole program as records. The equivalence corpus
 	// holds the results in every lane; this is the form.
 	out, err = run("export SSQL_MODE=typed; " + bin + " from catalog -hive " + glob + " -shard-field shard | " + bin + " include id region shard | " + bin + " to csv | " + bin + " generate go")
-	if err != nil || !strings.Contains(out, "typed.ReadParquetSourcesParallel[DataRow](sources, 0)") || !strings.Contains(out, "typed.CatalogParquetSources(entries, \"shard\")") || !strings.Contains(out, "Region") || !strings.Contains(out, "Shard") || strings.Contains(out, "ProcessCatalogShards") {
+	if err != nil || !strings.Contains(out, "parquet.ReadSourcesParallel[DataRow](sources, 0)") || !strings.Contains(out, "parquet.CatalogSources(entries, \"shard\")") || !strings.Contains(out, "Region") || !strings.Contains(out, "Shard") || strings.Contains(out, "ProcessCatalogShards") {
 		t.Errorf("typed program over a hive catalog: %v\n%s", err, out)
 	}
 	out, err = runGeneratedPipeline(t, bin, dir, "typed", bin+" from catalog -hive "+glob+" -shard-field shard | "+bin+" sort id | "+bin+" include id region shard | "+bin+" to csv")

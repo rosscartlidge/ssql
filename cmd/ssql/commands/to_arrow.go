@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -58,11 +57,12 @@ func registerToArrow(cmd *cf.SubcommandBuilder) {
 			records := schemaAndRecords.Records
 
 			// Write as Arrow
-			var opts []ssql.ArrowWriteOption
+			var fields []string
+			var types map[string]string
 			if s := schemaAndRecords.Schema; s != nil {
-				opts = append(opts, ssql.WithArrowColumnTypes(s.Fields, s.Types))
+				fields, types = s.Fields, s.Types
 			}
-			if err := ssql.WriteArrow(records, outputFile, opts...); err != nil {
+			if err := writeArrow(records, outputFile, fields, types); err != nil {
 				return fmt.Errorf("writing Arrow file: %w", err)
 			}
 
@@ -93,12 +93,12 @@ func generateToArrowCode(filename string) error {
 	params := []lib.CodeParam{
 		{Name: "output", Default: filename, Help: "output Arrow file", VarName: "flagOutput"},
 	}
-	code := fmt.Sprintf(`if err := ssql.WriteArrow(%s, *flagOutput); err != nil {
+	code := fmt.Sprintf(`if err := arrow.Write(%s, *flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing Arrow: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
 
-	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os", arrowImport}, getCommandString())
 
 	stampSinkFile(frag, filename, nil)
 	frag.Params = params

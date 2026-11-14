@@ -133,13 +133,13 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 				// Optimized path: direct Arrow signal extraction
-				signalA, err = ssql.ExtractSignalFromArrow(inputFile, field)
+				signalA, err = extractSignalFromArrow(inputFile, field)
 				if err != nil {
 					return fmt.Errorf("extracting signal from Arrow: %w", err)
 				}
 				if !auto || maxLag == 0 {
 					// Need second signal for cross-correlation or full autocorrelation
-					signalB, err = ssql.ExtractSignalFromArrow(inputFile, withField)
+					signalB, err = extractSignalFromArrow(inputFile, withField)
 					if err != nil {
 						return fmt.Errorf("extracting second signal from Arrow: %w", err)
 					}
@@ -244,7 +244,7 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 
 		var signalBExtract string
 		if !auto {
-			signalBExtract = fmt.Sprintf(`signalB, err := ssql.ExtractSignalFromArrow(%q, %q)
+			signalBExtract = fmt.Sprintf(`signalB, err := arrow.ExtractSignal(%q, %q)
 	if err != nil {
 		return fmt.Errorf("Error extracting second signal: %%w", err)
 	}
@@ -252,7 +252,7 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 	`, inputFile, fieldB)
 		}
 
-		code := fmt.Sprintf(`signalA, err := ssql.ExtractSignalFromArrow(%q, %q)
+		code := fmt.Sprintf(`signalA, err := arrow.ExtractSignal(%q, %q)
 	if err != nil {
 		return fmt.Errorf("Error extracting signal: %%w", err)
 	}
@@ -268,7 +268,7 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 			correlateCall,
 			outputField)
 
-		frag := lib.NewInitFragment("correlatedRecords", code, []string{"os"}, getCommandString())
+		frag := lib.NewInitFragment("correlatedRecords", code, []string{"os", arrowImport}, getCommandString())
 		return lib.WriteCodeFragment(frag)
 	}
 

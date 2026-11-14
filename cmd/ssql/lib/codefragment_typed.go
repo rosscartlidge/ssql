@@ -333,7 +333,7 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	}
 
 	code.WriteString("\treturn nil\n}\n")
-	return code.String(), nil
+	return dropUnusedModuleImports(code.String()), nil
 }
 
 // collectTypedStructs gathers and dedupes StructDefs from every

@@ -519,7 +519,9 @@ func generateFromCatalogCode(catalogFile string, hive, gpu bool, filters []ssql.
 		hive, filterCode, requireVersion, pipelineCode, mode, shardField, opts.RemoteBin,
 	)
 
-	imports := []string{"fmt", "os", "strconv"}
+	// A local Parquet shard is read in process when package parquet is
+	// linked (catalog_local.go); the blank import links it.
+	imports := []string{"fmt", "os", "strconv", "_ " + parquetImport}
 	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)

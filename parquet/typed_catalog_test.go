@@ -1,6 +1,4 @@
-//go:build !slim
-
-package typed
+package parquet
 
 import (
 	"fmt"
@@ -11,6 +9,7 @@ import (
 	"testing"
 
 	ssql "github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/typed"
 )
 
 // A catalog's shards read typed (DFC149 §4.6): each file's constants —
@@ -30,22 +29,22 @@ func TestParquetSources(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := WriteParquet(slices.Values(rows), p, WithRowGroupSize(2)); err != nil {
+		if err := WriteTyped(slices.Values(rows), p, WithRowGroupSize(2)); err != nil {
 			t.Fatal(err)
 		}
 		return p
 	}
 	north := write("north", pqRow{Name: "hal", Age: 6}, pqRow{Name: "gus", Age: 3}, pqRow{Name: "amy", Age: 5})
 	south := write("south", pqRow{Name: "ivy", Age: 8}, pqRow{Name: "jon", Age: 1})
-	sources := []ParquetSource{
-		{Path: north, Constants: []ParquetConstant{{Name: "shard", Value: "local:" + north}, {Name: "region", Value: "north", FromPath: true}}},
-		{Path: south, Constants: []ParquetConstant{{Name: "shard", Value: "local:" + south}, {Name: "region", Value: "south", FromPath: true}}},
+	sources := []Source{
+		{Path: north, Constants: []Constant{{Name: "shard", Value: "local:" + north}, {Name: "region", Value: "north", FromPath: true}}},
+		{Path: south, Constants: []Constant{{Name: "shard", Value: "local:" + south}, {Name: "region", Value: "south", FromPath: true}}},
 	}
 	want := []catRow{
 		{"hal", 6, "north", "local:" + north}, {"gus", 3, "north", "local:" + north}, {"amy", 5, "north", "local:" + north},
 		{"ivy", 8, "south", "local:" + south}, {"jon", 1, "south", "local:" + south},
 	}
-	if got := slices.Collect(ReadParquetSources[catRow](sources)); !slices.Equal(got, want) {
+	if got := slices.Collect(ReadSources[catRow](sources)); !slices.Equal(got, want) {
 		t.Errorf("serial:\n got %v\nwant %v", got, want)
 	}
 	byName := func(rows []catRow) []catRow {
@@ -54,22 +53,22 @@ func TestParquetSources(t *testing.T) {
 		return rows
 	}
 	for _, n := range []int{1, 2, 8} {
-		got := slices.Collect(ReadParquetSourcesParallel[catRow](sources, n).Serial())
+		got := slices.Collect(ReadSourcesParallel[catRow](sources, n).Serial())
 		if !slices.Equal(byName(got), byName(want)) {
 			t.Errorf("parallel n=%d:\n got %v\nwant %v", n, byName(got), byName(want))
 		}
 	}
-	if got := slices.Collect(ReadParquetSources[catRow](nil)); len(got) != 0 {
+	if got := slices.Collect(ReadSources[catRow](nil)); len(got) != 0 {
 		t.Errorf("no sources: %v", got)
 	}
-	if s := ReadParquetSourcesParallel[catRow](nil, 4); s.n != 0 {
-		t.Errorf("no sources, parallel: %d shards", s.n)
+	if s := ReadSourcesParallel[catRow](nil, 4); s.Shards() != 0 {
+		t.Errorf("no sources, parallel: %d shards", s.Shards())
 	}
 
 	// A file column of the same name: a catalog column takes its place,
 	// a key from the path is a clash.
-	inPlace := []ParquetSource{{Path: north, Constants: []ParquetConstant{{Name: "name", Value: "x"}}}}
-	for _, r := range slices.Collect(ReadParquetSources[catRow](inPlace)) {
+	inPlace := []Source{{Path: north, Constants: []Constant{{Name: "name", Value: "x"}}}}
+	for _, r := range slices.Collect(ReadSources[catRow](inPlace)) {
 		if r.Name != "x" {
 			t.Errorf("catalog column in place of the file's: %v", r)
 		}
@@ -78,7 +77,7 @@ func TestParquetSources(t *testing.T) {
 		t.Helper()
 		defer func() {
 			r := recover()
-			re, ok := r.(*ReadError)
+			re, ok := r.(*typed.ReadError)
 			if !ok {
 				t.Errorf("%s: recovered %v (%T), want a *ReadError", what, r, r)
 				return
@@ -90,13 +89,13 @@ func TestParquetSources(t *testing.T) {
 		fn()
 	}
 	mustReadError("path key clash", `partition key "name" is also a column of the file`, func() {
-		_ = slices.Collect(ReadParquetSources[catRow]([]ParquetSource{{Path: north, Constants: []ParquetConstant{{Name: "name", Value: "x", FromPath: true}}}}))
+		_ = slices.Collect(ReadSources[catRow]([]Source{{Path: north, Constants: []Constant{{Name: "name", Value: "x", FromPath: true}}}}))
 	})
 	mustReadError("no field", `adds column "year", which catRow has no field for`, func() {
-		_ = slices.Collect(ReadParquetSources[catRow]([]ParquetSource{{Path: north, Constants: []ParquetConstant{{Name: "year", Value: "2023"}}}}))
+		_ = slices.Collect(ReadSources[catRow]([]Source{{Path: north, Constants: []Constant{{Name: "year", Value: "2023"}}}}))
 	})
 	mustReadError("not a string", `column "age" is field Age of type int64`, func() {
-		ReadParquetSourcesParallel[catRow]([]ParquetSource{{Path: north, Constants: []ParquetConstant{{Name: "age", Value: "7"}}}}, 2)
+		ReadSourcesParallel[catRow]([]Source{{Path: north, Constants: []Constant{{Name: "age", Value: "7"}}}}, 2)
 	})
 
 	// The sources a loaded catalog gives: the record lane's metadata,
@@ -105,7 +104,7 @@ func TestParquetSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := CatalogParquetSources(entries, "shard")
+	got, err := CatalogSources(entries, "shard")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,11 +112,11 @@ func TestParquetSources(t *testing.T) {
 		t.Errorf("CatalogParquetSources:\n got %v\nwant %v", got, sources)
 	}
 	remote := append(slices.Clone(entries), ssql.CatalogEntry{Host: "db1", Path: "/data/x.parquet"})
-	if _, err := CatalogParquetSources(remote, ""); err == nil || !strings.Contains(err.Error(), "db1:/data/x.parquet is not a Parquet file on this host") {
+	if _, err := CatalogSources(remote, ""); err == nil || !strings.Contains(err.Error(), "db1:/data/x.parquet is not a Parquet file on this host") {
 		t.Errorf("remote shard: %v", err)
 	}
 	csv := []ssql.CatalogEntry{{Host: "local", Path: "/data/x.csv"}}
-	if _, err := CatalogParquetSources(csv, ""); err == nil || !strings.Contains(err.Error(), `(format "csv")`) {
+	if _, err := CatalogSources(csv, ""); err == nil || !strings.Contains(err.Error(), `(format "csv")`) {
 		t.Errorf("csv shard: %v", err)
 	}
 }

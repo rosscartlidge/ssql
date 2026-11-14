@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/parquet"
 )
 
 // pqRow is one fixture row: id, name, amount, and region when the file
@@ -32,7 +33,7 @@ func corpusParquet(withRegion bool, rows ...pqRow) string {
 		}
 	}
 	var buf bytes.Buffer
-	if err := ssql.WriteParquetToWriter(seq, &buf); err != nil {
+	if err := parquet.WriteTo(seq, &buf); err != nil {
 		panic(err)
 	}
 	return buf.String()

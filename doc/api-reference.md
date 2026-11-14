@@ -25,7 +25,7 @@ struct-based fast path.
 11. [Joins and Set Operations](#joins-and-set-operations)
 12. [Window and Time](#window-and-time) — analytic functions, batch windows, resampling
 13. [Composition](#composition) — Pipe, Chain, Tee
-14. [I/O Operations](#io-operations) — CSV, TSV, JSON, lines, commands, Parquet, Arrow, XLSX, WAV, HTTP, tables
+14. [I/O Operations](#io-operations) — CSV, TSV, JSON, lines, commands, Parquet, Arrow, XLSX (their own packages), WAV, HTTP, tables
 15. [Signal Processing](#signal-processing)
 16. [Chart & Visualization](#chart--visualization)
 17. [Error Handling](#error-handling)
@@ -1765,61 +1765,99 @@ for p := range processes {
 }
 ```
 
-### Parquet
+### Heavy formats are packages: parquet, arrow, xlsx
+
+Parquet, Arrow and Excel each live in a package of their own, so a
+program links Apache Arrow (about 30 MB) or excelize only when it
+imports one (DFC168; before v4.147 they were functions of the root
+package and every program linked them):
 
 ```go
-func ReadParquet(filename string) (iter.Seq[Record], error)
-func ReadParquetColumns(filename string, columns []string) (iter.Seq[Record], error)   // read only these columns, in the order given: the big lever on wide files
-func ReadParquetFiles(paths, columns []string) (iter.Seq[Record], error)   // several files (or glob patterns) in order as one stream; they must share one schema
-func CheckParquetSchemas(files []string) error                             // same columns, order and types as the first file, or an error naming the difference
-func ExpandFilePatterns(args []string) ([]string, error)                   // globs → sorted matches in place; no match and ** are errors; URLs untouched
-func ReadParquetFromReader(r parquet.ReaderAtSeeker) (iter.Seq[Record], error)
-func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWriteOption) error
-func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...ParquetWriteOption) error
-func WithCompression(name string) ParquetWriteOption   // snappy (default), gzip, zstd, none
-func WithRowGroupSize(n int) ParquetWriteOption        // default 1_000_000; one row group is one parallel shard
-func WithColumnTypes(fields []string, types map[string]string) ParquetWriteOption   // a _schema header's columns: keeps an all-null column's type; an empty input writes a zero-row file
-func ParquetRowCount(filename string) (int64, error)                            // from the footer, no scan
-func ParquetSchemaFields(filename string) ([]string, map[string]string, error)  // names and wire types from the footer
+import (
+    "github.com/rosscartlidge/ssql/v4/arrow"
+    "github.com/rosscartlidge/ssql/v4/parquet"
+    "github.com/rosscartlidge/ssql/v4/xlsx"
+)
+```
+
+`ssql generate go` imports exactly the ones a pipeline reads or writes.
+
+Two root functions are the format packages' plumbing:
+
+```go
+func RecordsFromStringRows(headers []string, rows [][]string) iter.Seq[Record]   // a sheet of text cells typed as the CSV reader types a file (package xlsx's core)
+func RegisterParquetReader(read func(path string) (iter.Seq[Record], error))   // set by package parquet's init: the catalog's in-process read of a local Parquet shard
+```
+
+### Parquet (package parquet)
+
+```go
+// records
+func Read(filename string) (iter.Seq[ssql.Record], error)
+func ReadColumns(filename string, columns []string) (iter.Seq[ssql.Record], error)   // read only these columns, in the order given: the big lever on wide files
+func ReadFiles(paths, columns []string) (iter.Seq[ssql.Record], error)   // several files (or glob patterns) in order as one stream; they must share one schema
+func CheckSchemas(files []string) error                                  // same columns, order and types as the first file, or an error naming the difference
+func ReadFrom(r parquet.ReaderAtSeeker) (iter.Seq[ssql.Record], error)
+func Write(records iter.Seq[ssql.Record], filename string, opts ...WriteOption) error
+func WriteTo(records iter.Seq[ssql.Record], w io.Writer, opts ...WriteOption) error
+func WithCompression(name string) WriteOption   // snappy (default), gzip, zstd, none
+func WithRowGroupSize(n int) WriteOption        // default 1_000_000; one row group is one parallel shard
+func WithColumnTypes(fields []string, types map[string]string) WriteOption   // record writers: a _schema header's columns: keeps an all-null column's type; an empty input writes a zero-row file
+func RowCount(filename string) (int64, error)                            // from the footer, no scan
+func SchemaFields(filename string) ([]string, map[string]string, error)  // names and wire types from the footer
+
+// typed structs (see typed-reference.md)
+func ReadTyped[T any](filename string, opts ...Option) iter.Seq[T]
+func ReadTypedParallel[T any](filename string, n int, opts ...Option) typed.Stream[T]
+func WriteTyped[T any](seq iter.Seq[T], filename string, opts ...WriteOption) error
+func WriteStream[T any](s typed.Stream[T], filename string, opts ...WriteOption) error
+```
+
+`ReadFiles` expands its arguments with the root package's:
+
+```go
+func ExpandFilePatterns(args []string) ([]string, error)   // globs → sorted matches in place; no match and ** are errors; URLs untouched
 ```
 
 Parquet is a random-access format: a file, not stdin.
 
 The writers type each column from all of its values: int and float
 make float, any other mix makes string, a `time.Time` is a timestamp
-(microseconds, UTC — the type `typed.WriteParquet` writes), and a
+(microseconds, UTC — the type `parquet.WriteTyped` writes), and a
 field first seen in a later record is still written. With no records
 and no declared columns there is no schema, so the writers return an
-error and create no file. `ParquetSchemaFields` reports timestamp and
+error and create no file. `SchemaFields` reports timestamp and
 date columns as `time`.
 
-### Arrow
+### Arrow (package arrow)
 
 ```go
-func ReadArrow(filename string) (iter.Seq[Record], error)    // .arrow / .feather
-func ReadArrowFromReader(r io.Reader) iter.Seq[Record]
-func WriteArrow(records iter.Seq[Record], filename string, opts ...ArrowWriteOption) error   // ZSTD-compressed
-func WriteArrowToWriter(records iter.Seq[Record], w io.Writer, opts ...ArrowWriteOption) error
-func WithArrowColumnTypes(fields []string, types map[string]string) ArrowWriteOption   // as WithColumnTypes
+func Read(filename string) (iter.Seq[ssql.Record], error)    // .arrow / .feather
+func ReadFrom(r io.Reader) iter.Seq[ssql.Record]
+func Write(records iter.Seq[ssql.Record], filename string, opts ...WriteOption) error   // ZSTD-compressed
+func WriteTo(records iter.Seq[ssql.Record], w io.Writer, opts ...WriteOption) error
+func WithColumnTypes(fields []string, types map[string]string) WriteOption   // as parquet.WithColumnTypes
+func ExtractSignal(filename string, field string) (ssql.Signal, error)      // one numeric column straight to a Signal
+func ExtractSignalFrom(r io.Reader, field string) (ssql.Signal, error)
 ```
 
 Columnar, zero-copy, and the fastest way to move large record sets
 between processes.
 
-### XLSX
+### XLSX (package xlsx)
 
 ```go
-func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error)   // row 1 is the header; types inferred from cells
-func WriteXLSX(records iter.Seq[Record], filename string, config ...XLSXConfig) error
-func ReadXLSXSheetNames(filename string) ([]string, error)
-func DefaultXLSXConfig() XLSXConfig
-type XLSXConfig struct {
+func Read(filename string, config ...Config) (iter.Seq[ssql.Record], error)   // row 1 is the header; types inferred as the CSV reader does
+func Write(records iter.Seq[ssql.Record], filename string, config ...Config) error
+func SheetNames(filename string) ([]string, error)
+func DefaultConfig() Config
+type Config struct {
     SheetName string // to read (default: the first) or write (default "Sheet1")
 }
 ```
 
 ```go
-records, err := ssql.ReadXLSX("workbook.xlsx", ssql.XLSXConfig{SheetName: "Sales"})
+records, err := xlsx.Read("workbook.xlsx", xlsx.Config{SheetName: "Sales"})
 ```
 
 XLSX loads the whole file; for streaming, use CSV.
@@ -1834,8 +1872,7 @@ func WriteWAV(records iter.Seq[Record], filename string, sampleRate int) error  
 func WriteWAVToWriter(records iter.Seq[Record], w io.Writer, sampleRate int) error
 func ExtractSignalFromWAV(filename string) (Signal, *WAVMetadata, error)         // straight to a Signal, no records
 func ExtractSignalFromWAVChannel(filename string, channel int) (Signal, *WAVMetadata, error)
-func ExtractSignalFromArrow(filename string, field string) (Signal, error)
-func ExtractSignalFromArrowReader(r io.Reader, field string) (Signal, error)
+// an Arrow column: arrow.ExtractSignal (package arrow)
 ```
 
 ### HTTP sources
@@ -1857,6 +1894,7 @@ func (h *HTTPFile) Size() int64
 func (h *HTTPFile) Requests() int64   // Range requests made so far
 func (h *HTTPFile) Prefetch(ranges []ByteRange) error   // fetch ranges concurrently (adjacent ones merged up to 4MB); ReadAt inside one is served from memory
 func (h *HTTPFile) DropPrefetched()                      // release the prefetched bytes
+func (h *HTTPFile) SetPrefetchMaxRange(n int64)          // this file's coalesced request size (default 4MB)
 func (h *HTTPFile) Close() error                         // releases the prefetched bytes; makes an HTTPFile an InputAt
 type ByteRange struct{ Off, Len int64 }
 ```
@@ -2280,7 +2318,7 @@ func WriteCatalog(w io.Writer, entries []CatalogEntry) error      // columns in 
 func CatalogRecordMetadata(e CatalogEntry, shardField string) (names, values []string) // the metadata a shard's records carry, in order: the shard field (host:path), then the columns; range columns and empty values skipped
 func CatalogEntryFormat(e CatalogEntry) string                 // the catalog's format column, else the path's extension
 // ProcessCatalogShards and ProcessCatalogShardsRemoteGo read a local Parquet shard in-process when no stages are pushed down (DFC149 §4.4)
-func CatalogLocalParquet(e CatalogEntry, pushdown [][]string) bool   // that shard: a Parquet file on this host with nothing pushed down; the typed program reads such a catalog with typed.CatalogParquetSources (DFC149 §4.6)
+func CatalogLocalParquet(e CatalogEntry, pushdown [][]string) bool   // that shard: a Parquet file on this host with nothing pushed down; the typed program reads such a catalog with parquet.CatalogSources (DFC149 §4.6); the in-process read needs package parquet linked, and without it is an error naming the import
 func PruneCatalog(entries []CatalogEntry, filters []CatalogFilter) []CatalogEntry   // range (from/to) and exact-value pruning
 func ExpandCatalogGlobs(entries []CatalogEntry) []CatalogEntry   // local globs and remote `echo` expansion
 func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField string, pipelineArgs [][]string) iter.Seq[Record]

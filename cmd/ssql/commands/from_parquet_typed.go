@@ -18,10 +18,10 @@ import (
 // generateFromParquetCodeTyped emits a typed-mode init fragment for
 // `ssql from parquet FILE [-columns ...]`. Reads the Parquet file's
 // schema (no sampling needed — Parquet stores types explicitly), emits
-// the corresponding Go struct definition, and a typed.ReadParquet[T]
-// (or typed.ReadParquetParallel[T] in parallel mode) call.
+// the corresponding Go struct definition, and a parquet.ReadTyped[T]
+// (or parquet.ReadTypedParallel[T] in parallel mode) call.
 //
-// `-columns` flags are threaded through as typed.ParquetColumns(...)
+// `-columns` flags are threaded through as parquet.Columns(...)
 // arguments — the runtime then reads only the named columns from the
 // file. This is the primary I/O lever for wide Parquet tables: 3 of
 // 50 columns means ~94% less disk read.
@@ -43,27 +43,27 @@ func generateFromParquetCodeTyped(args, files []string, columns []string) error 
 	// One plain file keeps the -input parameter; several, or a pattern,
 	// are written in as given (a glob expands when the program runs).
 	var params []lib.CodeParam
-	parallelRead, serialRead := "typed.ReadParquetFilesParallel", "typed.ReadParquetFiles"
+	parallelRead, serialRead := "parquet.ReadTypedFilesParallel", "parquet.ReadTypedFiles"
 	source := goStringSlice(args)
 	if singleParquetFile(args) {
 		params = []lib.CodeParam{{
 			Name: "input", Default: args[0], Help: "input Parquet file", VarName: "flagInput",
 		}}
-		parallelRead, serialRead, source = "typed.ReadParquetParallel", "typed.ReadParquet", "*flagInput"
+		parallelRead, serialRead, source = "parquet.ReadTypedParallel", "parquet.ReadTyped", "*flagInput"
 	}
-	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	imports := []string{parquetImport}
 	if needsTimeImport(schema) {
 		imports = append(imports, "time")
 	}
 
-	// Build the optional ParquetColumns(...) trailing arg.
+	// Build the optional parquet.Columns(...) trailing arg.
 	var colsArg string
 	if len(columns) > 0 {
 		quoted := make([]string, len(columns))
 		for i, c := range columns {
 			quoted[i] = fmt.Sprintf("%q", c)
 		}
-		colsArg = ", typed.ParquetColumns(" + strings.Join(quoted, ", ") + ")"
+		colsArg = ", parquet.Columns(" + strings.Join(quoted, ", ") + ")"
 	}
 
 	// Always emit BOTH templates; planner picks per pipeline.

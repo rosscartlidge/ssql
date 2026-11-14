@@ -13,7 +13,7 @@ import (
 // The typed lane of `from catalog` (DFC149 §4.6). A catalog whose pruned
 // shards are all Parquet files on this host, with no pushdown stages, is
 // read in the generated program by the typed Parquet reader over the
-// catalog's files (typed.ReadParquetSourcesParallel): the struct is the
+// catalog's files (parquet.ReadSourcesParallel): the struct is the
 // first shard's Parquet schema plus the columns the catalog adds to
 // every record — -shard-field and the metadata columns, as strings, the
 // order schema mode gives them. The program re-reads and prunes the
@@ -115,14 +115,14 @@ func generateFromCatalogCodeTyped(catalogFile string, hive bool, filters []ssql.
 	if err != nil {
 		return fmt.Errorf("%%w", err)
 	}
-	sources, err := typed.CatalogParquetSources(entries, %q)
+	sources, err := parquet.CatalogSources(entries, %q)
 	if err != nil {
 		return fmt.Errorf("%%w", err)
 	}
 	`, hive, filterCode, shardField)
-	parallelCode := landing + fmt.Sprintf(`records := typed.ReadParquetSourcesParallel[%s](sources, 0)`, schema.TypeName)
-	serialCode := landing + fmt.Sprintf(`records := typed.ReadParquetSources[%s](sources)`, schema.TypeName)
-	imports := []string{"fmt", "github.com/rosscartlidge/ssql/v4/typed"}
+	parallelCode := landing + fmt.Sprintf(`records := parquet.ReadSourcesParallel[%s](sources, 0)`, schema.TypeName)
+	serialCode := landing + fmt.Sprintf(`records := parquet.ReadSources[%s](sources)`, schema.TypeName)
+	imports := []string{"fmt", parquetImport}
 	if needsTimeImport(schema) {
 		imports = append(imports, "time")
 	}

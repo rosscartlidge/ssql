@@ -53,10 +53,14 @@ func executeFromArrow(inputFile string, generate bool) error {
 
 	var records iter.Seq[ssql.Record]
 	if inputFile == "" {
-		records = ssql.ReadArrowFromReader(os.Stdin)
+		var err error
+		records, err = readArrowFrom(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading Arrow: %w", err)
+		}
 	} else {
 		var err error
-		records, err = ssql.ReadArrow(inputFile)
+		records, err = readArrow(inputFile)
 		if err != nil {
 			return fmt.Errorf("reading Arrow file: %w", err)
 		}
@@ -73,15 +77,15 @@ func generateFromArrowCode(filename string) error {
 	var params []lib.CodeParam
 
 	if filename == "" {
-		code = `records := ssql.ReadArrowFromReader(os.Stdin)`
-		imports = []string{"os"}
+		code = `records := arrow.ReadFrom(os.Stdin)`
+		imports = []string{"os", arrowImport}
 	} else {
 		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input Arrow file", VarName: "flagInput"})
-		code = `records, err := ssql.ReadArrow(*flagInput)
+		code = `records, err := arrow.Read(*flagInput)
 	if err != nil {
 		return fmt.Errorf("reading Arrow: %w", err)
 	}`
-		imports = []string{"fmt", "os"}
+		imports = []string{"fmt", "os", arrowImport}
 	}
 
 	frag := fromInitFragment("records", code, imports)

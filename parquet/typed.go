@@ -1,6 +1,4 @@
-//go:build !slim
-
-package typed
+package parquet
 
 import (
 	"bytes"
@@ -20,82 +18,82 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/decimal128"
 	"github.com/apache/arrow/go/v18/arrow/memory"
 	"github.com/apache/arrow/go/v18/parquet"
-	"github.com/apache/arrow/go/v18/parquet/compress"
 	"github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	ssql "github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/internal/pqcols"
+	"github.com/rosscartlidge/ssql/v4/typed"
 )
 
-// ParquetOption configures a Parquet reader. Pass to [ReadParquet],
-// [ReadParquetParallel], and the safe variants.
-type ParquetOption func(*parquetOpts)
+// Option configures a Parquet reader. Pass to [ReadTyped],
+// [ReadTypedParallel], and the safe variants.
+type Option func(*readOpts)
 
-type parquetOpts struct {
+type readOpts struct {
 	strict  bool
 	columns []string
 }
 
-// ParquetStrict mirrors [Strict] / [DelimStrict]. Header columns
+// Strict mirrors [Strict] / [DelimStrict]. Header columns
 // without a matching struct field, OR required (non-pointer)
 // struct fields without a matching column, become hard errors.
-func ParquetStrict() ParquetOption { return func(o *parquetOpts) { o.strict = true } }
+func Strict() Option { return func(o *readOpts) { o.strict = true } }
 
-// ParquetColumns selects a subset of columns to read from the
+// Columns selects a subset of columns to read from the
 // Parquet file. Reading 3 of 50 columns means ~94% less I/O — the
 // primary lever for wide tables. Names are matched
 // case-insensitively against the Parquet schema. Unknown column
-// names are silently dropped (unless [ParquetStrict] is set, in
+// names are silently dropped (unless [Strict] is set, in
 // which case they're an error).
-func ParquetColumns(names ...string) ParquetOption {
-	return func(o *parquetOpts) { o.columns = append(o.columns, names...) }
+func Columns(names ...string) Option {
+	return func(o *readOpts) { o.columns = append(o.columns, names...) }
 }
 
-func resolveParquetOpts(opts []ParquetOption) parquetOpts {
-	var o parquetOpts
+func resolveReadOpts(opts []Option) readOpts {
+	var o readOpts
 	for _, fn := range opts {
 		fn(&o)
 	}
 	return o
 }
 
-// ReadParquet streams rows of T from a Parquet file. The Parquet
+// ReadTyped streams rows of T from a Parquet file. The Parquet
 // schema is matched against T's struct fields by name (case
 // insensitive); unknown columns are silently dropped, missing
-// fields keep their zero value. Pass [ParquetStrict] to reject
+// fields keep their zero value. Pass [Strict] to reject
 // schema mismatches.
 //
 // Reflection happens once at file-open time. Per-row decoding uses
 // Arrow column arrays directly — no string parsing, no boxing
 // through `any`.
 //
-// A file that cannot be opened or read panics with a *[ReadError], as
+// A file that cannot be opened or read panics with a *[typed.ReadError], as
 // [ReadCSV] does (until 2026-10-11 it silently yielded nothing — a
 // missing file was an empty table).
-func ReadParquet[T any](filename string, opts ...ParquetOption) iter.Seq[T] {
-	o := resolveParquetOpts(opts)
+func ReadTyped[T any](filename string, opts ...Option) iter.Seq[T] {
+	o := resolveReadOpts(opts)
 	return func(yield func(T) bool) {
 		f, err := ssql.OpenInputAt(filename)
 		if err != nil {
-			failRead("typed.ReadParquet", filename, err)
+			failRead("parquet.ReadTyped", filename, err)
 		}
 		defer f.Close()
 		readParquet[T](f, o, yield, func(err error) bool {
-			failRead("typed.ReadParquet", filename, err)
+			failRead("parquet.ReadTyped", filename, err)
 			return false
 		})
 	}
 }
 
-// ReadParquetFiles is [ReadParquet] over several files read in order as
+// ReadTypedFiles is [ReadTyped] over several files read in order as
 // one sequence. Paths may be glob patterns, expanded when the sequence
 // runs ([ssql.ExpandFilePatterns]); the files must share one schema
-// ([ssql.CheckParquetSchemas]).
-func ReadParquetFiles[T any](paths []string, opts ...ParquetOption) iter.Seq[T] {
+// ([CheckSchemas]).
+func ReadTypedFiles[T any](paths []string, opts ...Option) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		for _, f := range expandParquetFiles("typed.ReadParquetFiles", paths) {
+		for _, f := range expandParquetFiles("parquet.ReadTypedFiles", paths) {
 			cont := true
-			ReadParquet[T](f, opts...)(func(row T) bool {
+			ReadTyped[T](f, opts...)(func(row T) bool {
 				cont = yield(row)
 				return cont
 			})
@@ -114,7 +112,7 @@ func expandParquetFiles(op string, paths []string) []string {
 		err = fmt.Errorf("no Parquet files given")
 	}
 	if err == nil && len(files) > 1 {
-		err = ssql.CheckParquetSchemas(files)
+		err = CheckSchemas(files)
 	}
 	if err != nil {
 		failRead(op, strings.Join(paths, " "), err)
@@ -122,28 +120,28 @@ func expandParquetFiles(op string, paths []string) []string {
 	return files
 }
 
-// ReadParquetSafe is the error-reporting variant of [ReadParquet].
+// ReadTypedSafe is the error-reporting variant of [ReadTyped].
 // Errors during open / schema mapping / per-row decoding are
 // surfaced via the iter.Seq2 second value.
-func ReadParquetSafe[T any](filename string, opts ...ParquetOption) iter.Seq2[T, error] {
+func ReadTypedSafe[T any](filename string, opts ...Option) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		f, err := ssql.OpenInputAt(filename)
 		if err != nil {
 			var zero T
-			yield(zero, fmt.Errorf("typed.ReadParquet: open %q: %w", filename, err))
+			yield(zero, fmt.Errorf("parquet.ReadTyped: open %q: %w", filename, err))
 			return
 		}
 		defer f.Close()
-		ReadParquetSafeFromReaderAt[T](f, opts...)(yield)
+		ReadTypedSafeFromReaderAt[T](f, opts...)(yield)
 	}
 }
 
-// ReadParquetFromReaderAt is the [parquet.ReaderAtSeeker] variant of
-// [ReadParquet]. Parquet is a random-access format, so the source
+// ReadTypedFromReaderAt is the [parquet.ReaderAtSeeker] variant of
+// [ReadTyped]. Parquet is a random-access format, so the source
 // must support both Read+Seek+ReadAt — `*os.File` and
 // `bytes.Reader` satisfy this naturally.
-func ReadParquetFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOption) iter.Seq[T] {
-	o := resolveParquetOpts(opts)
+func ReadTypedFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...Option) iter.Seq[T] {
+	o := resolveReadOpts(opts)
 	return func(yield func(T) bool) {
 		readParquet[T](r, o, func(row T) bool {
 			return yield(row)
@@ -151,10 +149,10 @@ func ReadParquetFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOpt
 	}
 }
 
-// ReadParquetSafeFromReaderAt is the error-reporting [parquet.ReaderAtSeeker]
-// variant of [ReadParquet].
-func ReadParquetSafeFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOption) iter.Seq2[T, error] {
-	o := resolveParquetOpts(opts)
+// ReadTypedSafeFromReaderAt is the error-reporting [parquet.ReaderAtSeeker]
+// variant of [ReadTyped].
+func ReadTypedSafeFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...Option) iter.Seq2[T, error] {
+	o := resolveReadOpts(opts)
 	return func(yield func(T, error) bool) {
 		errYield := func(err error) bool {
 			var zero T
@@ -165,16 +163,16 @@ func ReadParquetSafeFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...Parque
 }
 
 // readParquet is the shared implementation. errYield is nil when
-// errors should be silently dropped (the [ReadParquet] case);
+// errors should be silently dropped (the [ReadTyped] case);
 // otherwise it's called for each error.
-func readParquet[T any](r parquet.ReaderAtSeeker, o parquetOpts, rowYield func(T) bool, errYield func(error) bool) {
+func readParquet[T any](r parquet.ReaderAtSeeker, o readOpts, rowYield func(T) bool, errYield func(error) bool) {
 	ctx := context.Background()
 	mem := memory.DefaultAllocator
 
 	pf, err := file.NewParquetReader(r, file.WithReadProps(parquetFileProps(mem)))
 	if err != nil {
 		if errYield != nil {
-			errYield(fmt.Errorf("typed.ReadParquet: open: %w", err))
+			errYield(fmt.Errorf("parquet.ReadTyped: open: %w", err))
 		}
 		return
 	}
@@ -183,7 +181,7 @@ func readParquet[T any](r parquet.ReaderAtSeeker, o parquetOpts, rowYield func(T
 	reader, err := pqarrow.NewFileReader(pf, parquetReadProps(), mem)
 	if err != nil {
 		if errYield != nil {
-			errYield(fmt.Errorf("typed.ReadParquet: arrow reader: %w", err))
+			errYield(fmt.Errorf("parquet.ReadTyped: arrow reader: %w", err))
 		}
 		return
 	}
@@ -199,14 +197,14 @@ func readParquet[T any](r parquet.ReaderAtSeeker, o parquetOpts, rowYield func(T
 
 	// Every (selected) row group, decoded a batch at a time (see
 	// yieldParquetBatches); this read the whole file into one Arrow
-	// table until 2026-10-28. Parallel reading is in [ReadParquetParallel].
+	// table until 2026-10-28. Parallel reading is in [ReadTypedParallel].
 	rowGroups := make([]int, pf.NumRowGroups())
 	for i := range rowGroups {
 		rowGroups[i] = i
 	}
 	if err := yieldParquetBatches[T](ctx, reader, plan, rowGroups, rowYield); err != nil {
 		if errYield != nil {
-			errYield(fmt.Errorf("typed.ReadParquet: read row groups: %w", err))
+			errYield(fmt.Errorf("parquet.ReadTyped: read row groups: %w", err))
 		}
 	}
 }
@@ -314,10 +312,10 @@ type parquetDecodeFn func(p unsafe.Pointer, arr arrow.Array, idx int)
 // matching Arrow column, and constructs a decoder that copies the
 // column's value into the struct field. Reflection happens here,
 // once.
-func buildParquetReadPlan[T any](pf *file.Reader, reader *pqarrow.FileReader, o parquetOpts) (*parquetReadPlan, error) {
+func buildParquetReadPlan[T any](pf *file.Reader, reader *pqarrow.FileReader, o readOpts) (*parquetReadPlan, error) {
 	sch, err := reader.Schema()
 	if err != nil {
-		return nil, fmt.Errorf("typed.ReadParquet: schema: %w", err)
+		return nil, fmt.Errorf("parquet.ReadTyped: schema: %w", err)
 	}
 	uuid := pqcols.UUIDFields(pf, reader.Manifest)
 	var zero T
@@ -352,7 +350,7 @@ func buildParquetReadPlan[T any](pf *file.Reader, reader *pqarrow.FileReader, o 
 		if !f.IsExported() {
 			continue
 		}
-		name, skip := columnName(f)
+		name, skip := typed.ColumnName(f)
 		if skip {
 			continue
 		}
@@ -360,7 +358,7 @@ func buildParquetReadPlan[T any](pf *file.Reader, reader *pqarrow.FileReader, o 
 		idx, ok := arrIdx[key]
 		if !ok {
 			if o.strict && f.Type.Kind() != reflect.Pointer {
-				return nil, fmt.Errorf("typed.ReadParquet: strict: struct field %q has no matching Parquet column", name)
+				return nil, fmt.Errorf("parquet.ReadTyped: strict: struct field %q has no matching Parquet column", name)
 			}
 			continue
 		}
@@ -370,10 +368,10 @@ func buildParquetReadPlan[T any](pf *file.Reader, reader *pqarrow.FileReader, o 
 		}
 		dfn, err := parquetDecoderFor(sch.Field(idx).Type, uuid[idx], f.Type)
 		if err != nil {
-			return nil, fmt.Errorf("typed.ReadParquet: field %q: %w", name, err)
+			return nil, fmt.Errorf("parquet.ReadTyped: field %q: %w", name, err)
 		}
 		if f.Type == decimalType {
-			scale, err := decimalFieldScale(f)
+			scale, err := typed.DecimalFieldScale(f)
 			if err != nil {
 				return nil, err
 			}
@@ -397,7 +395,7 @@ func buildParquetReadPlan[T any](pf *file.Reader, reader *pqarrow.FileReader, o 
 			if len(colFilter) > 0 && !colFilter[strings.ToLower(af.Name)] {
 				continue
 			}
-			return nil, fmt.Errorf("typed.ReadParquet: strict: Parquet column %q has no matching struct field", af.Name)
+			return nil, fmt.Errorf("parquet.ReadTyped: strict: Parquet column %q has no matching struct field", af.Name)
 		}
 	}
 
@@ -437,7 +435,7 @@ func buildParquetReadPlan[T any](pf *file.Reader, reader *pqarrow.FileReader, o 
 // They're rare in typed pipelines and easy to add later.
 func parquetDecoderFor(arrowT arrow.DataType, uuid bool, structT reflect.Type) (parquetDecodeFn, error) {
 	if structT.Kind() == reflect.Pointer {
-		return nil, fmt.Errorf("pointer field types not yet supported in typed.ReadParquet")
+		return nil, fmt.Errorf("pointer field types not yet supported in typed.ReadTyped")
 	}
 	if pqcols.Nested(arrowT) {
 		// A nested value is its JSON text in a string field (DFC144 Level 0).
@@ -702,7 +700,7 @@ func makeFloatDecoder[A interface{ ~float32 | ~float64 }](structT reflect.Type) 
 	}, nil
 }
 
-// ReadParquetParallel reads a Parquet file using one shard per row
+// ReadTypedParallel reads a Parquet file using one shard per row
 // group (capped at n). Each shard owns its own pqarrow FileReader
 // and decodes its row groups independently into struct values.
 //
@@ -713,18 +711,18 @@ func makeFloatDecoder[A interface{ ~float32 | ~float64 }](structT reflect.Type) 
 //
 // n=0 means runtime.GOMAXPROCS(0). If the file has fewer row
 // groups than n, n is reduced accordingly. A file that cannot be
-// opened or read panics with a *[ReadError] (until 2026-10-11 it
+// opened or read panics with a *[typed.ReadError] (until 2026-10-11 it
 // produced an empty stream).
-func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) Stream[T] {
-	return readParquetUnitsParallel[T]("typed.ReadParquetParallel", []string{filename}, nil, n, opts)
+func ReadTypedParallel[T any](filename string, n int, opts ...Option) typed.Stream[T] {
+	return readParquetUnitsParallel[T]("parquet.ReadTypedParallel", []string{filename}, nil, n, opts)
 }
 
-// ReadParquetFilesParallel is [ReadParquetParallel] over several files:
+// ReadTypedFilesParallel is [ReadTypedParallel] over several files:
 // the shards share out every file's row groups. Paths may be glob
 // patterns ([ssql.ExpandFilePatterns]); the files must share one schema
-// ([ssql.CheckParquetSchemas]).
-func ReadParquetFilesParallel[T any](paths []string, n int, opts ...ParquetOption) Stream[T] {
-	return readParquetUnitsParallel[T]("typed.ReadParquetFilesParallel", expandParquetFiles("typed.ReadParquetFilesParallel", paths), nil, n, opts)
+// ([CheckSchemas]).
+func ReadTypedFilesParallel[T any](paths []string, n int, opts ...Option) typed.Stream[T] {
+	return readParquetUnitsParallel[T]("parquet.ReadTypedFilesParallel", expandParquetFiles("parquet.ReadTypedFilesParallel", paths), nil, n, opts)
 }
 
 // parquetUnit is one row group of one file: the parallel readers'
@@ -732,9 +730,9 @@ func ReadParquetFilesParallel[T any](paths []string, n int, opts ...ParquetOptio
 type parquetUnit struct{ file, rg int }
 
 // consts, when given, holds each file's constant columns
-// ([ParquetSource]), set on its rows after the file's columns decode.
-func readParquetUnitsParallel[T any](op string, files []string, consts [][]ParquetConstant, n int, opts []ParquetOption) Stream[T] {
-	o := resolveParquetOpts(opts)
+// ([Source]), set on its rows after the file's columns decode.
+func readParquetUnitsParallel[T any](op string, files []string, consts [][]Constant, n int, opts []Option) typed.Stream[T] {
+	o := resolveReadOpts(opts)
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
 	}
@@ -785,7 +783,7 @@ func readParquetUnitsParallel[T any](op string, files []string, consts [][]Parqu
 		setters[fi] = constantSetters[T](op, files[fi], consts[fi], fileCols)
 	}
 	if len(units) == 0 {
-		return Stream[T]{shards: nil, n: 0}
+		return typed.FromShards[T](nil)
 	}
 	if n > len(units) {
 		n = len(units)
@@ -868,65 +866,10 @@ func readParquetUnitsParallel[T any](op string, files []string, consts [][]Parqu
 			}
 		}
 	}
-	return Stream[T]{shards: shards, n: n}
+	return typed.FromShards(shards)
 }
 
 // ---- Write path ----
-
-// ParquetWriteOption configures a Parquet writer. Pass to
-// [WriteParquet], [WriteParquetToWriter], [Stream.WriteParquet]
-// and [Stream.WriteParquetToWriter].
-type ParquetWriteOption func(*parquetWriteOpts)
-
-type parquetWriteOpts struct {
-	rowGroupSize int64
-	compression  string
-}
-
-// WithRowGroupSize sets the maximum number of rows per Parquet row
-// group. Default is 1_000_000. Smaller values increase parallelism
-// (each row group becomes one shard for [ReadParquetParallel]) at
-// the cost of more metadata overhead; larger values do the
-// opposite. Pass 0 to put all rows in a single group (use only for
-// small files; caps reader parallelism at 1).
-func WithRowGroupSize(n int) ParquetWriteOption {
-	return func(o *parquetWriteOpts) { o.rowGroupSize = int64(n) }
-}
-
-// WithCompression sets the Parquet column compression. Accepted
-// values: "snappy" (default), "gzip", "zstd", "none"/"uncompressed".
-// Unknown values fall back to Snappy with a warning emitted to
-// stderr at write time.
-func WithCompression(name string) ParquetWriteOption {
-	return func(o *parquetWriteOpts) { o.compression = name }
-}
-
-func resolveParquetWriteOpts(opts []ParquetWriteOption) parquetWriteOpts {
-	o := parquetWriteOpts{
-		rowGroupSize: 1_000_000,
-		compression:  "snappy",
-	}
-	for _, fn := range opts {
-		fn(&o)
-	}
-	return o
-}
-
-func compressionCodec(name string) compress.Compression {
-	switch strings.ToLower(name) {
-	case "", "snappy":
-		return compress.Codecs.Snappy
-	case "gzip":
-		return compress.Codecs.Gzip
-	case "zstd":
-		return compress.Codecs.Zstd
-	case "none", "uncompressed":
-		return compress.Codecs.Uncompressed
-	default:
-		fmt.Fprintf(os.Stderr, "typed.WriteParquet: unknown compression %q, falling back to snappy\n", name)
-		return compress.Codecs.Snappy
-	}
-}
 
 // parquetWriteEncoder pushes one struct field's value into an Arrow
 // array builder. The closure is bound to a specific (struct offset,
@@ -947,7 +890,7 @@ func buildParquetWriteSchema[T any]() (*parquetWritePlan, error) {
 	var zero T
 	rt := reflect.TypeOf(zero)
 	if rt == nil || rt.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("typed.WriteParquet: T must be a struct, got %v", rt)
+		return nil, fmt.Errorf("parquet.WriteTyped: T must be a struct, got %v", rt)
 	}
 
 	var fields []arrow.Field
@@ -957,7 +900,7 @@ func buildParquetWriteSchema[T any]() (*parquetWritePlan, error) {
 		if !f.IsExported() {
 			continue
 		}
-		name, skip := columnName(f)
+		name, skip := typed.ColumnName(f)
 		if skip {
 			continue
 		}
@@ -965,7 +908,7 @@ func buildParquetWriteSchema[T any]() (*parquetWritePlan, error) {
 		var enc func(unsafe.Pointer, array.Builder)
 		var err error
 		if f.Type == decimalType {
-			scale, serr := decimalFieldScale(f)
+			scale, serr := typed.DecimalFieldScale(f)
 			if serr != nil {
 				return nil, serr
 			}
@@ -974,7 +917,7 @@ func buildParquetWriteSchema[T any]() (*parquetWritePlan, error) {
 			ft, enc, err = parquetEncoderFor(f.Type)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("typed.WriteParquet: field %q: %w", name, err)
+			return nil, fmt.Errorf("parquet.WriteTyped: field %q: %w", name, err)
 		}
 		fields = append(fields, arrow.Field{Name: name, Type: ft, Nullable: f.Type.Kind() == reflect.Pointer})
 		encoders = append(encoders, parquetWriteEncoder{off: f.Offset, fn: enc})
@@ -1000,7 +943,7 @@ func parquetDecimalEncoder(scale int) (arrow.DataType, func(unsafe.Pointer, arra
 // struct field type. Pointer fields are not supported in v1.
 func parquetEncoderFor(t reflect.Type) (arrow.DataType, func(unsafe.Pointer, array.Builder), error) {
 	if t.Kind() == reflect.Pointer {
-		return nil, nil, fmt.Errorf("pointer field types not yet supported in typed.WriteParquet")
+		return nil, nil, fmt.Errorf("pointer field types not yet supported in typed.WriteTyped")
 	}
 	if t == timeType {
 		return &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}, func(p unsafe.Pointer, b array.Builder) {
@@ -1088,9 +1031,9 @@ func parquetEncoderFor(t reflect.Type) (arrow.DataType, func(unsafe.Pointer, arr
 	return nil, nil, fmt.Errorf("unsupported field type %v", t)
 }
 
-// WriteParquet writes a sequence of T to a Parquet file. By default
+// WriteTyped writes a sequence of T to a Parquet file. By default
 // uses Snappy compression and a 1_000_000-row row-group size — the
-// row-group size matters because [ReadParquetParallel] uses one
+// row-group size matters because [ReadTypedParallel] uses one
 // shard per row group, so a single-row-group file can only be read
 // with parallelism 1. Adjust via [WithRowGroupSize] / [WithCompression].
 //
@@ -1100,30 +1043,30 @@ func parquetEncoderFor(t reflect.Type) (arrow.DataType, func(unsafe.Pointer, arr
 // All rows are buffered in memory before flushing; Parquet's
 // footer-last format requires this. For very large outputs that
 // don't fit in RAM, write to multiple files and concatenate.
-func WriteParquet[T any](seq iter.Seq[T], filename string, opts ...ParquetWriteOption) error {
+func WriteTyped[T any](seq iter.Seq[T], filename string, opts ...WriteOption) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return WriteParquetToWriter(seq, f, opts...)
+	return WriteTypedTo(seq, f, opts...)
 }
 
-// WriteParquetToWriter is the [io.Writer] variant of [WriteParquet].
-func WriteParquetToWriter[T any](seq iter.Seq[T], w io.Writer, opts ...ParquetWriteOption) error {
+// WriteTypedTo is the [io.Writer] variant of [WriteTyped].
+func WriteTypedTo[T any](seq iter.Seq[T], w io.Writer, opts ...WriteOption) error {
 	mem := memory.DefaultAllocator
 	plan, err := buildParquetWriteSchema[T]()
 	if err != nil {
 		return err
 	}
-	o := resolveParquetWriteOpts(opts)
+	o := resolveWriteOpts(opts)
 	return writeParquetSeq[T](seq, w, plan, mem, o)
 }
 
 // writeParquetSeq materializes the sequence into Arrow column
 // builders, finalises a single arrow.Record + Table, and writes it
 // out as Parquet with the configured compression and row-group size.
-func writeParquetSeq[T any](seq iter.Seq[T], w io.Writer, plan *parquetWritePlan, mem memory.Allocator, opts parquetWriteOpts) error {
+func writeParquetSeq[T any](seq iter.Seq[T], w io.Writer, plan *parquetWritePlan, mem memory.Allocator, opts writeOpts) error {
 	builders := make([]array.Builder, len(plan.encoders))
 	for i, f := range plan.schema.Fields() {
 		builders[i] = array.NewBuilder(mem, f.Type)
@@ -1175,31 +1118,31 @@ func writeParquetSeq[T any](seq iter.Seq[T], w io.Writer, plan *parquetWritePlan
 	return pqarrow.WriteTable(tbl, w, chunk, props, arrProps)
 }
 
-// WriteParquet writes a Stream[T] to a Parquet file. Each shard
+// WriteStream writes a typed.Stream[T] to a Parquet file. Each shard
 // concurrently writes its rows into its own in-memory Parquet
 // payload; the per-shard payloads are concatenated into a single
 // output file as one row group per shard (so the natural
 // parallelism of the writer maps directly to the natural
-// parallelism of [ReadParquetParallel]). Pass [WithRowGroupSize] to
+// parallelism of [ReadTypedParallel]). Pass [WithRowGroupSize] to
 // further sub-divide each shard's output, or [WithCompression] to
 // pick a different codec.
 //
 // Trade-off: peak memory ~2× output size (each shard buffers its
 // payload). For huge outputs that don't fit in RAM, fall back to
-// `Stream.Serial()` + [WriteParquet].
+// `Stream.Serial()` + [WriteTyped].
 //
 // Order: rows from shard 0 come before shard 1 etc. Within a shard,
 // input order is preserved. Same as [Stream.WriteCSV].
-func (s Stream[T]) WriteParquet(filename string, opts ...ParquetWriteOption) error {
+func WriteStream[T any](s typed.Stream[T], filename string, opts ...WriteOption) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return s.WriteParquetToWriter(f, opts...)
+	return WriteStreamTo(s, f, opts...)
 }
 
-// WriteParquetToWriter is the [io.Writer] variant of [Stream.WriteParquet].
+// WriteStreamTo is the [io.Writer] variant of [WriteStream].
 //
 // Implementation: each shard buffers its rows into Arrow column
 // builders concurrently (no serial fan-in). The orchestrator then
@@ -1207,7 +1150,7 @@ func (s Stream[T]) WriteParquet(filename string, opts ...ParquetWriteOption) err
 // table — Parquet doesn't support concatenating independent files
 // at the byte level, so we buffer the per-shard arrow.Records and
 // pass them all to a single pqarrow.WriteTable call.
-func (s Stream[T]) WriteParquetToWriter(w io.Writer, opts ...ParquetWriteOption) error {
+func WriteStreamTo[T any](s typed.Stream[T], w io.Writer, opts ...WriteOption) error {
 	mem := memory.DefaultAllocator
 	plan, err := buildParquetWriteSchema[T]()
 	if err != nil {
@@ -1215,40 +1158,35 @@ func (s Stream[T]) WriteParquetToWriter(w io.Writer, opts ...ParquetWriteOption)
 	}
 
 	// Each shard builds its own arrow.Record (one row group worth).
-	records := make([]arrow.Record, len(s.shards))
-	errs := make([]error, len(s.shards))
-	var g shardGroup
-	for i, shard := range s.shards {
-		i, shard := i, shard
-		g.Go(func() {
-			builders := make([]array.Builder, len(plan.encoders))
-			for j, f := range plan.schema.Fields() {
-				builders[j] = array.NewBuilder(mem, f.Type)
+	records := make([]arrow.Record, s.Shards())
+	errs := make([]error, s.Shards())
+	s.EachShard(func(i int, shard iter.Seq[T]) {
+		builders := make([]array.Builder, len(plan.encoders))
+		for j, f := range plan.schema.Fields() {
+			builders[j] = array.NewBuilder(mem, f.Type)
+		}
+		defer func() {
+			for _, b := range builders {
+				b.Release()
 			}
-			defer func() {
-				for _, b := range builders {
-					b.Release()
-				}
-			}()
-			var n int64
-			for v := range shard {
-				p := unsafe.Pointer(&v)
-				for j, enc := range plan.encoders {
-					enc.fn(unsafe.Add(p, enc.off), builders[j])
-				}
-				n++
+		}()
+		var n int64
+		for v := range shard {
+			p := unsafe.Pointer(&v)
+			for j, enc := range plan.encoders {
+				enc.fn(unsafe.Add(p, enc.off), builders[j])
 			}
-			cols := make([]arrow.Array, len(builders))
-			for j, b := range builders {
-				cols[j] = b.NewArray()
-			}
-			records[i] = array.NewRecord(plan.schema, cols, n)
-			for _, c := range cols {
-				c.Release()
-			}
-		})
-	}
-	g.Wait()
+			n++
+		}
+		cols := make([]arrow.Array, len(builders))
+		for j, b := range builders {
+			cols[j] = b.NewArray()
+		}
+		records[i] = array.NewRecord(plan.schema, cols, n)
+		for _, c := range cols {
+			c.Release()
+		}
+	})
 
 	for _, e := range errs {
 		if e != nil {
@@ -1284,7 +1222,7 @@ func (s Stream[T]) WriteParquetToWriter(w io.Writer, opts ...ParquetWriteOption)
 		nonEmpty = append(nonEmpty, r)
 		totalRows += r.NumRows()
 	}
-	o := resolveParquetWriteOpts(opts)
+	o := resolveWriteOpts(opts)
 	if totalRows == 0 {
 		// Write empty file with schema only.
 		buf := &bytes.Buffer{}

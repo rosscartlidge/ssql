@@ -3657,7 +3657,7 @@ func translateParquetSource(q *sqlQuery, files, columns []string) error {
 			if strings.ContainsAny(f, "*?[") || ssql.IsHTTPURL(f) {
 				continue
 			}
-			if names, _, err := ssql.ParquetSchemaFields(f); err == nil {
+			if names, _, err := parquetSchemaFields(f); err == nil {
 				q.columns = names
 			}
 			break
@@ -3737,7 +3737,7 @@ func translateCatalogSource(q *sqlQuery, args []string) error {
 		// The file's own columns: a hive key among them is the error the
 		// shard reader raises on its first record; a catalog column among
 		// them takes the metadata value in place, as the records do.
-		cols, _, err := ssql.ParquetSchemaFields(e.Path)
+		cols, _, err := parquetSchemaFields(e.Path)
 		if err != nil {
 			return fmt.Errorf("from catalog %s: shard %s: %w", file, e.Path, err)
 		}

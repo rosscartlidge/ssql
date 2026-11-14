@@ -3,6 +3,8 @@ package lib
 import (
 	"encoding/json"
 	"fmt"
+	"go/scanner"
+	"go/token"
 	"io"
 	"os"
 	"regexp"
@@ -820,7 +822,7 @@ func AssembleCodeFragmentsWith(input io.Reader, opts AssembleOptions) (string, e
 
 	code.WriteString("\treturn nil\n}\n")
 
-	return code.String(), nil
+	return dropUnusedModuleImports(code.String()), nil
 }
 
 // generateSubprocessFunction generates a function from a func fragment
@@ -1136,6 +1138,69 @@ func renderImport(imp string) string {
 		return imp[:idx] + " " + fmt.Sprintf("%q", imp[idx+1:])
 	}
 	return fmt.Sprintf("%q", imp)
+}
+
+// dropUnusedModuleImports removes from an assembled program each import
+// of an ssql package (the root, typed, parquet, …) that its body never
+// names. A stage declares the packages its template may use, and a
+// typed stage whose code is all Stream methods names none: while every
+// typed source called typed.ReadX the import was always used, but a
+// source from a format package (DFC168: parquet.ReadTyped) leaves it
+// unused, and Go refuses an unused import. A blank import ("_ path")
+// is kept: it is there to link a package, not to name it.
+func dropUnusedModuleImports(src string) string {
+	start := strings.Index(src, "\nimport (\n")
+	if start < 0 {
+		return src
+	}
+	start++
+	end := strings.Index(src[start:], "\n)\n")
+	if end < 0 {
+		return src
+	}
+	end += start
+	body := src[end:]
+	var kept []string
+	for _, line := range strings.Split(src[start+len("import (\n"):end], "\n") {
+		path := strings.Trim(strings.TrimSpace(line), `"`)
+		if strings.HasPrefix(path, "github.com/rosscartlidge/ssql/v4") && !selectorUsed(importIdent(path), body) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return src[:start] + "import (\n" + strings.Join(kept, "\n") + src[end:]
+}
+
+// importIdent is the name an unaliased import path binds: its last
+// element, or the one before a /vN major-version suffix.
+func importIdent(path string) string {
+	parts := strings.Split(path, "/")
+	ident := parts[len(parts)-1]
+	if len(parts) > 1 && len(ident) > 1 && ident[0] == 'v' && strings.Trim(ident[1:], "0123456789") == "" {
+		ident = parts[len(parts)-2]
+	}
+	return ident
+}
+
+// selectorUsed reports whether Go source names ident as a package
+// (ident followed by a dot), ignoring comments and string literals: a
+// generated comment mentioning typed.ReadError is not a use.
+func selectorUsed(ident, src string) bool {
+	fset := token.NewFileSet()
+	file := fset.AddFile("", fset.Base(), len(src))
+	var s scanner.Scanner
+	s.Init(file, []byte(src), nil, 0)
+	prevIdent := false
+	for {
+		_, tok, lit := s.Scan()
+		switch {
+		case tok == token.EOF:
+			return false
+		case tok == token.PERIOD && prevIdent:
+			return true
+		}
+		prevIdent = tok == token.IDENT && lit == ident
+	}
 }
 
 // sortImports sorts imports with standard library first, then third-party

@@ -12,6 +12,7 @@ import (
 
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/parquet"
 )
 
 // assembleFromCommands runs a synthetic fragment stream (one Command per
@@ -1254,7 +1255,7 @@ func TestParquetSourceSeedsColumns(t *testing.T) {
 	}
 	p := t.TempDir() + "/b.parquet"
 	s := ssql.NewSchema([]string{"id", "name", "region"})
-	if err := ssql.WriteParquet(slices.Values([]ssql.Record{ssql.NewRecordFromSchema(s, []any{int64(1), "dee", "east"})}), p); err != nil {
+	if err := parquet.Write(slices.Values([]ssql.Record{ssql.NewRecordFromSchema(s, []any{int64(1), "dee", "east"})}), p); err != nil {
 		t.Fatal(err)
 	}
 	assemble := func(update string) (string, error) {
@@ -1293,7 +1294,7 @@ func TestTranslateCatalogSQL(t *testing.T) {
 		p := dir + "/" + rel
 		os.MkdirAll(p[:strings.LastIndex(p, "/")], 0o755)
 		s := ssql.NewSchema(cols)
-		if err := ssql.WriteParquet(slices.Values([]ssql.Record{ssql.NewRecordFromSchema(s, row)}), p); err != nil {
+		if err := parquet.Write(slices.Values([]ssql.Record{ssql.NewRecordFromSchema(s, row)}), p); err != nil {
 			t.Fatal(err)
 		}
 		return p

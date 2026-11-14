@@ -107,7 +107,7 @@ func executeFromParquet(args, files []string, columns []string, generate bool) e
 		return fmt.Errorf("Parquet requires a file (random access format, no stdin support)")
 	}
 	if len(files) > 1 {
-		if err := ssql.CheckParquetSchemas(files); err != nil {
+		if err := checkParquetSchemas(files); err != nil {
 			return err
 		}
 	}
@@ -115,7 +115,7 @@ func executeFromParquet(args, files []string, columns []string, generate bool) e
 	// O(footer). Before this branch existed, a schema query fell
 	// through to a full-file decode (14.6M rows to list two columns).
 	if schemaMode() {
-		names, types, err := ssql.ParquetSchemaFields(files[0])
+		names, types, err := parquetSchemaFields(files[0])
 		if err != nil {
 			return fmt.Errorf("reading Parquet schema: %w", err)
 		}
@@ -129,7 +129,7 @@ func executeFromParquet(args, files []string, columns []string, generate bool) e
 		return generateFromParquetCode(args, files, columns)
 	}
 
-	records, err := ssql.ReadParquetFiles(files, columns)
+	records, err := readParquetFiles(files, columns)
 	if err != nil {
 		return fmt.Errorf("reading Parquet file: %w", err)
 	}
@@ -171,18 +171,18 @@ func generateFromParquetCode(args, files []string, columns []string) error {
 		params = []lib.CodeParam{
 			{Name: "input", Default: args[0], Help: "input Parquet file", VarName: "flagInput"},
 		}
-		code = fmt.Sprintf(`records, err := ssql.ReadParquetColumns(*flagInput, %s)
+		code = fmt.Sprintf(`records, err := parquet.ReadColumns(*flagInput, %s)
 	if err != nil {
 		return fmt.Errorf("reading Parquet: %%w", err)
 	}`, colLiteral)
 	} else {
-		code = fmt.Sprintf(`records, err := ssql.ReadParquetFiles(%s, %s)
+		code = fmt.Sprintf(`records, err := parquet.ReadFiles(%s, %s)
 	if err != nil {
 		return fmt.Errorf("reading Parquet: %%w", err)
 	}`, goStringSlice(args), colLiteral)
 	}
 
-	frag := fromInitFragment("records", code, []string{"fmt", "os"})
+	frag := fromInitFragment("records", code, []string{"fmt", "os", parquetImport})
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

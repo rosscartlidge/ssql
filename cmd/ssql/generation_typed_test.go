@@ -118,27 +118,16 @@ func goBuildRunGenerated(t *testing.T, module string, files map[string]string, e
 	if out, err := tidy.CombinedOutput(); err != nil {
 		t.Fatalf("go mod tidy: %v\n%s", err, out)
 	}
-	buildRun := func(tags ...string) (string, error, error) {
-		build := exec.Command("go", append(append([]string{"build"}, tags...), "-o", "prog", ".")...)
-		build.Dir = dir
-		if out, err := build.CombinedOutput(); err != nil {
-			return string(out), err, nil
-		}
-		run := exec.Command(filepath.Join(dir, "prog"))
-		run.Dir = dir
-		run.Env = append(os.Environ(), env...)
-		b, err := run.CombinedOutput()
-		return string(b), nil, err
+	build := exec.Command("go", "build", "-o", "prog", ".")
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		return string(out), err, nil
 	}
-	// slim when the program reaches nothing slim leaves out
-	// (slim_build_test.go); a wrong guess is built again in full
-	if buildSlim(t, files) {
-		out, buildErr, runErr := buildRun("-tags", "slim")
-		if buildErr == nil && !slimRefused(out) {
-			return out, nil, runErr
-		}
-	}
-	return buildRun()
+	run := exec.Command(filepath.Join(dir, "prog"))
+	run.Dir = dir
+	run.Env = append(os.Environ(), env...)
+	b, err := run.CombinedOutput()
+	return string(b), nil, err
 }
 
 func TestTypedFromToCSV(t *testing.T) {

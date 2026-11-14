@@ -1,4 +1,4 @@
-package typed
+package parquet
 
 import (
 	"path/filepath"
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/typed"
 )
 
 type inetRow struct {
@@ -20,35 +21,35 @@ type inetRow struct {
 func TestParquetInetRoundTrip(t *testing.T) {
 	rows := []inetRow{{ssql.MustParseInet("10.0.0.1/24"), 1}, {ssql.MustParseInet("2001:db8::1"), 2}, {ssql.Inet{}, 3}}
 	path := filepath.Join(t.TempDir(), "ip.parquet")
-	if err := WriteParquet(slices.Values(rows), path); err != nil {
+	if err := WriteTyped(slices.Values(rows), path); err != nil {
 		t.Fatal(err)
 	}
 	var back []inetRow
-	for r := range ReadParquet[inetRow](path) {
+	for r := range ReadTyped[inetRow](path) {
 		back = append(back, r)
 	}
 	if !slices.Equal(back, rows) {
 		t.Errorf("parquet round trip: %v", back)
 	}
 	csvPath := filepath.Join(t.TempDir(), "ip.csv")
-	if err := WriteCSV(slices.Values(rows[:2]), csvPath); err != nil {
+	if err := typed.WriteCSV(slices.Values(rows[:2]), csvPath); err != nil {
 		t.Fatal(err)
 	}
 	var fromCSV []inetRow
-	for r := range ReadCSV[inetRow](csvPath) {
+	for r := range typed.ReadCSV[inetRow](csvPath) {
 		fromCSV = append(fromCSV, r)
 	}
 	if !slices.Equal(fromCSV, rows[:2]) {
 		t.Errorf("csv round trip: %v", fromCSV)
 	}
 	bad := filepath.Join(t.TempDir(), "bad.csv")
-	if err := WriteCSV(slices.Values([]struct {
+	if err := typed.WriteCSV(slices.Values([]struct {
 		IP string `ssql:"ip"`
 	}{{"010.0.0.1"}}), bad); err != nil {
 		t.Fatal(err)
 	}
 	err := ssql.Run(func() error {
-		for range ReadCSV[inetRow](bad) {
+		for range typed.ReadCSV[inetRow](bad) {
 		}
 		return nil
 	})

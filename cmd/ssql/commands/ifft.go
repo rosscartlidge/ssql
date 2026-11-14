@@ -89,11 +89,11 @@ func RegisterIFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 				// Optimized path: direct Arrow signal extraction
-				magnitude, err = ssql.ExtractSignalFromArrow(inputFile, magnitudeField)
+				magnitude, err = extractSignalFromArrow(inputFile, magnitudeField)
 				if err != nil {
 					return fmt.Errorf("extracting magnitude from Arrow: %w", err)
 				}
-				phase, err = ssql.ExtractSignalFromArrow(inputFile, phaseField)
+				phase, err = extractSignalFromArrow(inputFile, phaseField)
 				if err != nil {
 					return fmt.Errorf("extracting phase from Arrow: %w", err)
 				}
@@ -173,11 +173,11 @@ func generateIFFTCode(inputFile, magnitudeField, phaseField, outputField string)
 
 	// If reading directly from Arrow file, generate optimized code
 	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
-		code := fmt.Sprintf(`magnitude, err := ssql.ExtractSignalFromArrow(%q, %q)
+		code := fmt.Sprintf(`magnitude, err := arrow.ExtractSignal(%q, %q)
 	if err != nil {
 		return fmt.Errorf("Error extracting magnitude: %%w", err)
 	}
-	phase, err := ssql.ExtractSignalFromArrow(%q, %q)
+	phase, err := arrow.ExtractSignal(%q, %q)
 	if err != nil {
 		return fmt.Errorf("Error extracting phase: %%w", err)
 	}
@@ -192,7 +192,7 @@ func generateIFFTCode(inputFile, magnitudeField, phaseField, outputField string)
 			inputFile, phaseField,
 			outputField)
 
-		frag := lib.NewInitFragment("ifftRecords", code, []string{"os"}, getCommandString())
+		frag := lib.NewInitFragment("ifftRecords", code, []string{"os", arrowImport}, getCommandString())
 		return lib.WriteCodeFragment(frag)
 	}
 

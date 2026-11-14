@@ -84,7 +84,7 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 				// Optimized path: direct Arrow signal extraction (bypasses Record conversion)
-				signal, err = ssql.ExtractSignalFromArrow(inputFile, field)
+				signal, err = extractSignalFromArrow(inputFile, field)
 				if err != nil {
 					return fmt.Errorf("extracting signal from Arrow: %w", err)
 				}
@@ -151,7 +151,7 @@ func generateFFTCode(inputFile, field string, sampleRate float64, includePhase b
 	// If reading directly from Arrow file, generate optimized code
 	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 		// Direct Arrow extraction - bypasses Record conversion
-		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
+		code := fmt.Sprintf(`signal, err := arrow.ExtractSignal(%q, %q)
 	if err != nil {
 		return fmt.Errorf("Error extracting signal: %%w", err)
 	}
@@ -166,7 +166,7 @@ func generateFFTCode(inputFile, field string, sampleRate float64, includePhase b
 			map[bool]string{true: "WithPhase", false: ""}[includePhase],
 			sampleRate)
 
-		frag := lib.NewInitFragment("fftRecords", code, []string{"os"}, getCommandString())
+		frag := lib.NewInitFragment("fftRecords", code, []string{"os", arrowImport}, getCommandString())
 		return lib.WriteCodeFragment(frag)
 	}
 

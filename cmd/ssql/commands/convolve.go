@@ -144,7 +144,7 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 				// Optimized path: direct Arrow signal extraction
-				signal, err = ssql.ExtractSignalFromArrow(inputFile, field)
+				signal, err = extractSignalFromArrow(inputFile, field)
 				if err != nil {
 					return fmt.Errorf("extracting signal from Arrow: %w", err)
 				}
@@ -315,7 +315,7 @@ func generateConvolveCode(inputFile, field, outputField, kernelName string, size
 			}
 		}
 
-		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
+		code := fmt.Sprintf(`signal, err := arrow.ExtractSignal(%q, %q)
 	if err != nil {
 		return fmt.Errorf("Error extracting signal: %%w", err)
 	}
@@ -330,7 +330,7 @@ func generateConvolveCode(inputFile, field, outputField, kernelName string, size
 			convolveCall,
 			outputField)
 
-		frag := lib.NewInitFragment("convolvedRecords", code, []string{"os"}, getCommandString())
+		frag := lib.NewInitFragment("convolvedRecords", code, []string{"os", arrowImport}, getCommandString())
 		return lib.WriteCodeFragment(frag)
 	}
 

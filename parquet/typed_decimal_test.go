@@ -1,4 +1,4 @@
-package typed
+package parquet
 
 import (
 	"path/filepath"
@@ -21,17 +21,17 @@ type moneyRow struct {
 func TestParquetDecimalRoundTrip(t *testing.T) {
 	rows := []moneyRow{{ssql.MustParseDecimal("12.34"), 1}, {ssql.MustParseDecimal("-0.05"), 2}, {ssql.MustParseDecimal("90071992547409.92"), 3}}
 	path := filepath.Join(t.TempDir(), "money.parquet")
-	if err := WriteParquet(slices.Values(rows), path); err != nil {
+	if err := WriteTyped(slices.Values(rows), path); err != nil {
 		t.Fatal(err)
 	}
 	var back []moneyRow
-	for r := range ReadParquet[moneyRow](path) {
+	for r := range ReadTyped[moneyRow](path) {
 		back = append(back, r)
 	}
 	if !slices.Equal(back, rows) {
 		t.Errorf("round trip: %v", back)
 	}
-	recs, err := ssql.ReadParquet(path)
+	recs, err := Read(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,11 +49,11 @@ func TestParquetDecimalRoundTrip(t *testing.T) {
 		Amt ssql.Decimal `ssql:"amt,decimal:3"`
 	}
 	path3 := filepath.Join(t.TempDir(), "three.parquet")
-	if err := WriteParquet(slices.Values([]wide{{ssql.MustParseDecimal("2.345")}, {ssql.MustParseDecimal("-2.345")}}), path3); err != nil {
+	if err := WriteTyped(slices.Values([]wide{{ssql.MustParseDecimal("2.345")}, {ssql.MustParseDecimal("-2.345")}}), path3); err != nil {
 		t.Fatal(err)
 	}
 	var got []string
-	for r := range ReadParquet[struct {
+	for r := range ReadTyped[struct {
 		Amt ssql.Decimal `ssql:"amt,decimal:2"`
 	}](path3) {
 		got = append(got, r.Amt.String())
@@ -63,7 +63,7 @@ func TestParquetDecimalRoundTrip(t *testing.T) {
 	}
 	// A decimal field without its scale in the tag is a loud error.
 	err = ssql.Run(func() error {
-		return WriteParquet(slices.Values([]struct {
+		return WriteTyped(slices.Values([]struct {
 			Amt ssql.Decimal `ssql:"amt"`
 		}{{ssql.MustParseDecimal("1.5")}}), filepath.Join(t.TempDir(), "notag.parquet"))
 	})

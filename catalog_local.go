@@ -19,7 +19,7 @@ func CatalogLocalParquet(e CatalogEntry, pushdown [][]string) bool {
 // clash on its first record, attaches the shard's metadata and yields.
 // stopped reports that yield returned false.
 func readLocalParquetShard(entry CatalogEntry, shardField string, yield func(Record) bool) (stopped bool, err error) {
-	seq, err := ReadParquet(entry.Path)
+	seq, err := readParquet(entry.Path)
 	if err != nil {
 		return false, err
 	}

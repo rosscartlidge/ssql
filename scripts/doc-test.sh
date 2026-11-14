@@ -73,6 +73,9 @@ llm_files="doc/ai-code-generation.md doc/ai-human-guide.md"
 # (CopyExploreWasmFile removed in v4.18 - WASM is now embedded in HTML)
 # - ExtractSignalFromWAVChannel: advanced WAV variant
 # - WriteWAVToWriter: ToWriter streaming variant
+# - RecordsFromStringRows/RegisterParquetReader: the format packages'
+#   plumbing (DFC168); the formats themselves are packages parquet,
+#   arrow and xlsx, documented in api-reference.md
 excluded_funcs="
 RollupGroupingSets
 RollupFieldPrefix
@@ -85,10 +88,8 @@ DisplayTableWithFields
 ExecCommand
 ExecCommandSafe
 ExtractFieldsFromTSV
-ExtractSignalFromArrow
 FFTMagnitude
 GPUAvailable
-ReadArrowFromReader
 ReadCommandOutput
 ReadCommandOutputSafe
 ReadCSVFromReader
@@ -108,13 +109,14 @@ ReadTSV
 ReadTSVFromReader
 ReadTSVFromReaderWithSeparator
 RecordKey
+RecordsFromStringRows
+RegisterParquetReader
 SpectrogramToRecords
 SpectrumToRecords
 StableKey
 TimeSeriesChart
 ValidateRecord
 WithSignal
-WriteArrowToWriter
 WriteCSV
 WriteCSVToWriter
 WriteJSON

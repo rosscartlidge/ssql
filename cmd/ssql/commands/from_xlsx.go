@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -63,12 +62,7 @@ func executeFromXLSX(inputFile string, sheet string, generate bool) error {
 		return generateFromXLSXCode(inputFile, sheet)
 	}
 
-	var xlsxConfig []ssql.XLSXConfig
-	if sheet != "" {
-		xlsxConfig = append(xlsxConfig, ssql.XLSXConfig{SheetName: sheet})
-	}
-
-	records, err := ssql.ReadXLSX(inputFile, xlsxConfig...)
+	records, err := readXLSX(inputFile, sheet)
 	if err != nil {
 		return fmt.Errorf("reading XLSX file: %w", err)
 	}
@@ -84,18 +78,18 @@ func generateFromXLSXCode(filename string, sheet string) error {
 
 	params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input XLSX file", VarName: "flagInput"})
 	if sheet != "" {
-		code = fmt.Sprintf(`records, err := ssql.ReadXLSX(*flagInput, ssql.XLSXConfig{SheetName: %q})
+		code = fmt.Sprintf(`records, err := xlsx.Read(*flagInput, xlsx.Config{SheetName: %q})
 	if err != nil {
 		return fmt.Errorf("reading XLSX: %%w", err)
 	}`, sheet)
 	} else {
-		code = `records, err := ssql.ReadXLSX(*flagInput)
+		code = `records, err := xlsx.Read(*flagInput)
 	if err != nil {
 		return fmt.Errorf("reading XLSX: %w", err)
 	}`
 	}
 
-	imports := []string{"fmt", "os"}
+	imports := []string{"fmt", "os", xlsxImport}
 	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)

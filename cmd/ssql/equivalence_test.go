@@ -307,7 +307,12 @@ func equivLanes() []equivLane {
 		return equivLane{name, func(t *testing.T, bin, pipeline string, env []string) string {
 			src := equivShellEnv(t, name, "export SSQLGO="+equivSentinel(mode)+" && "+
 				pipeline+" | "+bin+" to jsonl | "+bin+" generate go", env)
-			return goRunGeneratedEnv(t, src, env)
+			// A generated catalog program runs a local shard's pushdown
+			// with the ssql on PATH: make that this build, not whatever
+			// is installed (an installed release generated the names
+			// DFC168 moved, and every catalog pushdown case failed).
+			runEnv := append(slices.Clone(env), "PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+			return goRunGeneratedEnv(t, src, runEnv)
 		}}
 	}
 	lanes := []equivLane{
