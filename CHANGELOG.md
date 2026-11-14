@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.147.0] - 2026-11-15
+
 ### Changed (breaking)
 
 - **Parquet, Arrow and XLSX are packages of their own**: `github.com/rosscartlidge/ssql/v4/parquet`, `…/arrow` and `…/xlsx`. The root and `typed` packages no longer import Apache Arrow, Parquet or excelize, so a program links them only when it imports the format, and `ssql generate go` imports exactly the formats a pipeline reads or writes. A generated CSV program now links in 0.6 s at 11.5 MB, against 1.5 s and 46 MB before. The old names are gone, with no forwarders: ssql has no outside users yet, so this is a minor release ([DFC168](doc/research/dfc168_heavy_formats_as_packages.md)). The renames:

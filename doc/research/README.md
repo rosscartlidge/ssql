@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-10-28 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-10-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-11-14 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-11-15 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -158,7 +158,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC148 | 2026-10-12 | 2026-10-14 | [DuckDB's "view-only mode" post, reproduced in ssql: findings, fixes and gaps](./dfc148_duckdb_view_only_mode.md) |
 | DFC149 | 2026-10-13 | 2026-10-17 | [Hive Partitions Are a Derived Catalog](./dfc149_hive_partitions_as_derived_catalog.md) |
 | DFC150 | 2026-10-15 | 2026-10-17 | [The view-only week: what landed, what it broke open, what remains](./dfc150_view_only_week_retrospective.md) |
-| DFC151 | 2026-10-15 | 2026-11-14 | [The slim build: size, composition, uses, and what to cut](./dfc151_slim_build_diet.md) |
+| DFC151 | 2026-10-15 | 2026-11-15 | [The slim build: size, composition, uses, and what to cut](./dfc151_slim_build_diet.md) |
 | DFC152 | 2026-10-19 | 2026-10-20 | [Expression macros: named expressions with field-completing arguments](./dfc152_expression_macros.md) |
 | DFC153 | 2026-10-20 | 2026-10-20 | [Numeric Functions: The DuckDB Set, in Every Lane](./dfc153_numeric_functions.md) |
 | DFC154 | 2026-10-20 | 2026-10-22 | [A Row Generator: `from range`, Numbers Every Lane Can Make](./dfc154_range_source.md) |
@@ -175,7 +175,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC165 | 2026-11-07 | 2026-11-07 | [The lookup pipeline's extra CPU: typed Go against DuckDB](./dfc165_lookup_pipeline_cpu_typed_vs_duckdb.md) |
 | DFC166 | 2026-11-10 | 2026-11-10 | [Where the System Time Goes: Memory in the Generated Go and Rust Programs](./dfc166_memory_go_vs_rust.md) |
 | DFC167 | 2026-11-10 | 2026-11-10 | [Editing a Pipeline in the Editor: Pretty on the Way In, a Language Server Inside](./dfc167_editor_pretty_and_lsp.md) |
-| DFC168 | 2026-11-11 | 2026-11-14 | [Heavy formats as packages a program imports](./dfc168_heavy_formats_as_packages.md) |
+| DFC168 | 2026-11-11 | 2026-11-15 | [Heavy formats as packages a program imports](./dfc168_heavy_formats_as_packages.md) |
 
 <!-- DFC-INDEX-END -->
 
