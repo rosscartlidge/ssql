@@ -145,6 +145,7 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			}
 
+			signal = schemaModeSignal(signal)
 			if len(signal) == 0 {
 				return fmt.Errorf("no signal data found in field %q", field)
 			}

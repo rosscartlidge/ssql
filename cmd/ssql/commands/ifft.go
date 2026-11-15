@@ -112,6 +112,13 @@ func RegisterIFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			} else {
 				// Read from stdin (pipeline mode)
 				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
+				// An unknown field read as a signal of zeros: a confident,
+				// meaningless result, exit 0 (fft fixed it in the DFC133
+				// sweep; found here by TestSchemaModeRejectsUnknownFields,
+				// DFC170).
+				if err := validateFieldsSchema(schemaAndRecords.Schema, []string{magnitudeField, phaseField}, "ifft"); err != nil {
+					return err
+				}
 				records := slices.Collect(schemaAndRecords.Records)
 				magnitude = make([]float64, len(records))
 				phase = make([]float64, len(records))
@@ -121,6 +128,9 @@ func RegisterIFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
+			if schemaMode() && len(magnitude) == 0 {
+				magnitude, phase = schemaModeSignal(nil), schemaModeSignal(nil)
+			}
 			if len(magnitude) == 0 {
 				return fmt.Errorf("no data found in fields %q and %q", magnitudeField, phaseField)
 			}
@@ -207,8 +217,9 @@ func generateIFFTCode(inputFile, magnitudeField, phaseField, outputField string)
 	outputVar := "ifftRecords"
 
 	// Use the IFFTFilter function that works with the code generation system
-	code := fmt.Sprintf(`%s := ssql.IFFTFilter(%q, %q, %q)(%s)`,
-		outputVar, magnitudeField, phaseField, outputField, inputVar)
+	// A missing field is refused at run time, as exec refuses it (DFC170).
+	filter := fmt.Sprintf(`ssql.IFFTFilter(%q, %q, %q)`, magnitudeField, phaseField, outputField)
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "ifft", []string{magnitudeField, phaseField}, filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)

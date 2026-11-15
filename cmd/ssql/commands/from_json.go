@@ -256,7 +256,7 @@ func executeFromJSON(inputFile string, types typeArgs, generate bool) error {
 			defer f.Close()
 			r = f
 		}
-		return writeSchemaModeJSON(os.Stdout, r)
+		return writeSchemaModeJSON(os.Stdout, r, types.cfg.TypeOverrides)
 	}
 
 	if shouldGenerate(generate) {

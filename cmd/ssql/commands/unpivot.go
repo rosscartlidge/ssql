@@ -121,9 +121,6 @@ func RegisterUnpivot(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "unpivot")
-			}
 			if shouldGenerate(generate) {
 				return generateUnpivotCode(cfg)
 			}

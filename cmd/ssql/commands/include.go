@@ -34,10 +34,6 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "include")
-			}
-
 			var generate bool
 			var fields []string
 

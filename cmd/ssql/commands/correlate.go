@@ -158,6 +158,13 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			} else {
 				// Read from stdin (pipeline mode)
 				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
+				// An unknown field read as a signal of zeros: a confident,
+				// meaningless result, exit 0 (fft fixed it in the DFC133
+				// sweep; found here by TestSchemaModeRejectsUnknownFields,
+				// DFC170).
+				if err := validateFieldsSchema(schemaAndRecords.Schema, nonEmpty(field, withField), "correlate"); err != nil {
+					return err
+				}
 				records = slices.Collect(schemaAndRecords.Records)
 				signalA = ssql.ExtractSignalFromSlice(records, field)
 				if !auto || maxLag == 0 {
@@ -165,6 +172,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
+			signalA = schemaModeSignal(signalA)
 			if len(signalA) == 0 {
 				return fmt.Errorf("no signal data found in field %q", field)
 			}
@@ -177,6 +185,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				result, err = ssql.AutoCorrelateMax(signalA, maxLag)
 			} else {
 				// Cross-correlation or full autocorrelation
+				signalB = schemaModeSignal(signalB)
 				if len(signalB) == 0 {
 					return fmt.Errorf("no signal data found in field %q", withField)
 				}
@@ -282,18 +291,28 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 
 	outputVar := "correlatedRecords"
 
-	var code string
+	var filter string
 	if auto && maxLag > 0 {
-		code = fmt.Sprintf(`%s := ssql.AutoCorrelateMaxFilter(%q, %q, %d)(%s)`,
-			outputVar, fieldA, outputField, maxLag, inputVar)
+		filter = fmt.Sprintf(`ssql.AutoCorrelateMaxFilter(%q, %q, %d)`, fieldA, outputField, maxLag)
 	} else if auto {
-		code = fmt.Sprintf(`%s := ssql.AutoCorrelateFilter(%q, %q, %v)(%s)`,
-			outputVar, fieldA, outputField, same, inputVar)
+		filter = fmt.Sprintf(`ssql.AutoCorrelateFilter(%q, %q, %v)`, fieldA, outputField, same)
 	} else {
-		code = fmt.Sprintf(`%s := ssql.CorrelateFilter(%q, %q, %q, %v)(%s)`,
-			outputVar, fieldA, fieldB, outputField, same, inputVar)
+		filter = fmt.Sprintf(`ssql.CorrelateFilter(%q, %q, %q, %v)`, fieldA, fieldB, outputField, same)
 	}
+	// A missing field is refused at run time, as exec refuses it (DFC170).
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "correlate", nonEmpty(fieldA, fieldB), filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)
+}
+
+// nonEmpty is the names that are set (correlate's -with is optional).
+func nonEmpty(names ...string) []string {
+	var out []string
+	for _, n := range names {
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }

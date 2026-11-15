@@ -41,17 +41,36 @@ func TestSchemaModePipeline(t *testing.T) {
 		{"rename", "from csv " + csv + " | " + bin + " rename -as name person", []string{"person", "dept", "salary"}},
 		{"exclude", "from csv " + csv + " | " + bin + " exclude salary", []string{"name", "dept"}},
 		{"group-by", "from csv " + csv + " | " + bin + " group-by dept -count n", []string{"dept", "n"}},
-		{"pivot undeterminable", "from csv " + csv + " | " + bin + " pivot dept salary", nil},
+		// pivot's columns come from its data: no header, "unknown", which
+		// the next stage passes on rather than refusing every field it
+		// names. The case was `pivot dept salary` until 2026-11-15, a
+		// grammar error the runner's missing pipefail turned into the
+		// expected nil (DFC170 §2.2).
+		{"pivot undeterminable", "from csv " + csv + " | " + bin + " pivot -row dept -col name -val salary", nil},
+		{"after pivot, still undetermined", "from csv " + csv + " | " + bin + " pivot -row dept -col name -val salary | " + bin + " where -if x eq 1 | " + bin + " include x", nil},
 		{"group-by rollup", "from csv " + csv + " | " + bin + " group-by name dept -count n -rollup",
 			[]string{"name", "dept", "n", "name_n", "name_dept_n"}},
 		{"group-by cube", "from csv " + csv + " | " + bin + " group-by name dept -count n -cube",
 			[]string{"name", "dept", "n", "name_n", "dept_n", "name_dept_n"}},
+		// The stages after -- run in a child per file; in schema mode the
+		// children wrote headers the row merge dropped, and the stage wrote
+		// no schema at all until 2026-11-15 (DFC170 §2.4).
+		{"multi-file pushdown", "from csv " + csv + " " + csv + " -- group-by dept -count n", []string{"dept", "n"}},
+		{"multi-file", "from csv " + csv + " " + csv, []string{"name", "dept", "salary"}},
+		// A signal command computes on a zero signal in schema mode and
+		// answers with exec's header; it refused ("no signal data
+		// found") until 2026-11-15 (DFC170 §2.4).
+		{"fft", "from csv " + csv + " | " + bin + " fft -field salary -phase", []string{"index", "frequency", "magnitude", "phase"}},
+		{"fft then ifft", "from csv " + csv + " | " + bin + " fft -field salary -phase | " + bin + " ifft -magnitude magnitude -phase phase", []string{"index", "signal"}},
+		{"convolve", "from csv " + csv + " | " + bin + " convolve -field salary -auto", []string{"index", "salary_autoconv"}},
+		{"correlate", "from csv " + csv + " | " + bin + " correlate -field salary -auto", []string{"index", "lag", "correlation"}},
+		{"spectrogram", "from csv " + csv + " | " + bin + " spectrogram -field salary", []string{"time_index", "time", "frequency", "magnitude"}},
 		{"tsv tab", "from tsv " + tabTSV, []string{"name", "age", "dept"}},
 		{"tsv pipe-delimited", "from tsv " + pipeTSV, []string{"name", "age", "dept"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			script := "(export SSQL_MODE=schema; " + bin + " " + c.pipeline + ") | " + bin + " generate schema"
+			script := "set -o pipefail; (export SSQL_MODE=schema; " + bin + " " + c.pipeline + ") | " + bin + " generate schema"
 			out, err := exec.Command("bash", "-c", script).Output()
 			if err != nil {
 				t.Fatalf("pipeline failed: %v", err)

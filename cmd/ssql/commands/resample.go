@@ -127,10 +127,6 @@ func RegisterResample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "resample")
-			}
-
 			cfg := ssql.ResampleConfig{}
 			cfg.TimeField, _ = ctx.GlobalFlags["-time"].(string)
 			everyStr, _ := ctx.GlobalFlags["-every"].(string)

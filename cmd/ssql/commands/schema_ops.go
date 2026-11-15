@@ -99,6 +99,14 @@ func walkStage(args []string, arity map[string]int) (positionals []string, flags
 		i++
 	}
 	for i < len(args) {
+		if args[i] == "-arg" && i+1 < len(args) {
+			// `-arg VALUE` is any argument spelled so it is never read as
+			// a flag (`include -arg -desc`): a positional, wherever it is
+			// (ignored here until DFC170's shadow test).
+			positionals = append(positionals, args[i+1])
+			i += 2
+			continue
+		}
 		if !isFlagTok(args[i]) {
 			i++ // stray positional after a flag — ignore
 			continue
@@ -145,7 +153,7 @@ func init() {
 	// copy (prefix_result) has its base result's type; -expr is any.
 	registerSchemaTypeOp("group-by", func(in map[string]string, args []string) map[string]string {
 		arity := aggFlagArity()
-		for k, v := range map[string]int{"-expr": 2, "-stream-expr": 4, "-rollup": 0, "-cube": 0, "-presorted": 0, "-generate": 0, "-g": 0, "-spill": 1, "-memory": 1} {
+		for k, v := range map[string]int{"-expr": 2, "-e": 2, "-stream-expr": 4, "-rollup": 0, "-cube": 0, "-presorted": 0, "-generate": 0, "-g": 0, "-spill": 1, "-memory": 1} {
 			arity[k] = v
 		}
 		_, flags := walkStage(args, arity)
@@ -209,10 +217,19 @@ func init() {
 		return out, true
 	})
 
-	// include: keep the listed fields, in listed order.
+	// include: keep the listed fields, in listed order; a path into a
+	// nested value (addr.city, tags.0) is a new column when its head is
+	// a field, as exec's HasFieldOrPath says.
 	registerSchemaOp("include", func(_ any, in []string, args []string) ([]string, bool) {
 		pos, _ := walkStage(args, map[string]int{"-generate": 0, "-g": 0})
-		return keepPresent(in, pos), true
+		var out []string
+		for _, f := range pos {
+			head, _, _ := strings.Cut(f, ".")
+			if in == nil || slices.Contains(in, f) || slices.Contains(in, head) {
+				out = append(out, f)
+			}
+		}
+		return out, true
 	})
 
 	// exclude: drop the listed fields.
@@ -241,10 +258,14 @@ func init() {
 			"-set": 2, "-s": 2, "-set-expr": 2, "-e": 2, "-set-bucket": 3, "-b": 3,
 			"-set-field": 2, "-set-macro": 2,
 			"-if": 3, "-i": 3, "-if-expr": 1, "-x": 1, "-if-field": 3, "-if-macro": 1,
-			"-param": 3, "-param-field": 3, "-generate": 0, "-g": 0,
+			"-param": 3, "-p": 3, "-param-field": 3, "-generate": 0, "-g": 0,
 		})
+		// The flags that assign a column, aliases included (-s, -e and -b
+		// added nothing until DFC170; -p's arguments were read as flags).
+		assigns := map[string]bool{"-set": true, "-s": true, "-set-expr": true, "-e": true,
+			"-set-bucket": true, "-b": true, "-set-field": true, "-set-macro": true}
 		for _, f := range flags {
-			if strings.HasPrefix(f.name, "-set") && len(f.args) >= 1 {
+			if assigns[f.name] && len(f.args) >= 1 {
 				if !slices.Contains(out, f.args[0]) {
 					out = append(out, f.args[0])
 				}
@@ -261,7 +282,7 @@ func init() {
 	registerSchemaOp("group-by", func(_ any, in []string, args []string) ([]string, bool) {
 		arity := aggFlagArity() // built-in aggregates (aggDefs, DFC129 §6)
 		for k, v := range map[string]int{
-			"-expr": 2, "-stream-expr": 4,
+			"-expr": 2, "-e": 2, "-stream-expr": 4,
 			"-rollup": 0, "-cube": 0, "-presorted": 0, "-generate": 0, "-g": 0,
 			"-spill": 1, "-memory": 1,
 		} {
@@ -269,24 +290,30 @@ func init() {
 		}
 		pos, flags := walkStage(args, arity)
 		out := keepPresent(in, pos)
-		var results []string
+		// Exec's order (groupByOutputSchema): the aggregates, then the
+		// expressions, then the streaming expressions, each as written.
+		var aggs, exprs, streams []string
 		rollupMode := ssql.RollupMode(-1)
 		for _, f := range flags {
+			if len(f.args) == 0 && f.name != "-rollup" && f.name != "-cube" {
+				continue
+			}
 			switch f.name {
 			case "-rollup":
 				rollupMode = ssql.RollupHierarchical
 			case "-cube":
 				rollupMode = ssql.RollupCube
-			case "-expr", "-stream-expr":
-				if len(f.args) > 0 {
-					results = append(results, f.args[len(f.args)-1])
-				}
+			case "-expr", "-e":
+				exprs = append(exprs, f.args[len(f.args)-1])
+			case "-stream-expr":
+				streams = append(streams, f.args[len(f.args)-1])
 			default:
-				if _, isAgg := aggDefByFlag(f.name); isAgg && len(f.args) > 0 {
-					results = append(results, f.args[len(f.args)-1])
+				if _, isAgg := aggDefByFlag(f.name); isAgg {
+					aggs = append(aggs, f.args[len(f.args)-1])
 				}
 			}
 		}
+		results := slices.Concat(aggs, exprs, streams)
 		if rollupMode == ssql.RollupMode(-1) {
 			return append(out, results...), true
 		}
@@ -295,7 +322,7 @@ func init() {
 		// Mirrors the output-schema construction in the exec handler.
 		for _, set := range computeGroupingSetsForSchema(pos, rollupMode) {
 			prefix := groupingSetPrefixForSchema(set)
-			for _, r := range results {
+			for _, r := range append(slices.Clone(aggs), exprs...) { // a rollup has no streaming results
 				out = append(out, prefix+r)
 			}
 		}
@@ -339,4 +366,29 @@ func init() {
 	registerSchemaOp("pivot", func(_ any, _ []string, _ []string) ([]string, bool) {
 		return nil, false
 	})
+}
+
+// SchemaOpFields is the in-process schema walk's answer for one stage:
+// the output field names its registered op (identity when it has none)
+// predicts from the input names. serve's completion walk and the
+// generators' fragmentFields use these ops without running the command,
+// so TestSchemaOpsShadowSchemaMode holds them to the command's own
+// schema-mode answer (DFC170; DFC096 §9 designed the shadow in May).
+func SchemaOpFields(stage []string, in []string) ([]string, bool) {
+	if len(stage) == 0 {
+		return in, true
+	}
+	return lookupSchemaOp(stage[0])(nil, in, stage[1:])
+}
+
+func init() {
+	// join and traverse add another source's columns (the right side, the
+	// edge graph's results), which an op given only the left side's names
+	// cannot see: undeterminable, not identity. As identity, serve's
+	// completion walk offered only the left side's fields after a join
+	// (found by TestSchemaOpsShadowSchemaMode, DFC170). The generators
+	// never ask: they special-case both.
+	undeterminable := func(any, []string, []string) ([]string, bool) { return nil, false }
+	registerSchemaOp("join", undeterminable)
+	registerSchemaOp("traverse", undeterminable)
 }

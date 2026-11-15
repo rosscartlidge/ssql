@@ -159,10 +159,18 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			} else {
 				// Read from stdin (pipeline mode)
 				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
+				// An unknown field read as a signal of zeros: a confident,
+				// meaningless result, exit 0 (fft fixed it in the DFC133
+				// sweep; found here by TestSchemaModeRejectsUnknownFields,
+				// DFC170).
+				if err := validateFieldsSchema(schemaAndRecords.Schema, []string{field}, "convolve"); err != nil {
+					return err
+				}
 				records = slices.Collect(schemaAndRecords.Records)
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			}
 
+			signal = schemaModeSignal(signal)
 			if len(signal) == 0 {
 				return fmt.Errorf("no signal data found in field %q", field)
 			}
@@ -344,16 +352,17 @@ func generateConvolveCode(inputFile, field, outputField, kernelName string, size
 
 	outputVar := "convolvedRecords"
 
-	var code string
+	var filter string
 	if auto {
 		// Auto-convolution
-		code = fmt.Sprintf(`%s := ssql.AutoConvolveFilter(%q, %q, %v)(%s)`,
-			outputVar, field, outputField, same, inputVar)
+		filter = fmt.Sprintf(`ssql.AutoConvolveFilter(%q, %q, %v)`, field, outputField, same)
 	} else {
 		// Use the ConvolveFilter function that works with the code generation system
-		code = fmt.Sprintf(`%s := ssql.ConvolveFilter(%q, %q, %s, %v)(%s)`,
-			outputVar, field, outputField, kernelExpr, same, inputVar)
+		filter = fmt.Sprintf(`ssql.ConvolveFilter(%q, %q, %s, %v)`, field, outputField, kernelExpr, same)
 	}
+	// A missing field is refused at run time, as exec refuses it (a signal
+	// of zeros, exit 0, until 2026-11-15; DFC170).
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "convolve", []string{field}, filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)

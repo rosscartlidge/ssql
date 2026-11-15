@@ -114,9 +114,6 @@ func RegisterExtract(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return err
 			}
 
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "extract")
-			}
 			if shouldGenerate(generate) {
 				return generateExtractCode(cfg, names)
 			}

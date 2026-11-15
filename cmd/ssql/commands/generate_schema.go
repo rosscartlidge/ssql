@@ -55,8 +55,15 @@ func registerGenerateSchema(cmd *cf.SubcommandBuilder) {
 			case asPackage:
 				return writeSchemaAsTableSchema(ctx.Stdout(), src)
 			}
+			// No header is "unknown" (a stage whose columns come from its
+			// data, such as pivot), which an empty list would pass for.
+			sr := lib.ReadJSONLWithSchema(src)
+			if sr.Schema == nil {
+				fmt.Fprintln(ctx.Stderr(), "generate schema: no schema reached this stage — an earlier stage failed, or its output columns depend on its data (pivot, for one)")
+				return nil
+			}
 			w := ctx.Stdout()
-			for _, name := range readSchemaModeInput(src) {
+			for _, name := range sr.Schema.Fields {
 				fmt.Fprintln(w, name)
 			}
 			return nil

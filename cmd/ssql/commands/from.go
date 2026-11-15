@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"slices"
 	"bufio"
 	"fmt"
@@ -484,6 +485,10 @@ func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReade
 		}
 	}
 
+	if schemaMode() {
+		// the header from the first file, and no rows (DFC170 §2.4)
+		return lib.WriteJSONLWithSchema(os.Stdout, schema, func(func(ssql.Record) bool) {})
+	}
 	return lib.WriteJSONLWithSchema(os.Stdout, schema, records)
 }
 
@@ -498,6 +503,9 @@ func executeFromMultiFilePushdown(files []string, format string, sourceField str
 	}
 
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
+	if schemaMode() {
+		return schemaModePushdown(selfBin, files[0], format, sourceField, pipelineGroups)
+	}
 	maxWorkers := runtime.NumCPU()
 	if maxWorkers > len(files) {
 		maxWorkers = len(files)
@@ -507,6 +515,29 @@ func executeFromMultiFilePushdown(files []string, format string, sourceField str
 		return executeMultiFilePushdownUnordered(selfBin, files, format, sourceField, pipelineGroups, maxWorkers)
 	}
 	return executeMultiFilePushdownOrdered(selfBin, files, format, sourceField, pipelineGroups, maxWorkers)
+}
+
+// schemaModePushdown is the pushdown's schema-mode answer: the stages run
+// once, on the first file (the files share a schema), and their header is
+// passed on with the -source-field column exec adds. Each child inherits
+// schema mode and writes a header and no rows, which the row-merging path
+// dropped, and the stage wrote no schema at all (DFC170 §2.4).
+func schemaModePushdown(selfBin, file, format, sourceField string, pipelineGroups [][]string) error {
+	proc := exec.Command("bash", "-c", ssql.BuildRemoteCommand(selfBin, file, format, pipelineGroups))
+	proc.Stderr = os.Stderr
+	out, err := proc.Output()
+	if err != nil {
+		return fmt.Errorf("file %s: %w", file, err)
+	}
+	schema := lib.ReadJSONLWithSchema(bytes.NewReader(out)).Schema
+	if schema == nil {
+		return nil // undetermined downstream of the pushed-down stages
+	}
+	if sourceField != "" {
+		schema = schema.Clone()
+		schema.AddField(sourceField, lib.TypeString)
+	}
+	return lib.WriteJSONLWithSchema(os.Stdout, schema, func(func(ssql.Record) bool) {})
 }
 
 func executeMultiFilePushdownOrdered(selfBin string, files []string, format, sourceField string, pipelineGroups [][]string, maxWorkers int) error {
@@ -867,6 +898,14 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 	var w io.Writer = os.Stdout
 	if options.w != nil {
 		w = options.w
+	}
+	if schemaMode() {
+		// Schema mode is the header, typed from the sample, and no rows:
+		// stopping here stops the reader (the deferred stop), so a source
+		// with no schema branch of its own (arrow, xlsx, wav, -sample, a
+		// list of files) reads its sample, not every row it holds, and
+		// writes no rows for the next stage to process (DFC170 §2.4).
+		return lib.WriteJSONLWithSchemaOrdered(w, schema, func(func(ssql.Record) bool) {})
 	}
 	if err := lib.WriteJSONLWithSchemaOrdered(w, schema, allRecords); err != nil {
 		return err

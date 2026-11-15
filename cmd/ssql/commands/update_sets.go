@@ -29,7 +29,7 @@ type clauseSet struct {
 	field      string
 	value      string // literal
 	expression string // expression text
-	source     string // the field copied
+	source     string // the field copied, or the column a bucket reads
 }
 
 // clauseSets lists a clause's assignments in argv order. A clause built
@@ -61,7 +61,7 @@ func clauseSets(clause cf.Clause) ([]clauseSet, error) {
 		if err != nil {
 			return nil, err
 		}
-		lists["-set-bucket"] = append(lists["-set-bucket"], clauseSet{kind: clauseSetExpr, field: se.field, expression: se.expression})
+		lists["-set-bucket"] = append(lists["-set-bucket"], clauseSet{kind: clauseSetExpr, field: se.field, expression: se.expression, source: source})
 	}
 	for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
 		lists["-set-field"] = append(lists["-set-field"], clauseSet{kind: clauseSetCopy, field: sf.target, source: sf.source})

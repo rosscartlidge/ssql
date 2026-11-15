@@ -60,7 +60,10 @@ func registerFromLines(cmd *cf.SubcommandBuilder) {
 // `from x.log` / `from x.txt` forms).
 func executeFromLines(inputFile string, generate bool) error {
 	if schemaMode() {
-		return writeSchemaModeOutput(os.Stdout, []string{"line_number", "line"})
+		// exec's types: the number an int, the text a string (both "any"
+		// until DFC170's lane compared them)
+		return writeSchemaModeOutputTyped(os.Stdout, []string{"line_number", "line"},
+			map[string]string{"line_number": lib.TypeInt, "line": lib.TypeString})
 	}
 	if shouldGenerate(generate) {
 		return generateFromLinesCode(inputFile)

@@ -349,10 +349,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	w = addWindowRegistryFlags(w)
 
 	w.Handler(func(ctx *cf.Context) error {
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "window")
-			}
-
 			var generate bool
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
@@ -418,6 +414,18 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return err
 			}
 
+			// Schema mode answers after the checks exec makes (DFC170).
+			// The header exec builds from the parsed configs; a fold's type
+			// comes from the first row, so it is "any" here.
+			if schemaMode() {
+				out := windowOutputSchema(inputSchema, configs)
+				if out != nil {
+					for _, f := range windowFoldResults(configs) {
+						out.AddField(f, "any")
+					}
+				}
+				return writeSchemaAnswer(ctx, out)
+			}
 			if presorted {
 				// Streaming mode — O(1) memory per aggregate
 				streamFilter, err := ssql.StreamWindow(configs)
@@ -427,18 +435,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 				windowed := streamFilter(records)
 
-				// Build output schema from input schema + config specs
-				var outSchema *lib.Schema
-				if inputSchema != nil {
-					outSchema = inputSchema.Clone()
-					for _, cfg := range configs {
-						for _, spec := range cfg.Specs {
-							if !outSchema.HasField(spec.ResultName) {
-								outSchema.AddField(spec.ResultName, inferWindowResultType(spec.Function, inputSchema))
-							}
-						}
-					}
-				}
+				outSchema := windowOutputSchema(inputSchema, configs)
 
 				if err := writeJSONLTypedFromFirstRow(ctx.Stdout(), outSchema, windowFoldResults(configs), windowed); err != nil {
 					return fmt.Errorf("writing output: %w", err)
@@ -452,23 +449,9 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Materialize to build output schema
 			results := slices.Collect(windowed)
 
-			// Build output schema
-			var outSchema *lib.Schema
-			if inputSchema != nil {
-				outSchema = inputSchema.Clone()
-			} else if len(results) > 0 {
-				outSchema = lib.InferFromRecord(results[0])
-			}
-
-			// Add result fields to schema
-			if outSchema != nil {
-				for _, cfg := range configs {
-					for _, spec := range cfg.Specs {
-						if !outSchema.HasField(spec.ResultName) {
-							outSchema.AddField(spec.ResultName, inferWindowResultType(spec.Function, inputSchema))
-						}
-					}
-				}
+			outSchema := windowOutputSchema(inputSchema, configs)
+			if outSchema == nil && len(results) > 0 {
+				outSchema = windowAddResults(lib.InferFromRecord(results[0]), inputSchema, configs)
 			}
 
 			// Write output
@@ -872,6 +855,29 @@ func parseLagLeadSpecs(flags map[string]any, flagName string, isLag bool) []ssql
 
 
 // inferWindowResultType returns the schema type string for a window function result.
+// windowOutputSchema is window's output header from its parsed configs:
+// the input's columns, then each result typed by inferWindowResultType.
+// Exec and schema mode share it (DFC170: schema mode re-parsed argv by
+// hand and typed every result "any"). Nil for an unknown input.
+func windowOutputSchema(in *lib.Schema, configs []ssql.WindowConfig) *lib.Schema {
+	if in == nil {
+		return nil
+	}
+	return windowAddResults(in.Clone(), in, configs)
+}
+
+// windowAddResults adds each config's result columns to out.
+func windowAddResults(out, in *lib.Schema, configs []ssql.WindowConfig) *lib.Schema {
+	for _, cfg := range configs {
+		for _, spec := range cfg.Specs {
+			if !out.HasField(spec.ResultName) {
+				out.AddField(spec.ResultName, inferWindowResultType(spec.Function, in))
+			}
+		}
+	}
+	return out
+}
+
 func inferWindowResultType(fn ssql.WindowFunc, inputSchema *lib.Schema) string {
 	// The library says what each function produces (DFC115); a result
 	// that keeps the source field's type looks the field up in the input

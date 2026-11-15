@@ -94,9 +94,6 @@ func RegisterFlatten(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if depth < 1 {
 				return fmt.Errorf("flatten: -depth must be at least 1")
 			}
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "flatten")
-			}
 			if shouldGenerate(generate) {
 				return generateFlattenCode(field, depth, keep)
 			}
@@ -105,6 +102,10 @@ func RegisterFlatten(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if err := validateFieldsSchema(sr.Schema, []string{field}, "flatten"); err != nil {
 					return err
 				}
+			}
+			// Schema mode answers after the checks exec makes (DFC170).
+			if schemaMode() {
+				return answerSchemaMode(ctx, "flatten", sr.Schema)
 			}
 			out := ssql.FlattenField(field, depth, keep)(sr.Records)
 			// The new fields and their types come from the first row.

@@ -337,10 +337,6 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Help("Full cube: enrich rows with all combination aggregations").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "group-by")
-			}
-
 			var groupByFields []string
 			var generate bool
 
@@ -425,6 +421,15 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if (rollup || cube) && !hasAnyAgg {
 				return fmt.Errorf("-rollup/-cube requires at least one aggregation (-count, -sum, etc.)")
 			}
+			// Schema mode answers here, after the checks exec makes: before
+			// them, `group-by department` passed silently (DFC170).
+			if schemaMode() {
+				// The header exec builds from the same parsed specs; an
+				// expression's type comes from the first row, so it is
+				// "any" here.
+				out, _ := groupByOutputSchema(inputSchema, groupByFields, specs, "any")
+				return writeSchemaAnswer(ctx, out)
+			}
 
 			// Rollup/cube path: use ssql.Rollup()
 			if (rollup || cube) && hasAnyAgg {
@@ -453,28 +458,10 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 				result := ssql.Rollup(config)(records)
 
-				// Build output schema
 				var outputSchema *lib.Schema
 				var exprResultNames []string
 				if inputSchema != nil {
-					outputSchema = lib.NewSchema()
-					for _, field := range groupByFields {
-						if inputSchema.HasFieldOrPath(field) {
-							outputSchema.AddField(field, keyWireType(inputSchema, field))
-						}
-					}
-					// Add all prefixed aggregation fields
-					sets := computeGroupingSetsForSchema(groupByFields, mode)
-					for _, setFields := range sets {
-						prefix := groupingSetPrefixForSchema(setFields)
-						for _, spec := range aggSpecs {
-							outputSchema.AddField(prefix+spec.result, aggWireType(spec, inputSchema))
-						}
-						for _, spec := range exprSpecs {
-							outputSchema.AddField(prefix+spec.result, "float") // placeholder: typed from the first row below
-							exprResultNames = append(exprResultNames, prefix+spec.result)
-						}
-					}
+					outputSchema, exprResultNames = groupByOutputSchema(inputSchema, groupByFields, specs, "float") // expressions typed from the first row below
 				}
 
 				if err := writeJSONLTypedFromFirstRow(ctx.Stdout(), outputSchema, exprResultNames, result); err != nil {
@@ -571,31 +558,10 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply Aggregate, results in the order named (the schema header's)
 			aggregated := ssql.AggregateOrdered("_group", aggregations)(grouped)
 
-			// Build output schema: group-by fields + aggregation result fields
 			var outputSchema *lib.Schema
 			var exprResultNames []string
 			if inputSchema != nil {
-				outputSchema = lib.NewSchema()
-				// Add group-by fields with their input types
-				for _, field := range groupByFields {
-					if inputSchema.HasFieldOrPath(field) {
-						outputSchema.AddField(field, keyWireType(inputSchema, field))
-					}
-				}
-				// Add aggregation result fields (min/max keep the field's type)
-				for _, spec := range aggSpecs {
-					outputSchema.AddField(spec.result, aggWireType(spec, inputSchema))
-				}
-				// Expression and streaming results: the type is the
-				// expression's own, read from the first row below.
-				for _, spec := range exprSpecs {
-					outputSchema.AddField(spec.result, "float")
-					exprResultNames = append(exprResultNames, spec.result)
-				}
-				for _, spec := range streamExprSpecs {
-					outputSchema.AddField(spec.result, "float")
-					exprResultNames = append(exprResultNames, spec.result)
-				}
+				outputSchema, exprResultNames = groupByOutputSchema(inputSchema, groupByFields, specs, "float") // expressions typed from the first row below
 			}
 
 			// Write output as JSONL (preserving schema if present)
@@ -1048,4 +1014,60 @@ func keyWireType(in *lib.Schema, field string) string {
 		return t
 	}
 	return "any"
+}
+
+// groupByOutputSchema is group-by's output header from its parsed specs:
+// the keys present in the input with their types, then per grouping set
+// (one, unprefixed, without -rollup/-cube) each aggregate's result with
+// its registry type and each expression's result as exprType. Exec passes
+// "float" and refines the expressions from the first row; schema mode
+// passes "any", having no row (DFC170: it re-parsed argv by hand before,
+// and ordered an -expr result ahead of a -count exec wrote first). It
+// returns the expression results' names for that refinement. An unknown
+// input (nil) still has the keys and results the arguments name, typed
+// "any" where the input would have said.
+func groupByOutputSchema(in *lib.Schema, keys []string, specs groupBySpecs, exprType string) (*lib.Schema, []string) {
+	lookup := in
+	if lookup == nil {
+		lookup = lib.NewSchema()
+	}
+	out := lib.NewSchema()
+	for _, field := range keys {
+		switch {
+		case in == nil:
+			out.AddField(field, "any")
+		case in.HasFieldOrPath(field):
+			out.AddField(field, keyWireType(in, field))
+		}
+	}
+	prefixes := []string{""}
+	grouping := specs.rollup || specs.cube
+	if grouping {
+		mode := ssql.RollupHierarchical
+		if specs.cube {
+			mode = ssql.RollupCube
+		}
+		prefixes = nil
+		for _, set := range computeGroupingSetsForSchema(keys, mode) {
+			prefixes = append(prefixes, groupingSetPrefixForSchema(set))
+		}
+	}
+	var exprNames []string
+	for _, prefix := range prefixes {
+		for _, spec := range specs.aggs {
+			out.AddField(prefix+spec.result, aggWireType(spec, lookup))
+		}
+		for _, spec := range specs.exprs {
+			out.AddField(prefix+spec.result, exprType)
+			exprNames = append(exprNames, prefix+spec.result)
+		}
+		if grouping {
+			continue // a rollup has no streaming results
+		}
+		for _, spec := range specs.streamExprs {
+			out.AddField(prefix+spec.result, exprType)
+			exprNames = append(exprNames, prefix+spec.result)
+		}
+	}
+	return out, exprNames
 }

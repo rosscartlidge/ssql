@@ -123,6 +123,17 @@ stage of a pipeline. `update`, `sort`, `group-by`, `include` and the
 other commands refuse unknown fields the same way, and `run -check`
 (Quick Diagnostics) reports them before anything runs.
 
+`generate schema` makes the same checks as running the pipeline does,
+without reading the data: a stage that names a field its input lacks
+fails with the same message. Two answers are less than a full list:
+after a stage whose columns come from the data (`pivot`), it prints
+"no schema reached this stage" on stderr; and a column an aggregate
+expression computes (`group-by -expr`, a `-stream-expr` fold) is typed
+`any`, because its type is learned from the first row. An `update
+-set-expr` column is typed from the expression and its input columns'
+types, as generated typed code types it, and `any` when an input column's
+type is unknown.
+
 ---
 
 ### Issue 4: Fewer records than expected

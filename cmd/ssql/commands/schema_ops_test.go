@@ -68,6 +68,17 @@ func TestMutatingSchemaOps(t *testing.T) {
 		{"window", []string{"-order", "salary", "-stream-expr", "{s:0}", "{s: s + salary}", "s", "run", "-count", "n"}, []string{"name", "dept", "salary", "run", "n"}, true},
 		{"pivot", []string{"dept", "salary"}, nil, false},
 		{"where", []string{"-if", "salary", "gt", "1"}, in, true}, // identity default
+		// Drift DFC170 found: the aliases, -p's arguments, the -arg form,
+		// a path into a nested value, exec's result order, and the
+		// sources an op cannot see.
+		{"update", []string{"-s", "a", "1", "-e", "b", "salary*2", "-b", "c", "salary", "1m"}, []string{"name", "dept", "salary", "a", "b", "c"}, true},
+		{"update", []string{"-p", "k", "int", "5", "-set-expr", "d", "salary+k"}, []string{"name", "dept", "salary", "d"}, true},
+		{"group-by", []string{"dept", "-e", "max(salary)", "m", "-count", "n"}, []string{"dept", "n", "m"}, true},
+		{"include", []string{"-arg", "dept", "-arg", "name"}, []string{"dept", "name"}, true},
+		{"exclude", []string{"-arg", "salary"}, []string{"name", "dept"}, true},
+		{"include", []string{"dept.code"}, []string{"dept.code"}, true},
+		{"join", []string{"right.csv", "-using", "dept"}, nil, false},
+		{"traverse", []string{"-from", "a", "-to", "b"}, nil, false},
 	}
 	for _, c := range cases {
 		got, ok := lookupSchemaOp(c.cmd)(nil, in, c.args)

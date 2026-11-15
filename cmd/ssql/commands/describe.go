@@ -73,9 +73,6 @@ func RegisterDescribe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 			cfg := ssql.DescribeConfig{Fields: fields}
 
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "describe")
-			}
 			if shouldGenerate(generate) {
 				return generateDescribeCode(cfg)
 			}

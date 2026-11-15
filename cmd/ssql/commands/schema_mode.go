@@ -193,8 +193,12 @@ func openJSONSource(br *bufio.Reader) (fields []string, types map[string]string,
 // names in the first record's key order, typed from a sample like a
 // delimited source (so a nested value shows `json`, not `any` — DFC144
 // Level 0); either way the paths inside its json-typed objects follow.
-func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
+// The source's -type overrides coerce the sampled rows as exec's reader
+// coerces every row, and type their columns (they were ignored until
+// 2026-11-15: `-type age float` was predicted int; DFC170).
+func writeSchemaModeJSON(w io.Writer, r io.Reader, overrides map[string]ssql.FieldType) error {
 	fields, headerTypes, records, headed := openJSONSource(bufio.NewReader(r))
+	records = ssql.CoerceFieldTypes(records, overrides)
 	names := fields
 	types := map[string]string{}
 	for k, t := range headerTypes {
@@ -202,11 +206,21 @@ func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
 	}
 	func() {
 		defer func() { _ = recover() }() // a bad line types nothing; exec reports it
+		sample := sampleSchemaRows(records)
+		defer func() {
+			for f := range overrides {
+				for _, row := range sample {
+					if v, ok := ssql.Get[any](row, f); ok && v != nil {
+						types[f] = lib.InferTypeString(v)
+						break
+					}
+				}
+			}
+		}()
 		if headed {
-			names = nestedPathNames(fields, types, sampleSchemaRows(records))
+			names = nestedPathNames(fields, types, sample)
 			return
 		}
-		sample := sampleSchemaRows(records)
 		if len(sample) > 0 {
 			for k := range sample[0].KeysIter() {
 				names = append(names, k)
@@ -223,24 +237,43 @@ func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
 	return writeSchemaModeOutputTyped(w, names, types)
 }
 
-// runSchemaModeTransform applies a transform command's schemaOp to the
-// incoming schema header and writes the result. cmdName keys the op
-// registry; ctx.RawArgs (minus a leading command name, if present)
-// supplies the argv the op decodes. An undeterminable op (ok=false)
-// emits an empty schema, which propagates downstream as "no fields".
+// runSchemaModeTransform answers schema mode for a stage that only passes
+// the schema on (tee, the `to` sinks): it reads the incoming header and
+// hands it to answerSchemaMode. A transform reads its input itself,
+// checks its fields as exec does, and then calls answerSchemaMode
+// (DFC170: answering before the check let `group-by department` through).
 func runSchemaModeTransform(ctx *cf.Context, cmdName string) error {
-	sr := lib.ReadJSONLWithSchema(ctx.Stdin())
-	var in []string
-	if sr.Schema != nil {
-		in = sr.Schema.Fields
+	return answerSchemaMode(ctx, cmdName, lib.ReadJSONLWithSchema(ctx.Stdin()).Schema)
+}
+
+// schemaOutputFromArgs names the commands whose output columns their own
+// arguments decide, so they answer even after an unknown input: a
+// group-by's keys and results, describe's fixed columns. Any other stage
+// after an unknown input is unknown too (an include of x does not say
+// whether x exists).
+var schemaOutputFromArgs = map[string]bool{"group-by": true, "describe": true}
+
+// answerSchemaMode applies a command's schemaOp to the incoming schema
+// and writes the result. cmdName keys the op registry; ctx.RawArgs
+// (minus a leading command name, if present) supplies the argv the op
+// decodes. "Unknown" is no header at all, as in exec: an undeterminable
+// op (ok=false), or an unknown input the op cannot see past, writes
+// nothing, and every stage downstream reads a nil schema and checks no
+// names against it. Until 2026-11-15 both wrote `fields: []`, which reads
+// as "known to be empty", and the stage after a pivot refused every field
+// it named (DFC170 §2.2).
+func answerSchemaMode(ctx *cf.Context, cmdName string, in *lib.Schema) error {
+	var inFields []string
+	if in != nil {
+		inFields = in.Fields
 	}
 	args := ctx.RawArgs
 	if len(args) > 0 && args[0] == cmdName {
 		args = args[1:]
 	}
-	out, ok := lookupSchemaOp(cmdName)(nil, in, args)
-	if !ok {
-		return writeSchemaModeOutput(ctx.Stdout(), nil)
+	out, ok := lookupSchemaOp(cmdName)(nil, inFields, args)
+	if !ok || (in == nil && !schemaOutputFromArgs[cmdName]) {
+		return nil
 	}
 	// The name rules say which fields come out; a field that survives
 	// the stage keeps its source's type, and the stage's type op (where
@@ -248,14 +281,12 @@ func runSchemaModeTransform(ctx *cf.Context, cmdName string) error {
 	// types the fields it creates or retypes. Anything else is "any".
 	types := map[string]string{}
 	inTypes := map[string]string{}
-	if sr.Schema != nil {
-		for _, f := range sr.Schema.Fields {
-			inTypes[f] = sr.Schema.TypeOf(f)
-		}
-		for _, f := range out {
-			if t, ok := inTypes[f]; ok {
-				types[f] = t
-			}
+	for _, f := range inFields {
+		inTypes[f] = in.TypeOf(f)
+	}
+	for _, f := range out {
+		if t, ok := inTypes[f]; ok {
+			types[f] = t
 		}
 	}
 	if op, ok := schemaTypeOps[cmdName]; ok {
@@ -264,6 +295,9 @@ func runSchemaModeTransform(ctx *cf.Context, cmdName string) error {
 			if t, ok := created[f]; ok {
 				types[f] = t
 				continue
+			}
+			if _, passed := inTypes[f]; passed {
+				continue // an input column (a group key) is not a rollup copy
 			}
 			// a rollup/cube copy carries its base result's type
 			for base, t := range created {
@@ -274,4 +308,82 @@ func runSchemaModeTransform(ctx *cf.Context, cmdName string) error {
 		}
 	}
 	return writeSchemaModeOutputTyped(ctx.Stdout(), out, types)
+}
+
+// writeSchemaAnswer is schema mode's answer for a command that builds its
+// output header with the same function exec uses (extract, unpivot,
+// resample, describe): the header with no records. A nil schema is
+// "unknown" and writes nothing.
+func writeSchemaAnswer(ctx *cf.Context, s *lib.Schema) error {
+	if s == nil {
+		return nil
+	}
+	return lib.WriteJSONLWithSchema(ctx.Stdout(), s, func(func(ssql.Record) bool) {})
+}
+
+// schemaModeSignal is the signal a signal command computes on in schema
+// mode, where no rows arrive: zeros, enough for any default window, so the
+// command's own code builds its output and the header-only write
+// (writeWithInferredSchema) answers with exec's header. They refused with
+// "no signal data found" until 2026-11-15, failing every schema-mode
+// pipeline through them (DFC170 §2.4). Outside schema mode, or with a
+// signal, it is the identity.
+func schemaModeSignal(s ssql.Signal) ssql.Signal {
+	if schemaMode() && len(s) == 0 {
+		return make(ssql.Signal, 4096)
+	}
+	return s
+}
+
+// exprStaticWireType is the wire type an expression yields over rows of
+// the header in, as the expr→Go transpiler types it for typed codegen (held
+// to the VM by TestExprGoDifferential): schema mode's stand-in for the
+// type exec reads off the first row (DFC170 §6). "" when the transpiler
+// refuses the expression, or it reads a column whose type is unknown.
+func exprStaticWireType(expression string, in *lib.Schema) string {
+	if in == nil {
+		return ""
+	}
+	known := lib.NewSchema()
+	for _, f := range in.Fields {
+		if t := in.TypeOf(f); t != "" && t != "any" {
+			known.AddField(f, t)
+		}
+	}
+	if len(known.Fields) == 0 {
+		return ""
+	}
+	ts, _, err := lib.TypedSchemaFromHeader(known, "Row")
+	if err != nil {
+		return ""
+	}
+	v, err := exprToGo(expression, ts, "r")
+	if err != nil {
+		return ""
+	}
+	return exprGoWireType(v)
+}
+
+// exprGoWireType is the wire type of a transpiled expression's result.
+func exprGoWireType(v exprGo) string {
+	// ssql:domain scalar
+	switch v.Type {
+	case exprGoInt:
+		return lib.TypeInt
+	case exprGoInt128:
+		return lib.TypeInt128
+	case exprGoDecimal:
+		return lib.WireDecimal(v.Scale)
+	case exprGoFloat:
+		return lib.TypeFloat
+	case exprGoString:
+		return lib.TypeString
+	case exprGoBool:
+		return lib.TypeBool
+	case exprGoTime:
+		return lib.TypeTime
+	case exprGoInet:
+		return lib.TypeInet
+	}
+	return ""
 }

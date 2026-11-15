@@ -8,16 +8,36 @@ Last modified: 2026-11-15
 
 Tracked issues and feature gaps discovered during development.
 
-## Bugs found 2026-11-15 (DFC169 §4.0)
+## Schema mode (DFC170)
 
-- [ ] **`group-by` in schema mode drops an unknown group field silently.**
-  The pipeline `SSQL_MODE=schema; ssql from employees.csv | ssql group-by
-  department -count n | ssql generate schema` answers `n`, exit 0. Exec
-  fails loudly ("unknown field(s): department (available: …)"), and so
-  does `where` in schema mode. Fix it, then sweep every command's
-  field-taking flags for the same gap: an unknown field per flag from
-  `-spec-json`, schema lane against exec lane. The DFC169 FAQ's
-  pre-flight relies on schema mode being as strict as exec.
+Found 2026-11-15 by DFC169 §4.0 and the DFC170 survey; the three gates
+(TestSchemaModeMatchesExec, TestSchemaModeRejectsUnknownFields,
+TestSchemaOpsShadowSchemaMode) hold what is fixed.
+
+- [x] Unknown fields passed silently in schema mode (14 commands). FIXED.
+- [x] "Unknown" written as "empty" after pivot. FIXED (no header).
+- [x] Hand parsers drifted (-arg form, update -s/-e/-b/-p, group-by -e and
+  result order, include paths, join/traverse as identity). FIXED; the
+  ops that remain (serve's walk) are under the shadow test.
+- [x] Sources read all their data (arrow, xlsx, wav, -sample, file
+  lists). FIXED: header and stop; scale-gate cases.
+- [x] Multi-file pushdown wrote no schema. FIXED.
+- [x] Signal commands refused schema mode. FIXED (zero signal).
+- [x] convolve, correlate, ifft accepted a missing column in exec, record
+  and typed. FIXED.
+- [x] `update -set-expr` results typed in schema mode by the transpiler
+  (DFC170 §6). DONE.
+- [ ] `group-by -expr` and window `-stream-expr` results are still "any" in
+  schema mode: the transpiler does not cover aggregate expressions over
+  a group's values (typed codegen falls back to record for them too).
+- [ ] explode's element type is "any" in schema mode (it needs a row).
+- [ ] `convolve -same` / `correlate -same` keep the input rows, so schema
+  mode answers "unknown" for them.
+- [ ] Multi-file pushdown (`from csv a b -- STAGES`) reports a failing
+  file on stderr and carries on, exit 0 (fail loudly), found while
+  fixing its schema mode.
+- [ ] serve's completion walk still re-parses argv (hand ops). Retire it
+  once autocli can parse a stage without running it.
 
 ## Bugs found 2026-11-03 (DFC162 §1)
 

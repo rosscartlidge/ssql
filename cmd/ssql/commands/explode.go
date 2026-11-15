@@ -57,9 +57,6 @@ func RegisterExplode(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if field == "" {
 				return fmt.Errorf("explode: FIELD is required")
 			}
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "explode")
-			}
 			if shouldGenerate(generate) {
 				return generateExplodeCode(field, keepEmpty)
 			}
@@ -74,10 +71,16 @@ func RegisterExplode(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// exploded row (a `json` list of ints becomes an int column).
 			first, rest, ok := peekFirst(out)
 			schema := sr.Schema
-			if ok && schema != nil {
+			if schema != nil {
+				// With no row to learn from (schema mode, or empty input)
+				// the element's type is unknown: "any", not the list's json
+				// (DFC170; the lane caught json against exec's string).
 				schema = schema.Clone()
-				if v, has := ssql.Get[any](first, field); has && v != nil {
-					schema.Types[field] = lib.InferTypeString(v)
+				schema.Types[field] = "any"
+				if ok {
+					if v, has := ssql.Get[any](first, field); has && v != nil {
+						schema.Types[field] = lib.InferTypeString(v)
+					}
 				}
 			}
 			return lib.WriteJSONLWithSchema(ctx.Stdout(), schema, rest)

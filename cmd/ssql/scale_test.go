@@ -29,7 +29,7 @@ import (
 
 // scaleGenVersion keys the cached fixture directory: bump when the
 // generator changes and stale fixtures regenerate.
-const scaleGenVersion = 3
+const scaleGenVersion = 4
 
 const scaleRows = 3_000_000 // ~120MB CSV: clears every known trap threshold
 
@@ -40,8 +40,8 @@ var (
 )
 
 // scaleDir returns the cached fixture dir, generating on first use:
-// big.csv (3M rows), big.jsonl, big.json (a JSON array) and big.parquet
-// derived from it.
+// big.csv (3M rows), big.jsonl, big.json (a JSON array), big.parquet and
+// big.arrow derived from it.
 func scaleDir(t *testing.T) string {
 	t.Helper()
 	scaleDirOnce.Do(func() {
@@ -79,6 +79,7 @@ func scaleDir(t *testing.T) string {
 			bin + " from csv big.csv | " + bin + " tee big.jsonl > /dev/null",
 			bin + " from csv big.csv | " + bin + " to json big.json",
 			bin + " from csv big.csv | " + bin + " to parquet big.parquet",
+			bin + " from csv big.csv | " + bin + " to arrow big.arrow",
 			// A hive layout of the same rows (DFC149): six partition
 			// files under parts/dept=X/, the key removed from the files
 			// as DuckDB's PARTITION_BY writes them.
@@ -158,6 +159,16 @@ func TestScaleBudgets(t *testing.T) {
 	})
 	t.Run("schema-mode-csv", func(t *testing.T) {
 		budget(t, dir, "SSQL_MODE=schema "+bin+" from big.csv", 1*time.Second)
+	})
+	// Schema mode is a header and no rows (DFC170 §2.4): a source with
+	// no schema branch of its own read every row and wrote them all, and
+	// a sort after it sorted them (3 s and 480 MB on 3 M arrow rows); a
+	// list of files did the same.
+	t.Run("schema-mode-arrow-then-sort", func(t *testing.T) {
+		budget(t, dir, "export SSQL_MODE=schema; "+bin+" from big.arrow | "+bin+" sort -desc score | "+bin+" generate schema > /dev/null", 1*time.Second)
+	})
+	t.Run("schema-mode-files-then-sort", func(t *testing.T) {
+		budget(t, dir, "export SSQL_MODE=schema; "+bin+" from csv big.csv big.csv | "+bin+" sort -desc score | "+bin+" generate schema > /dev/null", 1*time.Second)
 	})
 	t.Run("sample-source", func(t *testing.T) {
 		// Byte-offset sampling; the 4MB-per-line bug read ~4GB here.

@@ -101,9 +101,6 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done()
 	setMacroFlag(ifMacroFlag(setFieldFlag(ifFieldFlag(exprParamFlag(sub))))).
 		Handler(func(ctx *cf.Context) error {
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "update")
-			}
 			// -set-macro / -if-macro become -set-expr / -if-expr with
 			// -param-field bindings before anything reads the clauses (DFC152).
 			if err := expandMacros(ctx); err != nil {
@@ -131,6 +128,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				literal  string                         // For -set
 				exprEval func(ssql.Record) (any, error) // For -set-expr (pre-compiled)
 				isExpr   bool
+				expr     string // the -set-expr text, which schema mode types statically
 				source   string // For -set-field: the field copied (DFC135)
 			}
 			type updateClause struct {
@@ -195,7 +193,14 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						if err != nil {
 							return fmt.Errorf("compiling expression %q: %w", st.expression, err)
 						}
-						uc.updates = append(uc.updates, updateOp{field: st.field, exprEval: eval, isExpr: true})
+						uc.updates = append(uc.updates, updateOp{field: st.field, exprEval: eval, isExpr: true, expr: st.expression})
+						if st.source != "" {
+							// a bucket's column, checked against the header
+							// like -set-field's: its expression found it
+							// missing only at the first row, after schema
+							// mode had answered (DFC170)
+							readFields = append(readFields, st.source)
+						}
 					}
 				}
 
@@ -433,6 +438,37 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 				}
+			}
+
+			// Schema mode answers with the header exec has built so far, from
+			// the parsed assignments (DFC170). Exec learns an expression's
+			// type from the first row, which schema mode does not have: the
+			// transpiler's type stands in (DFC170 §6), and "any" where it
+			// refuses or the clauses disagree.
+			if schemaMode() {
+				if outputSchema != nil {
+					outputSchema = outputSchema.Clone()
+					exprTypes := map[string]string{}
+					for _, clause := range clauses {
+						for _, upd := range clause.updates {
+							if !upd.isExpr {
+								continue
+							}
+							t := exprStaticWireType(upd.expr, schemaAndRecords.Schema)
+							if prev, seen := exprTypes[upd.field]; seen && prev != t {
+								t = ""
+							}
+							exprTypes[upd.field] = t
+						}
+					}
+					for f, t := range exprTypes {
+						if t == "" {
+							t = "any"
+						}
+						outputSchema.AddField(f, t)
+					}
+				}
+				return writeSchemaAnswer(ctx, outputSchema)
 			}
 
 			// Expr-created fields were provisionally labeled string —

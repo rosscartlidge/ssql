@@ -100,10 +100,6 @@ func RegisterFill(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("fill: nothing to do — give -down FIELD and/or -default FIELD VALUE")
 			}
 
-			if schemaMode() {
-				return runSchemaModeTransform(ctx, "fill")
-			}
-
 			sr := (*lib.SchemaAndRecords)(nil)
 			var schema *lib.Schema
 			if !shouldGenerate(generate) {

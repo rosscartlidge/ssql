@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+Schema mode (`SSQL_MODE=schema`, `generate schema`, Ctrl-O, `run -check`) is
+now held to exec's own output header by three gates (DFC170). They found:
+
+- **Unknown fields passed silently.** group-by, fill, update, exclude,
+  include, window, explode, flatten, describe, extract, resample, pivot,
+  unpivot and rename answered schema mode before their own field check:
+  `group-by department` gave `n`, exit 0. Each now checks first, as exec
+  does.
+- **An undetermined schema read as an empty one.** After `pivot`, the
+  next stage refused every field it named ("unknown field x (available:
+  )"). Unknown is now no header, as in exec, and `generate schema` says
+  so on stderr.
+- **Wrong names and types.** The `-arg FIELD` form, a path into a list
+  (`include tags.0`), group-by's result order, `from jsonl -type`,
+  resample's value types, explode's element type, and a column an
+  `update -set-expr` retypes (`inet(ip)`). Most commands now answer schema
+  mode with exec's own header code; the hand-written argument parsers
+  that remain (serve's completion walk) are held to it by a shadow test,
+  which found update's `-s`/`-e`/`-b` and group-by's `-e` adding nothing,
+  and join treated as passing its left side through.
+- **Sources read all their data.** arrow, xlsx, wav, `-sample` and lists
+  of files wrote every row in schema mode, and a stage after them
+  processed them: an arrow file followed by `sort` took 3 s and 480 MB
+  on 3 M rows, now 0.1 s. Schema mode writes the header and stops.
+- **`from csv a b -- STAGES` wrote no schema at all** in schema mode.
+- **`update -set-expr` columns are typed in schema mode** from the
+  expression, by the same transpiler that types them in generated typed
+  code, where they were "any" (or the old column's type when the
+  expression overwrote one).
+- **The signal commands refused schema mode** ("no signal data found");
+  they now answer with exec's header.
+- **convolve, correlate and ifft accepted a missing column** in exec,
+  record and typed code, and printed a signal of zeros with exit 0. They
+  now refuse it, as fft and spectrogram did.
+
 ## [4.147.0] - 2026-11-15
 
 ### Changed (breaking)
