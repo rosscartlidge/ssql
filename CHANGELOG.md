@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`join -as RIGHT NEW` with a right field the right side lacks copied
+  nothing, exit 0**, in every lane; the stage after it refused NEW, far
+  from the mistake. It now fails with the right side's fields and the
+  argument order. Found by the DFC169 FAQ harness, when a model wrote
+  `-as src_name name` with the arguments reversed.
+
 ## [4.148.0] - 2026-11-15
 
 ### Fixed

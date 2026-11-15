@@ -2,11 +2,11 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-15
+Last modified: 2026-11-16
 
 [Back to Index](./README.md)
 
-Status: proposal, for comment. Nothing built.
+Status: phase 1 (the harness and eval) built 2026-11-15; §10 has the results.
 
 ## 1. The ask
 
@@ -307,3 +307,124 @@ failure log is a usability study that runs itself.
    always-on box for the fallback search?
 5. **Logging.** Is keeping the questions (no IPs) acceptable to say on the
    page?
+
+## 10. Phase 1 built (2026-11-15)
+
+### 10.1 The harness
+
+`scripts/faq` is a Go module of its own, like `scripts/docsearch`, and needs
+no UI:
+
+```
+go -C scripts/faq run . -ask 'how many employees per department?'
+go -C scripts/faq run . -eval cases.json -models gemma4:26b,gemma4:31b -v
+go -C scripts/faq run . -eval cases.json -goldens     # every golden, no model
+```
+
+It does what §4 describes, in this order:
+1. **Retrieve.** docsearch, keeping user docs and the CHANGELOG only (no
+   research DFCs or journals, and not the `doc/ai-*` prompts).
+2. **Ground.** The system prompt is the tuned CLI prompt
+   (`doc/ai-cli-generation.md`), the answer format, and each sample file's
+   columns and types as schema mode reports them.
+3. **Draft.** Ollama chat, with temperature 0, a fixed seed and no
+   thinking.
+4. **Validate.** Only `ssql` stages joined by `|`, with `<( … )` for join's
+   right side. It refuses `; & $` backticks and redirection, `$` or
+   backticks inside double quotes (they expand), absolute paths and `..`.
+5. **Schema pre-flight.** The pipeline runs under `SSQL_MODE=schema`. This
+   relies on DFC170, which had to land first.
+6. **Run.** On a scratch copy of the playground data, with ssql first on
+   `PATH` and a 20 s limit.
+7. **Correct.** On failure, the model gets ssql's own error and the `-help`
+   of each command it used, at most 2 times.
+
+How an answer is labelled:
+- A pipeline that never runs is labelled so, never shown as an answer.
+- One that names a file the sample data lacks is an illustration, shown but
+  not run.
+- A reply starting "UNSUPPORTED" is a refusal, in any decoration the model
+  gives it.
+
+### 10.2 The eval
+
+`scripts/faq/cases.json` has 33 cases: 22 pipeline, 5 doc and 6 refuse.
+
+- **Pipeline cases.** Each is graded by the rows of the model's pipeline
+  against a golden pipeline, written and run by hand. Several were also
+  cross-checked with awk. The comparison is values as a multiset per row
+  and rows as a multiset, so column names are free (`n` or `count`) but an
+  extra column differs. An ordered case compares order too.
+  - A final stdout sink is replaced by `to jsonl`. One that formats times is
+    replaced by `to csv -time-format …`, read back, so a month displayed as
+    2024-01 compares as 2024-01.
+- **Doc cases.** Each needs its key facts in the reply.
+- **Refuse cases.** Each needs "UNSUPPORTED", and no pipeline it offers may
+  use the invented spelling. Prose may name the spelling to say it doesn't
+  exist.
+- **Goldens.** Every golden is run before any model is graded, and a golden
+  that fails or gives no rows stops the eval.
+- **The grader's own tests** (`go test` in `scripts/faq`) were each watched
+  failing.
+
+### 10.3 Results (third run, the harness fixed)
+
+Over the released v4.148.0, on the RTX 5090 Laptop GPU:
+
+| Model | Pass | pipeline | doc | refuse | corrections | p50 | p95 |
+|---|---|---|---|---|---|---|---|
+| gemma4:26b | 31/33 (94%) | 20/22 | 5/5 | 6/6 | 6 | 1.9 s | 8.6 s |
+| gemma4:31b | 32/33 (97%) | 22/22 | 5/5 | 5/6 | 5 | 22.3 s | 44.9 s |
+| gpt-oss:20b | 31/33 (94%) | 22/22 | 4/5 | 5/6 | 10 | 4.7 s | 18.9 s |
+| gemma4:e4b | 26/33 (79%) | 18/22 | 4/5 | 4/6 | 8 | 1.9 s | 10.0 s |
+
+Every remaining failure is a model's own error:
+- an extra `customer_id` column where the question asked for name and
+  count;
+- `-as` with its arguments reversed;
+- a "translation" built by joining the English names to themselves;
+- an export to a local file offered instead of a refusal;
+- a timestamp where the question asked for 2024-01.
+
+**Recommendation:** `gemma4:26b` as the default. It is within one case of
+31b at a tenth of its latency (p50 1.9 s against 22 s), and it is the only
+model that refused all six impossible requests.
+
+### 10.4 What phase 1 found outside the FAQ
+
+- **Schema mode was not fit to be a pre-flight.** This became DFC170
+  (v4.148.0).
+- **`join -as` with a right field the right side lacks copied nothing,
+  exit 0, in every lane.** A model wrote `-as src_name name` and got an
+  error from the next stage instead. It is fixed in `resolveJoin`, the check
+  every lane shares, and `TestJoinAsUnknownRightFieldIsLoud` covers five
+  lanes. Rerun with the fix, the same model's correction turn moves to the
+  right stage, though 26b still doesn't settle on the right arguments.
+- **A join after an undetermined right side** refuses with misleading
+  advice in schema mode. It is in TODO.
+
+### 10.5 Harness faults the first two runs exposed
+
+Each is fixed:
+- failing pipelines weren't in the report;
+- the sandbox lacked bash, which ssql's own stages use;
+- an example over an imagined file was retried instead of being shown;
+- the refusal grader failed a correct "ssql has no `from pdf`";
+- `**UNSUPPORTED:**` in bold wasn't read as a refusal;
+- a formatted sink (`to table -time-format`) couldn't be graded.
+
+Run-to-run differences at temperature 0 are real. The same question passed
+alone and failed in the eval run. The eval should be run more than once
+before a model decision rests on one case.
+
+### 10.6 Next
+
+Phase 2 is the service and the page (§7):
+- the jail, since phase 1's sandbox is a scratch directory on the developer's
+  machine;
+- the queue;
+- the tunnel.
+
+The eval should grow toward the ~100 cases of §6 from real questions.
+Ross's §9 questions still decide where the page lives and whether visitors
+can bring their own data.

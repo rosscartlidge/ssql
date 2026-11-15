@@ -1,0 +1,119 @@
+package main
+
+import (
+	"slices"
+	"strings"
+	"testing"
+)
+
+func TestValidatePipeline(t *testing.T) {
+	ok := []string{
+		"ssql from employees.csv | ssql group-by dept -count n | ssql to table",
+		"ssql from orders.csv | ssql join <(ssql from customers.csv | ssql include customer_id tier) -using customer_id",
+		`ssql from e.csv | ssql where -if-expr 'salary > 100 && (age < 30)' | ssql update -set-expr b "a > 1 ? \"x\" : \"y\""`,
+	}
+	for _, p := range ok {
+		if _, err := validatePipeline(p); err != nil {
+			t.Errorf("%s: refused: %v", p, err)
+		}
+	}
+	bad := map[string]string{
+		"ssql from e.csv; rm -rf x":                          ";",
+		"ssql from e.csv | sh -c 'id'":                       "ssql command",
+		"ssql from e.csv > out.txt":                          ">",
+		"ssql from $(echo e.csv)":                            "$",
+		"ssql from /etc/passwd":                              "sample files",
+		"ssql from ../secret.csv":                            "sample files",
+		"ssql from e.csv | ssql join <(cat x.csv) -using id": "ssql command",
+		"ssql from e.csv & ssql from f.csv":                  "&",
+		"ssql from `id`":                                     "`",
+		`ssql from "$HOME/x.csv"`:                            "shell expansion",
+		"ssql from \"`id`.csv\"":                             "shell expansion",
+	}
+	for p, want := range bad {
+		_, err := validatePipeline(p)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want a refusal mentioning %q, got %v", p, want, err)
+		}
+	}
+}
+
+func TestDataFor(t *testing.T) {
+	cases := map[string]string{
+		"ssql from e.csv | ssql to table":                      "ssql from e.csv | ssql to jsonl",
+		"ssql from e.csv | ssql count":                         "ssql from e.csv | ssql count",
+		"ssql from e.csv | ssql to csv out.csv":                "ssql from e.csv | ssql to csv out.csv | ssql to jsonl",
+		"ssql from e.csv":                                      "ssql from e.csv | ssql to jsonl",
+		"ssql from e.csv | ssql to table -max-width 20":        "ssql from e.csv | ssql to jsonl",
+		"ssql from e.csv | ssql to table -time-format '%Y-%m'": "ssql from e.csv | ssql to csv -time-format '%Y-%m' | ssql from csv | ssql to jsonl",
+	}
+	for in, want := range cases {
+		if got := dataFor(in); got != want {
+			t.Errorf("dataFor(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The grader compares values, not column names, and rows as a multiset
+// unless the order is the answer.
+func TestCanonRows(t *testing.T) {
+	a := `{"_schema":{"fields":["dept","n"]}}
+{"dept":"Eng","n":17}
+{"dept":"Sales","n":10}`
+	renamed := `{"dept":"Sales","count":10}
+{"dept":"Eng","count":17.0}`
+	if !slices.Equal(canonRows(a, false), canonRows(renamed, false)) {
+		t.Errorf("a renamed column or another row order must compare equal")
+	}
+	if slices.Equal(canonRows(a, true), canonRows(renamed, true)) {
+		t.Errorf("ordered: another row order must differ")
+	}
+	extra := `{"dept":"Eng","n":17,"x":1}
+{"dept":"Sales","n":10,"x":1}`
+	if slices.Equal(canonRows(a, false), canonRows(extra, false)) {
+		t.Errorf("an extra column must differ")
+	}
+	wrong := `{"dept":"Eng","n":16}
+{"dept":"Sales","n":10}`
+	if slices.Equal(canonRows(a, false), canonRows(wrong, false)) {
+		t.Errorf("a wrong value must differ")
+	}
+	if !slices.Equal(canonRows("21\n", false), canonRows("21", false)) {
+		t.Errorf("a count compares as its text")
+	}
+}
+
+func TestExtractPipeline(t *testing.T) {
+	reply := "Here:\n```bash\nssql from e.csv \\\n  | ssql count\n```\nDone."
+	if got := extractPipeline(reply); got != "ssql from e.csv | ssql count" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestGradeRefusal(t *testing.T) {
+	c := evalCase{Kind: "refuse", Forbid: []string{"from pdf"}}
+	denies := answer{Reply: "UNSUPPORTED: ssql has no `from pdf`; convert the PDF to CSV first.", Unsupported: true}
+	if ok, why := grade(nil, c, denies); !ok {
+		t.Errorf("a refusal naming the missing command in prose failed: %s", why)
+	}
+	invents := answer{Reply: "UNSUPPORTED: maybe\n```bash\nssql from pdf report.pdf\n```", Unsupported: true}
+	if ok, _ := grade(nil, c, invents); ok {
+		t.Errorf("a pipeline using the invented command passed")
+	}
+	if ok, _ := grade(nil, c, answer{Reply: "ssql from csv x.csv"}); ok {
+		t.Errorf("an answer without UNSUPPORTED passed")
+	}
+}
+
+func TestUnsupportedDetection(t *testing.T) {
+	for _, r := range []string{"UNSUPPORTED: no", "**UNSUPPORTED:** no", "  # Unsupported\nno", "> UNSUPPORTED - no"} {
+		if !unsupported.MatchString(r) {
+			t.Errorf("%q not read as a refusal", r)
+		}
+	}
+	for _, r := range []string{"ssql cannot be unsupported", "```bash\nssql from x\n```"} {
+		if unsupported.MatchString(r) {
+			t.Errorf("%q read as a refusal", r)
+		}
+	}
+}

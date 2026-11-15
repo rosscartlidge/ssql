@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-15
+Last modified: 2026-11-16
 
 [Back to Index](./README.md)
 
@@ -36,6 +36,10 @@ TestSchemaOpsShadowSchemaMode) hold what is fixed.
 - [ ] Multi-file pushdown (`from csv a b -- STAGES`) reports a failing
   file on stderr and carries on, exit 0 (fail loudly), found while
   fixing its schema mode.
+- [ ] A join whose right side is undetermined in schema mode (`<(… | ssql
+  pivot …)`) refuses with "right-side file has no schema header — pipe
+  through ssql first", which is wrong advice: it should answer unknown (no
+  header). Found by the DFC169 FAQ harness, 2026-11-15.
 - [ ] serve's completion walk still re-parses argv (hand ops). Retire it
   once autocli can parse a stage without running it.
 

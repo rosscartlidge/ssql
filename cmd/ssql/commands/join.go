@@ -349,6 +349,17 @@ func resolveJoin(leftFields, rightFields []string, clauses []ssql.LookupClause, 
 		if rightFields != nil && !fieldListHasOrPath(rightFields, c.RightField) {
 			return plan, fmt.Errorf("join right field %q not found (available: %s)", c.RightField, strings.Join(rightFields, ", "))
 		}
+		// -as RIGHT_FIELD NEW_NAME copies a right field; one the right
+		// side lacks copied nothing, exit 0, and the stage after it
+		// refused the new name instead (found by the DFC169 FAQ harness:
+		// a model wrote -as src_name name, the arguments reversed).
+		if rightFields != nil {
+			for _, rf := range slices.Sorted(maps.Keys(c.FieldRenames)) {
+				if !fieldListHasOrPath(rightFields, rf) {
+					return plan, fmt.Errorf("join -as: right field %q not found (available: %s) — -as takes the right side's field, then its new name", rf, strings.Join(rightFields, ", "))
+				}
+			}
+		}
 	}
 	joinKeys := make(map[string]bool)
 	// A key field is exempt from the collision rule when the two sides
