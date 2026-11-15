@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.148.0] - 2026-11-15
+
 ### Fixed
 
 Schema mode (`SSQL_MODE=schema`, `generate schema`, Ctrl-O, `run -check`) is
