@@ -565,6 +565,21 @@ were in the FAQ, and each is now fixed:
     prose included, that names a Ctrl or Alt key the cheat-sheet lacks
     goes back with the real list (`checkKeys`). Bash's own keys (Ctrl-C,
     Ctrl-R and the like) may be named freely.
+- **"Whats the best codelab to do first" got the Go codelab
+  (2026-11-17).** It was asked as a follow-up, with columns pasted. The
+  facts block now says ssql is a CLI first, answered for the CLI unless the
+  question asks about the Go package or Go code. It also carries the
+  README's learning path (`readmeSection`), which is the authority on the
+  order. The question is the eval case `doc-first-codelab`.
+- **The eval's data cases move with any change to the prompt.** Sampling is
+  deterministic, but every change to the system prompt shifts the same
+  borderline answers. orders-per-month buckets to `2024-11-01T00:00:00Z`
+  where the golden has `2024-11`. quickest-from-syd keeps a `src` column.
+  flight-city-names keeps the codes. All three have the right rows in
+  another shape. With the learning path the eval was 34/37. A one-line
+  version without the path was 33/37, so the size of the addition is not
+  the cause. Grading presentation (which columns, and how a month is
+  written) separately from rows is the open question for phase 3.
 
 Replayed live, the sentence is refused with a 400. The Go question,
 asked with and without pasted columns, is answered and verified. The

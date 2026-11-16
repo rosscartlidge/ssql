@@ -46,6 +46,8 @@
 
   {"id": "doc-install", "kind": "doc", "question": "How do I install ssql with Go?",
    "facts": ["go install github.com/rosscartlidge/ssql/v4/cmd/ssql"]},
+  {"id": "doc-first-codelab", "kind": "doc", "question": "Whats the best codelab to do first",
+   "facts": ["cli-codelab"]},
   {"id": "doc-pipeline-completion", "kind": "doc", "question": "In bash, is there a way of getting pipeline aware field completion",
    "facts": ["eval \"$(ssql -"]},
   {"id": "doc-go-program", "kind": "doc", "question": "Can I turn a pipeline into a Go program?",

@@ -98,6 +98,19 @@ What v%s changed (its CHANGELOG section; for earlier releases, see CHANGELOG.md)
 
 %s
 `, latest, date, latest, clip(notes, 3000))
+	path, err := readmeSection(filepath.Join(repo, "README.md"), "## Learning Path")
+	if err != nil {
+		return nil, err
+	}
+	// Visitors are CLI users unless they say Go: "What's the best codelab to
+	// do first" was answered with the Go codelab (2026-11-17). The README's
+	// learning path is the authority on the order.
+	fmt.Fprintf(&sb, `
+- ssql is a command-line tool first. Answer for the CLI unless the question asks about the Go package, the library or Go code.
+- Where to start, in order (README.md's learning path; links are relative to README.md):
+
+%s
+`, path)
 	keys, err := keyBindings(box)
 	if err != nil {
 		return nil, err
@@ -433,4 +446,21 @@ func (f *faq) keysFeedback(problem string) string {
 	return "That answer " + problem + ". These are all the keys ssql binds (from `ssql -help-keybinding`):\n\n" + f.keys +
 		"\n\nAnswer the visitor's question again, in the same format, naming only these keys. " +
 		"The visitor never saw the failed answer or this message: do not mention them."
+}
+
+// readmeSection is a README section's body: the lines after heading, up to
+// the next heading of the same level.
+func readmeSection(path, heading string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	_, rest, ok := strings.Cut(string(b), "\n"+heading+"\n")
+	if !ok {
+		return "", fmt.Errorf("%s has no %q section", path, heading)
+	}
+	if i := strings.Index(rest, "\n## "); i >= 0 {
+		rest = rest[:i]
+	}
+	return strings.TrimSpace(rest), nil
 }
