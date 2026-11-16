@@ -44,7 +44,7 @@ button.secondary:not(:disabled):hover { background: var(--accent); color: var(--
 .answer { margin-top: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
 .answer .q { color: var(--muted); font-size: 0.92rem; margin-bottom: 8px; }
 .badge { display: inline-block; font-size: 0.8rem; font-weight: 600; border-radius: 99px; padding: 2px 10px; margin-bottom: 8px; border: 1px solid currentColor; }
-.verified { color: var(--ok); } .unverified, .error { color: var(--bad); } .unsupported, .illustration { color: var(--warn); } .prose { color: var(--muted); }
+.verified { color: var(--ok); } .unverified, .error { color: var(--bad); } .unsupported, .illustration, .setup { color: var(--warn); } .prose { color: var(--muted); }
 pre { background: var(--code); border-radius: 8px; padding: 10px 12px; overflow-x: auto;
   font: 0.86rem/1.45 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
 code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9em; background: var(--code); padding: 1px 4px; border-radius: 4px; }
@@ -113,6 +113,7 @@ const labels = {
   unverified: 'not verified: it did not run',
   unsupported: 'ssql cannot do this',
   illustration: 'an illustration: it names a file the samples lack',
+  setup: 'install commands: not run here',
   prose: 'answer',
   error: 'no answer',
 };
@@ -195,6 +196,8 @@ function show(question, r) {
   let label = labels[r.status] || r.status;
   if (r.status === 'verified' && r.ran_on === 'your-columns') label = 'checked against your columns (not run: no rows)';
   if (r.status === 'verified' && r.ran_on === 'your-rows') label = 'verified: it ran on your rows';
+  if (r.status === 'unverified' && !r.pipeline) label = 'not verified';
+  if (r.status === 'verified' && r.ran_on === 'setup') label = 'verified: ssql printed this setup, and bash accepts it';
   let html = '<div class="q">' + esc(question) + '</div>';
   html += '<span class="badge ' + esc(r.status) + '">' + esc(label) + '</span>';
   html += '<div class="reply">' + render(r.reply || '') + '</div>';

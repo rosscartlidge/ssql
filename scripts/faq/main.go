@@ -124,6 +124,10 @@ func printAnswer(a answer) {
 	fmt.Println(strings.TrimSpace(a.Reply))
 	fmt.Println()
 	switch {
+	case a.Setup && a.Ran:
+		fmt.Printf("--- verified shell setup: ssql printed the script and bash parsed it (%d correction(s))\n", a.Retries)
+	case a.Setup && a.Failure == "":
+		fmt.Println("--- install commands: shown, not run")
 	case a.Ran:
 		fmt.Printf("--- verified: the pipeline ran (%d correction(s)); its output:\n%s", a.Retries, clip(a.Output, 2000))
 	case a.Unsupported:

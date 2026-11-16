@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ type faq struct {
 	docsK   int
 	system  string // the CLI prompt plus the sample data's schemas
 	latest  string // the latest release, X.Y.Z (the eval's {{latest}})
+	keys    string // the shell key bindings, as ssql -help-keybinding lists them
 	verbose bool
 }
 
@@ -39,6 +41,7 @@ type answer struct {
 	Checked      bool          // a visitor's columns: it passed schema mode, with no rows to run
 	RanOn        string        // "sample", "your-columns" or "your-rows" once verified
 	Illustrative bool          // it names a file the sample data lacks: shown, not run
+	Setup        bool          // shell setup (eval "$(ssql -FLAG)", install), not a pipeline
 	Output       string        // its stdout, when it ran
 	Failure      string        // the last error, when it never ran
 	Retries      int           // corrections used
@@ -62,6 +65,10 @@ in the working directory; use them when the question needs data.
   say what comes closest. Never invent a command or a flag.
 - For a question about how ssql works, answer in a few sentences; add a
   pipeline only when it shows the point.
+- Shell setup is a line for ~/.bashrc, not a pipeline: give it alone in its
+  block, as the docs write it, e.g. ` + "`eval \"$(ssql -shell-init)\"`" + ` (double
+  quotes), which turns on completion and every key binding (Ctrl-O completes
+  field names from the upstream pipeline).
 `
 
 // newFAQ builds the system prompt: the tuned CLI prompt, the answer
@@ -91,6 +98,13 @@ What v%s changed (its CHANGELOG section; for earlier releases, see CHANGELOG.md)
 
 %s
 `, latest, date, latest, clip(notes, 3000))
+	keys, err := keyBindings(box)
+	if err != nil {
+		return nil, err
+	}
+	// The key list is not in the prompt: every question would carry it, and
+	// it moved three data answers in the eval (2026-11-17). A reply naming a
+	// wrong key gets it in the correction turn (keysFeedback).
 	sb.WriteString("\n## The files\n\n")
 	files, _ := filepath.Glob(filepath.Join(box.dataDir, "*.csv"))
 	sort.Strings(files)
@@ -106,7 +120,7 @@ What v%s changed (its CHANGELOG section; for earlier releases, see CHANGELOG.md)
 		}
 		fmt.Fprintf(&sb, "- `%s`: %s\n", name, strings.Join(cols, ", "))
 	}
-	return &faq{repo: repo, box: box, retries: retries, docsK: docsK, system: sb.String(), verbose: verbose, latest: latest}, nil
+	return &faq{repo: repo, box: box, retries: retries, docsK: docsK, system: sb.String(), verbose: verbose, latest: latest, keys: keys}, nil
 }
 
 // releaseHeading is a released CHANGELOG section: ## [4.148.0] - 2026-11-15.
@@ -133,10 +147,12 @@ func latestRelease(changelog string) (version, date, notes string, err error) {
 	return string(b[m[2]:m[3]]), string(b[m[4]:m[5]]), strings.TrimSpace(string(rest)), nil
 }
 
-// userDocs are the sections an answer may cite: the user documentation and
-// the CHANGELOG, not research DFCs or journals, where superseded plans read
-// as current (DFC169 §4).
-var userDocs = regexp.MustCompile(`^(doc/[^/]+\.md|README\.md|CHANGELOG\.md):(\d+)`)
+// userDocs are the sections an answer may cite: the user documentation,
+// not research DFCs or journals, where superseded plans read as current
+// (DFC169 §4). Nor the CHANGELOG: an old release's section reads as current
+// too (v4.47's Ctrl-X Ctrl-F, rebound to Ctrl-O since, was given as the key
+// on 2026-11-17), and the latest release's section is in the facts block.
+var userDocs = regexp.MustCompile(`^(doc/[^/]+\.md|README\.md):(\d+)`)
 
 // retrieve runs docsearch and returns the top user-doc sections, each as
 // its heading line through the next heading, capped.
@@ -245,10 +261,27 @@ func (f *faq) askAfter(llm ollama, question string, v *visitor, prev *exchange) 
 		a.Reply = reply
 		a.Pipeline = extractPipeline(reply)
 		a.Unsupported = unsupported.MatchString(reply)
-		if a.Pipeline == "" || a.Unsupported {
-			return a // prose, or a refusal
+		if a.Unsupported {
+			return a // a refusal
 		}
-		problem := f.check(&a, box, v)
+		problem := f.checkKeys(reply)
+		switch {
+		case problem != "":
+			a.Ran, a.Checked = false, false
+		case a.Pipeline == "":
+			a.Failure = ""
+			return a // prose
+		case setupLines(reply) != nil:
+			lines := setupLines(reply)
+			a.Setup, a.Ran, a.RanOn, a.Output = true, false, "", ""
+			problem, a.Ran = box.checkSetup(lines)
+			if a.Ran {
+				a.RanOn = "setup"
+			}
+		default:
+			a.Setup = false
+			problem = f.check(&a, box, v)
+		}
 		if problem == "" {
 			return a
 		}
@@ -267,8 +300,11 @@ func (f *faq) askAfter(llm ollama, question string, v *visitor, prev *exchange) 
 		if f.verbose {
 			fmt.Fprintf(os.Stderr, "  retry %d: %s\n    after: %s\n", a.Retries, firstLine(problem), a.Pipeline)
 		}
-		msgs = append(msgs, message{Role: "assistant", Content: reply},
-			message{Role: "user", Content: f.feedback(a.Pipeline, problem, v)})
+		fb := f.feedback(a.Pipeline, problem, v)
+		if strings.HasPrefix(problem, keysProblem) {
+			fb = f.keysFeedback(problem)
+		}
+		msgs = append(msgs, message{Role: "assistant", Content: reply}, message{Role: "user", Content: fb})
 	}
 }
 
@@ -339,4 +375,62 @@ func clip(s string, n int) string {
 func firstLine(s string) string {
 	l, _, _ := strings.Cut(s, "\n")
 	return l
+}
+
+// keyBindings is the cheat-sheet's rows from `ssql -help-keybinding` (the
+// KeyBindings table, so it cannot drift from the binary).
+func keyBindings(box sandbox) (string, error) {
+	r := box.run("ssql -help-keybinding")
+	if r.err != nil {
+		return "", fmt.Errorf("ssql -help-keybinding: %v: %s", r.err, r.stderr)
+	}
+	var rows []string
+	for _, ln := range strings.Split(r.stdout, "\n") {
+		if keyRow.MatchString(ln) {
+			rows = append(rows, strings.TrimSpace(ln))
+		}
+	}
+	if len(rows) == 0 {
+		return "", fmt.Errorf("ssql -help-keybinding lists no keys")
+	}
+	return strings.Join(rows, "\n"), nil
+}
+
+var (
+	keyRow = regexp.MustCompile(`^\s{2}(Ctrl|Alt)-\S`)
+	// keyNamed is a key a reply names: Ctrl-O, Ctrl+O, Alt-g, Ctrl-X h,
+	// Ctrl-X Ctrl-E.
+	keyNamed = regexp.MustCompile(`\b(?:Ctrl|Alt)[-+][A-Za-z](?:\s+(?:Ctrl[-+][A-Za-z]|[A-Za-z])\b)?`)
+	// terminalKeys are bash's and the terminal's own, fine to mention.
+	terminalKeys = map[string]bool{"CTRL-C": true, "CTRL-D": true, "CTRL-Z": true, "CTRL-R": true, "CTRL-L": true,
+		"CTRL-A": true, "CTRL-E": true, "CTRL-U": true, "CTRL-W": true, "CTRL-K": true}
+)
+
+const keysProblem = "names keys ssql does not bind: "
+
+// checkKeys refuses a reply that names a key ssql does not bind.
+func (f *faq) checkKeys(reply string) string {
+	if f.keys == "" {
+		return ""
+	}
+	var bad []string
+	for _, k := range keyNamed.FindAllString(reply, -1) {
+		k = strings.Join(strings.Fields(strings.ReplaceAll(k, "+", "-")), " ")
+		if len(k) > 5 && k[len(k)-2] == ' ' && !strings.HasPrefix(k, "Ctrl-X") {
+			k = k[:len(k)-2] // "Ctrl-O completes": the key, then a word
+		}
+		if !terminalKeys[strings.ToUpper(k)] && !strings.Contains(f.keys, k) && !slices.Contains(bad, k) {
+			bad = append(bad, k)
+		}
+	}
+	if len(bad) == 0 {
+		return ""
+	}
+	return keysProblem + strings.Join(bad, ", ")
+}
+
+func (f *faq) keysFeedback(problem string) string {
+	return "That answer " + problem + ". These are all the keys ssql binds (from `ssql -help-keybinding`):\n\n" + f.keys +
+		"\n\nAnswer the visitor's question again, in the same format, naming only these keys. " +
+		"The visitor never saw the failed answer or this message: do not mention them."
 }

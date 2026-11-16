@@ -29,7 +29,7 @@ export PATH="/home/rossc/src/ssql:$PATH"
 
 ### Enable Bash Completion (optional)
 ```bash
-eval "$(ssql -bash-completion)"
+eval "$(ssql -shell-init)"
 ```
 
 ### Verify Installation

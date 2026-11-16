@@ -55,10 +55,10 @@ type askResponse struct {
 	Reply      string   `json:"reply"`
 	Pipeline   string   `json:"pipeline,omitempty"`
 	Verified   bool     `json:"verified"`
-	RanOn      string   `json:"ran_on,omitempty"` // sample, your-columns, your-rows
+	RanOn      string   `json:"ran_on,omitempty"` // sample, your-columns, your-rows, setup
 	Output     string   `json:"output,omitempty"`
 	Failure    string   `json:"failure,omitempty"`
-	Status     string   `json:"status"` // verified, unverified, unsupported, illustration, prose
+	Status     string   `json:"status"` // verified, unverified, unsupported, illustration, setup, prose
 	Playground string   `json:"playground,omitempty"`
 	Docs       []string `json:"docs,omitempty"`
 	Seconds    float64  `json:"seconds"`
@@ -193,6 +193,10 @@ func respond(a answer, v *visitor, took time.Duration) askResponse {
 		resp.Status = "prose"
 	case a.Illustrative:
 		resp.Status = "illustration"
+	case a.Setup && a.Ran:
+		resp.Status, resp.Verified = "verified", true
+	case a.Setup && a.Failure == "":
+		resp.Status = "setup" // install lines only: nothing here can run them
 	case a.Ran || a.Checked:
 		resp.Status, resp.Verified, resp.Output = "verified", true, clip(a.Output, 4000)
 	default:
@@ -200,7 +204,7 @@ func respond(a answer, v *visitor, took time.Duration) askResponse {
 	}
 	// The playground holds the same sample files; a visitor's data.csv
 	// is not there.
-	if resp.Verified && (v == nil || !v.readBy(a.Pipeline)) {
+	if resp.Verified && !a.Setup && (v == nil || !v.readBy(a.Pipeline)) {
 		resp.Playground = playground + "#p=" + base64.RawURLEncoding.EncodeToString([]byte(runnable(a.Pipeline)))
 	}
 	return resp

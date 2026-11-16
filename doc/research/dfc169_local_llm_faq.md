@@ -537,6 +537,34 @@ were in the FAQ, and each is now fixed:
   pipeline before one trailing redirection to a plain file name. Any other
   `>` is still refused: a path, `..`, `2>&1`, two redirections, or one
   mid-pipeline.
+- **Shell setup was refused as a pipeline (2026-11-17).** "In bash, is
+  there a way of getting pipeline aware field completion" was answered
+  with `eval '$(ssql -field-keybinding)'`, and the validator said "eval is
+  not an ssql command" through two corrections. The model's line was
+  wrong as well: in single quotes `$(...)` never runs. A fenced block whose
+  every line is `eval "$(ssql -FLAG)"` (bare, or behind the codelab's
+  `command -v ssql >/dev/null &&` guard) or a documented install command is
+  now a setup block (`setupLines`, `pipeline.go`). Each eval is checked in
+  the jail: ssql prints the script and `bash -n` parses it. An unknown flag
+  fails in ssql's words, and a quoting other than double quotes goes back
+  to the model as a correction. Install lines are shown, not run (status
+  `setup`). The prompt names `eval "$(ssql -shell-init)"` and Ctrl-O, and
+  the eval has the question as `doc-pipeline-completion`. The search also
+  found `examples/cli-pipelines/README.md` still telling readers to run
+  `ssql -bash-completion`, a flag ssql no longer has; it now says
+  `-shell-init`.
+- **The verified setup named the wrong key.** Asked live, the setup line
+  checked out, but the reply said to press Ctrl-X Ctrl-F, the chord v4.47
+  shipped. An old CHANGELOG section retrieved for the question still says
+  so; the key has been Ctrl-O since. Two changes followed:
+  - **The CHANGELOG is no longer retrieved.** The latest release's section
+    is already in the facts block. Every older section reads as current,
+    which is why DFCs and journals were already left out.
+  - **`ssql -help-keybinding` is the authority on keys.** Its cheat-sheet
+    rows (the KeyBindings table) go into the facts block. Any reply,
+    prose included, that names a Ctrl or Alt key the cheat-sheet lacks
+    goes back with the real list (`checkKeys`). Bash's own keys (Ctrl-C,
+    Ctrl-R and the like) may be named freely.
 
 Replayed live, the sentence is refused with a 400. The Go question,
 asked with and without pasted columns, is answered and verified. The
