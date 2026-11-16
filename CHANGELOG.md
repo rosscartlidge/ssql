@@ -14,6 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the mistake. It now fails with the right side's fields and the
   argument order. Found by the DFC169 FAQ harness, when a model wrote
   `-as src_name name` with the arguments reversed.
+- **A CSV/TSV column with no values (all blank, or a header with no rows)
+  broke typed code generation**, which inferred it as a nullable
+  `*string`:
+  - `where`, `sort`, `-max`, `update -set` and `cast` refused it;
+  - `to jsonl` wrote `null` where exec writes `""`;
+  - `fill -default` wrote `<nil>`.
+
+  It is now a `string` of empty values, as exec reads it. Found by the
+  DFC169 FAQ, when a visitor pasted a header with no rows.
+- **Typed `group-by` counted a blank text cell as a value.** `-min`,
+  `-first`, `-last`, `-any`, `-mode`, `-count-distinct` and `-string-agg`
+  over a text column with blanks gave `""` or an extra distinct value.
+  Exec and SQL skip a blank as missing (DFC124). The typed lanes now skip
+  it too.
 
 ## [4.148.0] - 2026-11-15
 

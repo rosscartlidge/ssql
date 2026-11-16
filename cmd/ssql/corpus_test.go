@@ -244,6 +244,10 @@ func corpusData(t *testing.T) string {
 {"name":"id","type":"integer"},{"name":"amount","type":"number"},{"name":"when","type":"date"},{"name":"code","type":"string"}]}}]}`,
 			"uncastable.csv":     "id,score,flag\n1,10,yes\n2,N/A,maybe\n3,2.9,no\n",
 			"missing_groups.csv": "id,g,v,t,code,e\n1,a,1,Oslo,12,\n2,a,3,,abc,\n3,b,,,007,\n4,b,,,x,\n",
+			// A column with no value in any row, and a header with no rows:
+			// exec reads both as strings of "" (DFC169 found typed refusing them).
+			"blank_col.csv":   "id,g,note\n3,b,\n1,a,\n4,b,\n2,a,\n",
+			"header_only.csv": "id,note\n",
 			// A join key that is a FLOAT column on the left (one 2.5 types
 			// the whole column float) and an INT column on the right
 			// (DFC133: the interpreted join matched nothing).

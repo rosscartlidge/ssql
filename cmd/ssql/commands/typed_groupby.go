@@ -504,12 +504,12 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			}
 			fmt.Fprintf(&d, "\ta.%s_n++\n", s.stateName)
 		case "min":
-			fmt.Fprintf(&d, "\tif !a.%s_have || %s {\n", s.stateName, orderedLess(s.fieldGoT, "r."+s.fieldGo, "a."+s.stateName))
+			fmt.Fprintf(&d, "\tif %s(!a.%s_have || %s) {\n", presentAnd(s.fieldGoT, s.fieldGo), s.stateName, orderedLess(s.fieldGoT, "r."+s.fieldGo, "a."+s.stateName))
 			fmt.Fprintf(&d, "\t\ta.%s = r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 			d.WriteString("\t}\n")
 		case "max":
-			fmt.Fprintf(&d, "\tif !a.%s_have || %s {\n", s.stateName, orderedLess(s.fieldGoT, "a."+s.stateName, "r."+s.fieldGo))
+			fmt.Fprintf(&d, "\tif %s(!a.%s_have || %s) {\n", presentAnd(s.fieldGoT, s.fieldGo), s.stateName, orderedLess(s.fieldGoT, "a."+s.stateName, "r."+s.fieldGo))
 			fmt.Fprintf(&d, "\t\ta.%s = r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 			d.WriteString("\t}\n")
@@ -534,10 +534,14 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\ta.%s = r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\ta.%s_have = true\n", s.stateName)
 		case "count-distinct":
-			fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
-			fmt.Fprintf(&d, "\ta.%s[r.%s] = struct{}{}\n", s.stateName, s.fieldGo)
+			skipMissing(&d, s.fieldGoT, s.fieldGo, func(d *strings.Builder, in string) {
+				fmt.Fprintf(d, "%sif a.%s == nil {\n%s\ta.%s = make(%s)\n%s}\n", in, s.stateName, in, s.stateName, s.stateType, in)
+				fmt.Fprintf(d, "%sa.%s[r.%s] = struct{}{}\n", in, s.stateName, s.fieldGo)
+			})
 		case "string-agg":
-			fmt.Fprintf(&d, "\ta.%s = append(a.%s, %s)\n", s.stateName, s.stateName, aggValueStringCode(s.fieldGoT, "r."+s.fieldGo))
+			skipMissing(&d, s.fieldGoT, s.fieldGo, func(d *strings.Builder, in string) {
+				fmt.Fprintf(d, "%sa.%s = append(a.%s, %s)\n", in, s.stateName, s.stateName, aggValueStringCode(s.fieldGoT, "r."+s.fieldGo))
+			})
 		case "collect":
 			collectAppend(&d, s.stateName, s.fieldGo, s.fieldGoT, s.fieldJSON)
 		case "median", "percentile":
@@ -545,9 +549,11 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		case "stddev", "variance":
 			fmt.Fprintf(&d, "\ta.%s = append(a.%s, %s)\n", s.stateName, s.stateName, floatOf(s.fieldGoT, "r."+s.fieldGo))
 		case "mode":
-			fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
-			fmt.Fprintf(&d, "\tif e, ok := a.%s[r.%s]; ok {\n\t\te.N++\n\t} else {\n\t\ta.%s[r.%s] = &typedModeEntry{N: 1, First: a.%s_seen}\n\t}\n", s.stateName, s.fieldGo, s.stateName, s.fieldGo, s.stateName)
-			fmt.Fprintf(&d, "\ta.%s_seen++\n", s.stateName)
+			skipMissing(&d, s.fieldGoT, s.fieldGo, func(d *strings.Builder, in string) {
+				fmt.Fprintf(d, "%sif a.%s == nil {\n%s\ta.%s = make(%s)\n%s}\n", in, s.stateName, in, s.stateName, s.stateType, in)
+				fmt.Fprintf(d, "%sif e, ok := a.%s[r.%s]; ok {\n%s\te.N++\n%s} else {\n%s\ta.%s[r.%s] = &typedModeEntry{N: 1, First: a.%s_seen}\n%s}\n", in, s.stateName, s.fieldGo, in, in, in, s.stateName, s.fieldGo, s.stateName, in)
+				fmt.Fprintf(d, "%sa.%s_seen++\n", in, s.stateName)
+			})
 		case "arg-max":
 			// Strictly greater replaces: ties keep the first arrival.
 			fmt.Fprintf(&d, "\tif !a.%s_have || %s {\n\t\ta.%s_by = r.%s\n\t\ta.%s = r.%s\n\t\ta.%s_have = true\n\t}\n",
@@ -853,9 +859,39 @@ func collectAppend(d *strings.Builder, state, goName, goType string, isJSON bool
 
 // presentCond is "r.F != nil" for a nullable (*T) field, else "": the
 // guard first/last/any put on a row so a missing value is skipped.
+//
+// An empty string is missing too (DFC124: a CSV cannot tell an empty text
+// cell from a missing one, and exec's aggregates skip it, as SQL skips the
+// NULL DuckDB reads it as). The typed group-by took "" as a value until
+// 2026-11-16: -min/-first/-last/-any over a text column with a blank
+// answered "" where exec and DuckDB answered the first real value.
 func presentCond(goType, goName string) string {
-	if strings.HasPrefix(goType, "*") {
+	switch {
+	case strings.HasPrefix(goType, "*"):
 		return "r." + goName + " != nil"
+	case goType == "string":
+		return "r." + goName + ` != ""`
+	}
+	return ""
+}
+
+// skipMissing writes body (at indent `in`) guarded by presentCond when the
+// field can be missing, unguarded otherwise.
+func skipMissing(d *strings.Builder, goType, goName string, body func(d *strings.Builder, in string)) {
+	cond := presentCond(goType, goName)
+	if cond == "" {
+		body(d, "\t")
+		return
+	}
+	fmt.Fprintf(d, "\tif %s {\n", cond)
+	body(d, "\t\t")
+	d.WriteString("\t}\n")
+}
+
+// presentAnd is presentCond as a prefix for a condition: "COND && ", or "".
+func presentAnd(goType, goName string) string {
+	if c := presentCond(goType, goName); c != "" {
+		return c + " && "
 	}
 	return ""
 }

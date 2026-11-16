@@ -68,8 +68,8 @@ func TestSampleCSVSchema(t *testing.T) {
 		"Age":      "int64",
 		"Salary":   "float64",
 		"Active":   "bool",
-		"Joined":   "string",  // RFC 3339 is not inferred as a time (exec and SQL keep a string; -type declares one)
-		"Nickname": "*string", // entirely empty in samples
+		"Joined":   "string", // RFC 3339 is not inferred as a time (exec and SQL keep a string; -type declares one)
+		"Nickname": "string", // entirely empty in samples: a string, as exec reads it
 	}
 	for _, f := range schema.Fields {
 		if got, ok := wantTypes[f.GoName]; !ok || got != f.GoType {
@@ -77,7 +77,7 @@ func TestSampleCSVSchema(t *testing.T) {
 		}
 	}
 	// Spot-check the rendered struct: should contain ssql tags and the type.
-	for _, want := range []string{"type PeopleRow struct", `ssql:"name"`, `ssql:"dept_id"`, "int64", "float64", "*string"} {
+	for _, want := range []string{"type PeopleRow struct", `ssql:"name"`, `ssql:"dept_id"`, "int64", "float64"} {
 		if want == `ssql:"dept_id"` {
 			continue // not in this test
 		}

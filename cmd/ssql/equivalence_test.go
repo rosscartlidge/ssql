@@ -2585,6 +2585,41 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
+		// An all-empty column is a string of "" in every lane. Typed codegen
+		// inferred it *string until 2026-11-16: where/sort/max/update/cast
+		// refused it, to jsonl wrote null for "", and fill -default wrote
+		// "<nil>" (found by the DFC169 FAQ: a visitor's pasted header).
+		Name:     "blank_column_where_and_fill",
+		Pipeline: `{{.bin}} from csv {{.data}}/blank_col.csv | {{.bin}} where -if note eq '' -if g eq a + -if id eq 4 | {{.bin}} fill -default note none | {{.bin}} include id note`,
+		Golden:   []map[string]any{{"id": 1, "note": "none"}, {"id": 2, "note": "none"}, {"id": 4, "note": "none"}},
+		Skip:     equivNoSQL("an empty text cell is NULL in SQL, so eq '' does not match it (DFC124 §2; TODO)"),
+	},
+	{
+		Name:     "blank_column_kept_as_empty_string",
+		Pipeline: `{{.bin}} from csv {{.data}}/blank_col.csv | {{.bin}} where -if note ne x | {{.bin}} sort note id | {{.bin}} include id note`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "note": ""}, {"id": 2, "note": ""}, {"id": 3, "note": ""}, {"id": 4, "note": ""}},
+		Skip:     equivNoSQL("an empty text cell is NULL in SQL, so ne x does not match it (DFC124 §2; TODO)"),
+	},
+	{
+		// …and an aggregate skips a blank text value as missing, as exec
+		// and SQL do (DFC124): typed -min/-first/-last/-any/-mode and
+		// -count-distinct took "" as a value until 2026-11-16, so group a's
+		// min was "". (A group with NO value is DFC124 §3's typed gap: a
+		// plain string field cannot be absent.)
+		Name:     "blank_text_skipped_by_aggregates",
+		Pipeline: `{{.bin}} from csv {{.data}}/blank_col.csv | {{.bin}} update -if id ge 2 -set note x | {{.bin}} update -if id eq 4 -set note w | {{.bin}} group-by g -count c -min note lo -max note hi -first note f -count-distinct note d -mode note mo`,
+		Golden: []map[string]any{
+			{"g": "a", "c": 2, "lo": "x", "hi": "x", "f": "x", "d": 1, "mo": "x"},
+			{"g": "b", "c": 2, "lo": "w", "hi": "x", "f": "x", "d": 2, "mo": "x"},
+		},
+	},
+	{
+		Name:     "header_only_csv_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/header_only.csv | {{.bin}} where -if note eq x | {{.bin}} include id note`,
+		Golden:   []map[string]any{},
+	},
+	{
 		// A literal is typed by the COLUMN it meets, not by its spelling:
 		// `code eq 12` rendered `code = 12` and DuckDB refused to cast the
 		// text column; `-set code 99` mixed VARCHAR and INTEGER in a CASE.

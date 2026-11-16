@@ -468,7 +468,12 @@ func (c *colInfer) observe(v string) {
 func (c *colInfer) resolve() string {
 	switch {
 	case !c.any:
-		return "*string" // nullable-by-default for all-empty columns
+		// An all-empty column (or a header with no rows) is a string of
+		// empty values, as exec reads it (its header types it "string" and
+		// every operator sees ""). It was *string until 2026-11-16, and typed
+		// where/sort/max/update/cast refused it while to jsonl wrote null
+		// and fill -default wrote "<nil>" (found by the DFC169 FAQ).
+		return "string"
 	case c.allInt:
 		return "int64"
 	case c.allI128:
