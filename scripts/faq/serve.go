@@ -43,9 +43,13 @@ type server struct {
 }
 
 type askRequest struct {
-	Question string `json:"question"`
-	Header   string `json:"header,omitempty"`
+	Question string    `json:"question"`
+	Header   string    `json:"header,omitempty"`
+	Previous *exchange `json:"previous,omitempty"` // the exchange a follow-up follows
 }
+
+// maxPrevReply caps the earlier reply a follow-up carries.
+const maxPrevReply = 8 << 10
 
 type askResponse struct {
 	Reply      string   `json:"reply"`
@@ -67,6 +71,7 @@ type logLine struct {
 	Question    string  `json:"question"`
 	PastedCols  int     `json:"pasted_cols,omitempty"`
 	PastedRows  int     `json:"pasted_rows,omitempty"`
+	FollowUp    bool    `json:"follow_up,omitempty"`
 	Model       string  `json:"model"`
 	Pipeline    string  `json:"pipeline,omitempty"`
 	Status      string  `json:"status"`
@@ -129,7 +134,7 @@ func mustCIDR(s string) *net.IPNet {
 
 func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 	var req askRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxQuestion+maxPaste+1024)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*maxQuestion+maxPaste+maxPrevReply+4096)).Decode(&req); err != nil {
 		writeError(w, http.StatusRequestEntityTooLarge, "the question or the pasted data is too long, or not JSON")
 		return
 	}
@@ -142,10 +147,16 @@ func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("the question is over %d KB", maxQuestion>>10))
 		return
 	}
+	if p := req.Previous; p != nil {
+		p.Question, p.Reply = strings.TrimSpace(p.Question), strings.TrimSpace(p.Reply)
+		if p.Question == "" || p.Reply == "" || len(p.Question) > maxQuestion || len(p.Reply) > maxPrevReply {
+			req.Previous = nil // an unusable earlier exchange: answer the question alone
+		}
+	}
 	var v *visitor
 	if strings.TrimSpace(req.Header) != "" {
 		var err error
-		if v, err = newVisitor(s.tmp, req.Header); err != nil {
+		if v, err = newVisitor(s.tmp, s.f.box.dataDir, req.Header); err != nil {
 			writeError(w, http.StatusBadRequest, "your columns: "+err.Error())
 			return
 		}
@@ -163,7 +174,7 @@ func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	a := s.f.ask(s.llm, req.Question, v)
+	a := s.f.askAfter(s.llm, req.Question, v, req.Previous)
 	<-s.run
 	resp := respond(a, v, time.Since(start))
 	s.record(req, v, a, resp)
@@ -189,8 +200,8 @@ func respond(a answer, v *visitor, took time.Duration) askResponse {
 	}
 	// The playground holds the same sample files; a visitor's data.csv
 	// is not there.
-	if resp.Verified && v == nil {
-		resp.Playground = playground + "#p=" + base64.RawURLEncoding.EncodeToString([]byte(a.Pipeline))
+	if resp.Verified && (v == nil || !v.readBy(a.Pipeline)) {
+		resp.Playground = playground + "#p=" + base64.RawURLEncoding.EncodeToString([]byte(runnable(a.Pipeline)))
 	}
 	return resp
 }
@@ -204,6 +215,7 @@ func (s *server) record(req askRequest, v *visitor, a answer, resp askResponse) 
 	if v != nil {
 		l.PastedCols, l.PastedRows = len(v.cols), v.rows
 	}
+	l.FollowUp = req.Previous != nil
 	b, _ := json.Marshal(l)
 	s.logMu.Lock()
 	defer s.logMu.Unlock()

@@ -27,6 +27,7 @@ type faq struct {
 	retries int
 	docsK   int
 	system  string // the CLI prompt plus the sample data's schemas
+	latest  string // the latest release, X.Y.Z (the eval's {{latest}})
 	verbose bool
 }
 
@@ -75,6 +76,21 @@ func newFAQ(repo string, box sandbox, retries, docsK int, verbose bool) (*faq, e
 	var sb strings.Builder
 	sb.Write(prompt)
 	sb.WriteString(answerFormat)
+	latest, date, notes, err := latestRelease(filepath.Join(repo, "CHANGELOG.md"))
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(&sb, `
+## Facts
+
+- The latest release of ssql is v%s, released %s. CHANGELOG.md lists what each release changed.
+- Install it with: go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
+- `+"`ssql version`"+` prints the version of the ssql a user has installed, which may be older.
+
+What v%s changed (its CHANGELOG section; for earlier releases, see CHANGELOG.md):
+
+%s
+`, latest, date, latest, clip(notes, 3000))
 	sb.WriteString("\n## The files\n\n")
 	files, _ := filepath.Glob(filepath.Join(box.dataDir, "*.csv"))
 	sort.Strings(files)
@@ -90,7 +106,31 @@ func newFAQ(repo string, box sandbox, retries, docsK int, verbose bool) (*faq, e
 		}
 		fmt.Fprintf(&sb, "- `%s`: %s\n", name, strings.Join(cols, ", "))
 	}
-	return &faq{repo: repo, box: box, retries: retries, docsK: docsK, system: sb.String(), verbose: verbose}, nil
+	return &faq{repo: repo, box: box, retries: retries, docsK: docsK, system: sb.String(), verbose: verbose, latest: latest}, nil
+}
+
+// releaseHeading is a released CHANGELOG section: ## [4.148.0] - 2026-11-15.
+var releaseHeading = regexp.MustCompile(`(?m)^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})`)
+
+// latestRelease is the first released section of the CHANGELOG, and its
+// text: the facts block states both, so "what is the latest release?" and
+// "what changed in it?" have answers that follow every release without
+// touching the prompt. (Retrieval alone answered the second from another
+// release's section, 2026-11-16.)
+func latestRelease(changelog string) (version, date, notes string, err error) {
+	b, err := os.ReadFile(changelog)
+	if err != nil {
+		return "", "", "", err
+	}
+	m := releaseHeading.FindSubmatchIndex(b)
+	if m == nil {
+		return "", "", "", fmt.Errorf("%s: no released section (## [X.Y.Z] - DATE)", changelog)
+	}
+	rest := b[m[1]:]
+	if next := regexp.MustCompile(`(?m)^## \[`).FindIndex(rest); next != nil {
+		rest = rest[:next[0]]
+	}
+	return string(b[m[2]:m[3]]), string(b[m[4]:m[5]]), strings.TrimSpace(string(rest)), nil
 }
 
 // userDocs are the sections an answer may cite: the user documentation and
@@ -157,8 +197,26 @@ func section(path, line string) string {
 // ask answers one question with one model, over the sample data, or over
 // the columns (and rows) a visitor pasted when v is not nil.
 func (f *faq) ask(llm ollama, question string, v *visitor) answer {
+	return f.askAfter(llm, question, v, nil)
+}
+
+// exchange is an earlier question and the reply it got: a follow-up
+// ("how does it do that?") is asked after it, as a conversation.
+type exchange struct {
+	Question string `json:"question"`
+	Reply    string `json:"reply"`
+}
+
+// askAfter is ask with the previous exchange, when the question follows
+// one. Retrieval sees both questions, so "how does it do the conversion?"
+// finds what "can I turn a pipeline into Go?" found.
+func (f *faq) askAfter(llm ollama, question string, v *visitor, prev *exchange) answer {
 	var a answer
-	refs, docs := f.retrieve(question)
+	query := question
+	if prev != nil {
+		query = prev.Question + " " + question
+	}
+	refs, docs := f.retrieve(query)
 	a.Docs = refs
 	user, box := question, f.box
 	if v != nil || docs != "" {
@@ -171,7 +229,11 @@ func (f *faq) ask(llm ollama, question string, v *visitor) answer {
 	if docs != "" {
 		user = "Documentation that may help:\n" + docs + "\n\n" + user
 	}
-	msgs := []message{{Role: "system", Content: f.system}, {Role: "user", Content: user}}
+	msgs := []message{{Role: "system", Content: f.system}}
+	if prev != nil {
+		msgs = append(msgs, message{Role: "user", Content: prev.Question}, message{Role: "assistant", Content: prev.Reply})
+	}
+	msgs = append(msgs, message{Role: "user", Content: user})
 	for turn := 0; ; turn++ {
 		reply, st, err := llm.chat(msgs)
 		a.Wall += st.Wall
@@ -190,7 +252,7 @@ func (f *faq) ask(llm ollama, question string, v *visitor) answer {
 		if problem == "" {
 			return a
 		}
-		if strings.Contains(problem, "no such file or directory") && v == nil {
+		if strings.Contains(problem, "no such file or directory") {
 			// An example over a file the question imagined (`from tsv
 			// data.tsv`): no correction can make it exist. Shown as an
 			// illustration, not run (an eval data case still needs a run).
@@ -214,19 +276,21 @@ func (f *faq) ask(llm ollama, question string, v *visitor) answer {
 // returns what went wrong, in ssql's words where ssql said it. A visitor's
 // pasted columns with no rows stop at schema mode: there is nothing to run.
 func (f *faq) check(a *answer, box sandbox, v *visitor) string {
-	if _, err := validatePipeline(a.Pipeline); err != nil {
+	run := runnable(a.Pipeline)
+	if _, err := validatePipeline(run); err != nil {
 		return "the pipeline cannot be run: " + err.Error()
 	}
 	// Schema mode answers from the headers in milliseconds, and refuses an
 	// unknown column with the list of real ones (DFC170).
-	if r := box.run(a.Pipeline+" | ssql generate schema", "SSQL_MODE=schema"); r.err != nil {
+	if r := box.run(run+" | ssql generate schema", "SSQL_MODE=schema"); r.err != nil {
 		return strings.TrimSpace(r.stderr)
 	}
-	if v != nil && v.rows == 0 {
+	mine := v != nil && v.readBy(a.Pipeline)
+	if mine && v.rows == 0 {
 		a.Checked, a.RanOn, a.Failure = true, "your-columns", ""
 		return ""
 	}
-	r := box.run(a.Pipeline)
+	r := box.run(run)
 	if r.err != nil {
 		msg := strings.TrimSpace(r.stderr)
 		if msg == "" {
@@ -235,7 +299,7 @@ func (f *faq) check(a *answer, box sandbox, v *visitor) string {
 		return msg
 	}
 	a.Ran, a.Output, a.Failure, a.RanOn = true, r.stdout, "", "sample"
-	if v != nil {
+	if mine {
 		a.RanOn = "your-rows"
 	}
 	return ""
@@ -248,16 +312,20 @@ func (f *faq) feedback(pipeline, problem string, v *visitor) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "That pipeline failed:\n\n%s\n", problem)
 	if v != nil {
-		sb.WriteString("\nRemember: the visitor's data is data.csv, with the columns given above; no other file exists.\n")
+		sb.WriteString("\nRemember: the visitor's data is data.csv, with the columns given above.\n")
 	}
-	cmds, _ := validatePipeline(pipeline)
+	cmds, _ := validatePipeline(runnable(pipeline))
 	sort.Strings(cmds)
 	for _, c := range cmds {
 		if r := f.box.run("ssql " + c + " -help"); r.err == nil {
 			fmt.Fprintf(&sb, "\nHere is `ssql %s -help`:\n\n%s\n", c, clip(r.stdout, 4000))
 		}
 	}
-	sb.WriteString("\nFix the pipeline and answer again in the same format.")
+	// The visitor sees only the final reply: one that explained this
+	// correction ("the error occurred because I provided curl…") answered
+	// a question nobody asked (2026-11-16).
+	sb.WriteString("\nFix the pipeline and answer the visitor's question again, in the same format. " +
+		"The visitor never saw the failed answer or this message: do not mention them.")
 	return sb.String()
 }
 

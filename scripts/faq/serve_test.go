@@ -80,12 +80,20 @@ func TestJailConfines(t *testing.T) {
 	}
 }
 
-// fakeOllama replies with the given turns in order, the last repeating.
+// fakeOllama replies with the given turns in order, the last repeating,
+// and keeps the messages of the latest call in lastCall.
+var lastCall []message
+
 func fakeOllama(t *testing.T, replies ...string) (ollama, *int) {
 	var mu sync.Mutex
 	n := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []message `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
 		mu.Lock()
+		lastCall = req.Messages
 		reply := replies[min(n, len(replies)-1)]
 		n++
 		mu.Unlock()
@@ -199,14 +207,50 @@ func TestAskVisitorColumns(t *testing.T) {
 	}
 }
 
+// A follow-up carries the earlier exchange to the model as turns.
+func TestAskFollowUp(t *testing.T) {
+	s, logPath := testServer(t, "Yes: `generate go` turns it into a program.")
+	prev := &exchange{Question: "Can I turn a pipeline into a Go program?", Reply: "Yes, with ssql generate go."}
+	w, resp := post(t, s.handler(), askRequest{Question: "how does it do the conversion?", Previous: prev})
+	if w.Code != 200 || resp.Status != "prose" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if len(lastCall) != 4 || lastCall[1].Content != prev.Question || lastCall[2].Role != "assistant" || lastCall[2].Content != prev.Reply ||
+		!strings.Contains(lastCall[3].Content, "how does it do the conversion?") {
+		t.Errorf("the model saw %+v", lastCall)
+	}
+	if log, _ := os.ReadFile(logPath); !strings.Contains(string(log), `"follow_up":true`) {
+		t.Errorf("log: %s", log)
+	}
+	// An unusable earlier exchange is dropped, not fatal.
+	if w, _ := post(t, s.handler(), askRequest{Question: "hi", Previous: &exchange{Question: "q"}}); w.Code != 200 || len(lastCall) != 2 {
+		t.Errorf("%d, the model saw %d messages", w.Code, len(lastCall))
+	}
+}
+
+// With columns pasted, an answer over a sample file still runs on the
+// sample (the visitor's directory holds both), and gets its playground link.
+func TestAskVisitorSampleAnswer(t *testing.T) {
+	s, _ := testServer(t, "```bash\nssql from employees.csv | ssql count\n```")
+	w, resp := post(t, s.handler(), askRequest{Question: "show me count on the samples", Header: "a,b"})
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "sample" || resp.Playground == "" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if !strings.Contains(lastCall[len(lastCall)-1].Content, "the columns are only context") {
+		t.Errorf("the prompt must say the columns are context: %s", lastCall[len(lastCall)-1].Content)
+	}
+}
+
 func TestParseVisitor(t *testing.T) {
 	ok := map[string][]string{
-		"a,b,c":          {"a", "b", "c"},
-		"a\tb":           {"a", "b"},
-		"a\nb\n c \n":    {"a", "b", "c"},
-		"x,y\n1,2\n3,4":  {"x", "y"},
-		" a , b ":        {"a", "b"},
-		"\"q,1\",b\n1,2": {"q,1", "b"},
+		"a,b,c":                                {"a", "b", "c"},
+		"a\tb":                                 {"a", "b"},
+		"a\nb\n c \n":                          {"a", "b", "c"},
+		"x,y\n1,2\n3,4":                        {"x", "y"},
+		" a , b ":                              {"a", "b"},
+		"\"q,1\",b\n1,2":                       {"q,1", "b"},
+		"Total Sales Amount In USD,region,rep": {"Total Sales Amount In USD", "region", "rep"}, // three names: never a sentence
+		"a long column name for sure,b\n1,2":   {"a long column name for sure", "b"},           // rows: data, not a question
 	}
 	for in, want := range ok {
 		recs, err := parseVisitor(in)
@@ -215,11 +259,14 @@ func TestParseVisitor(t *testing.T) {
 		}
 	}
 	for in, want := range map[string]string{
-		"":                          "nothing",
-		"a,a":                       "twice",
-		"a,,b":                      "no name",
-		"a,b\n1":                    "row 1",
-		strings.Repeat("x", 21<<10): "KB",
+		"":                              "nothing",
+		"a,a":                           "twice",
+		"a,,b":                          "no name",
+		"a,b\n1":                        "row 1",
+		"How does it do the conversion": "looks like a question",
+		"what about dates?":             "looks like a question",
+		"id\nwhy is this so slow?":      "looks like a question",
+		strings.Repeat("x", 21<<10):     "KB",
 		"a,b\n" + strings.Repeat("1,2\n", maxRows+1): "rows",
 	} {
 		if _, err := parseVisitor(in); err == nil || !strings.Contains(err.Error(), want) {

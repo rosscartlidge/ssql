@@ -51,6 +51,14 @@ pre code { background: none; padding: 0; }
 a { color: var(--accent); }
 .meta { color: var(--muted); font-size: 0.82rem; margin-top: 10px; }
 footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
+.chip { display: none; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; padding: 6px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 0.88rem; color: var(--muted); }
+.chip.on { display: flex; }
+.chip strong { color: var(--ink); font-weight: 600; }
+.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 0.88rem;
+  font-weight: 400; cursor: pointer; text-decoration: underline; }
+#inuse { color: var(--accent); font-weight: 600; }
+.answer .actions { margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -59,11 +67,14 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
   <p class="sub">Ask how to do something with ssql. A local model answers, and every pipeline it gives is run against the playground's sample data (employees, orders, customers, flights, cities) before you see it.</p>
 
   <form id="ask">
+    <div class="chip" id="follow">Following up on <strong id="followq"></strong>
+      <button type="button" class="link" id="newq">New question</button></div>
     <textarea id="q" placeholder="e.g. what is the average salary in each department?" maxlength="2048" required></textarea>
     <details id="own">
-      <summary>About your own data? Paste its columns</summary>
-      <p>Paste a CSV header line, or one column name per line. Add a few rows to have the pipeline run on them too. The pasted text is used for this answer only and is not kept.</p>
+      <summary>About your own data? Paste its columns <span id="inuse"></span></summary>
+      <p>Only your data's <em>column names</em> go here: a CSV header line, or one name per line. Add a few rows to have the pipeline run on them too. Questions, including follow-ups, go in the box above. What you paste is used for answers only and is not kept.</p>
       <textarea id="hdr" placeholder="order_id,customer,amount,placed_at"></textarea>
+      <div class="row"><button type="button" class="link" id="clearhdr">Clear the columns</button></div>
     </details>
     <div class="row">
       <button type="submit" id="go">Ask</button>
@@ -89,7 +100,7 @@ const exBox = document.getElementById('examples');
 for (const e of examples) {
   const b = document.createElement('button');
   b.type = 'button'; b.textContent = e;
-  b.onclick = () => { document.getElementById('q').value = e; ask(); };
+  b.onclick = () => { setFollow(null); document.getElementById('q').value = e; ask(); };
   exBox.appendChild(b);
 }
 
@@ -129,6 +140,39 @@ function docLink(ref) {
   return '<a href="' + esc(docBase + file + '#L' + line) + '" target="_blank" rel="noopener">' + esc(ref) + '</a>';
 }
 
+// The conversation: a question follows the last answer until "New
+// question". The server gets that one earlier exchange, nothing more.
+let last = null;
+function setFollow(ex) {
+  last = ex;
+  const chip = document.getElementById('follow');
+  chip.classList.toggle('on', !!ex);
+  document.getElementById('followq').textContent = ex ? '“' + ex.question + '”' : '';
+}
+document.getElementById('newq').onclick = () => { setFollow(null); document.getElementById('q').focus(); };
+
+// The pasted columns: say when they are in use, and catch a question
+// typed into the wrong box (the server refuses it too).
+const hdr = document.getElementById('hdr');
+function columnsOf(text) {
+  const t = text.trim();
+  if (!t) return [];
+  const first = t.split('\n')[0];
+  if (first.includes('\t')) return first.split('\t');
+  if (first.includes(',')) return first.split(',');
+  return t.split('\n').map(s => s.trim()).filter(Boolean);
+}
+function looksLikeSentence(c) {
+  c = c.trim();
+  return c.endsWith('?') || c.split(/\s+/).length >= 5;
+}
+function updateInUse() {
+  const n = columnsOf(hdr.value).length;
+  document.getElementById('inuse').textContent = n ? '· ' + n + ' column' + (n === 1 ? '' : 's') + ' in use' : '';
+}
+hdr.addEventListener('input', updateInUse);
+document.getElementById('clearhdr').onclick = () => { hdr.value = ''; updateInUse(); };
+
 function show(question, r) {
   const div = document.createElement('div');
   div.className = 'answer';
@@ -146,24 +190,39 @@ function show(question, r) {
   if (r.docs && r.docs.length) links.push('Docs: ' + r.docs.map(docLink).join(', '));
   if (links.length) html += '<div class="links">' + links.join('') + '</div>';
   html += '<div class="meta">' + r.seconds.toFixed(1) + ' s</div>';
+  html += '<div class="actions"><button type="button" class="link">Follow up on this answer</button></div>';
   div.innerHTML = html;
+  const ex = { question, reply: r.reply || '' };
+  div.querySelector('.actions button').onclick = () => { setFollow(ex); document.getElementById('q').focus(); };
   document.getElementById('answers').prepend(div);
 }
 
 async function ask() {
   const q = document.getElementById('q').value.trim();
   if (!q) return;
-  const header = document.getElementById('hdr').value;
+  const header = hdr.value;
   const go = document.getElementById('go'), status = document.getElementById('status');
+  // The server's rule: a header with no rows and at most two names, one of
+  // which reads as a sentence.
+  const cols = columnsOf(header);
+  const lines = header.trim().split('\n');
+  const headerOnly = lines.length === 1 || !/[,\t]/.test(lines[0]);
+  if (headerOnly && cols.length && cols.length <= 2 && cols.some(looksLikeSentence)) {
+    status.textContent = 'The columns box holds a question. Ask it in the question box, then clear the columns.';
+    document.getElementById('own').open = true;
+    return;
+  }
   go.disabled = true;
   status.textContent = 'Thinking, then running the pipeline…';
   try {
     const res = await fetch('api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: q, header }) });
+      body: JSON.stringify({ question: q, header, previous: last && last.reply ? last : undefined }) });
     const body = await res.json().catch(() => ({ error: res.statusText }));
     if (!res.ok) { status.textContent = body.error || ('error ' + res.status); return; }
     status.textContent = '';
     show(q, body);
+    if (body.reply) setFollow({ question: q, reply: body.reply });
+    document.getElementById('q').value = '';
   } catch (e) {
     status.textContent = 'The FAQ service is not answering (is the laptop on?)';
   } finally {

@@ -505,7 +505,61 @@ says how to install it.
   tailnet address was verified each time, in about 3.7 s. A request with
   `Tailscale-Funnel-Request` got 403.
 
-### 11.3 Next
+### 11.3 The first real session (2026-11-16)
+
+Ross's first questions exposed four faults. One was in ssql: typed codegen
+refused a column with no values; it is fixed in 7f9b7f0e. The other three
+were in the FAQ, and each is now fixed:
+
+- **A follow-up typed into the columns box became a column.** "How does it
+  do the conversion" was taken as the visitor's only column, and the model
+  built a `where` over it. The fix:
+  - a header with no rows and at most two names, one of which ends in `?`
+    or runs to five words, is refused with "ask it in the question box";
+  - the page says so before sending;
+  - the page shows how many columns are in use, and has a clear button.
+- **The prompt turned every question into a pipeline.** With columns
+  pasted, it said "answer with a pipeline that reads data.csv", so "Can I
+  turn a pipeline into a Go program?" got a pipeline instead of an answer.
+  The columns are now context: a pipeline for questions about the data, an
+  answer for questions about ssql. The visitor's directory also holds the
+  sample files, so an example over `employees.csv` runs and gets its
+  playground link. `ran_on` says which file the pipeline read.
+- **There were no follow-ups.** The page now follows the last answer until
+  "New question", and each answer has "Follow up on this answer". The
+  service gives the model that one earlier exchange as turns. Retrieval
+  sees both questions, so "how does it do the conversion?" finds what the
+  Go question found.
+- **A trailing `> report.go` was refused.** The model kept "save it with
+  `> report.go`" through every correction. `runnable` now verifies the
+  pipeline before one trailing redirection to a plain file name. Any other
+  `>` is still refused: a path, `..`, `2>&1`, two redirections, or one
+  mid-pipeline.
+
+Replayed live, the sentence is refused with a 400. The Go question,
+asked with and without pasted columns, is answered and verified. The
+follow-up explains the optimiser and generator, and its example ran. A
+data question with the same columns reads `data.csv`. The eval is
+unchanged: 31/33, p50 1.8 s.
+
+- **"What is the latest release?" got `ssql version`,** and the reply
+  explained its own failed first draft ("the error occurred because I
+  provided `curl`…"). The model had no source for the answer: retrieval
+  found no CHANGELOG section, and when asked what changed, it described
+  another release's section. The fixes:
+  - the system prompt now has a **facts block**, read from the checkout at
+    start-up: the latest release and its date (the CHANGELOG's first
+    released heading), the install line, what `ssql version` really
+    reports, and that release's CHANGELOG section (clipped to 3 KB). It
+    follows every release with no prompt edit;
+  - the correction turn now says the visitor never saw the failed answer.
+
+  Two eval cases were added: `doc-latest-release` (`{{latest}}` is filled
+  from the CHANGELOG) and `doc-latest-changes`. The latter names v4.148.0's
+  subject, so it fails loudly at the next release until it is updated.
+  The eval scores 33/35, with the same two model errors.
+
+### 11.4 Next
 
 - Show it to two or three people on the tailnet, and read the log.
 - Phase 3: failed logged questions become eval cases, and the fixes go to

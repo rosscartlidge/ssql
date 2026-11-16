@@ -20,7 +20,8 @@ import (
 //     rows, each row a multiset of values: column NAMES are the answer's
 //     own business (n or count), and a column too many or too few, or a
 //     wrong value, differs. Ordered cases compare the row order too.
-//   - doc: every fact (a lower-case phrase) must appear in the reply.
+//   - doc: every fact (a lower-case phrase) must appear in the reply;
+//     {{latest}} is the latest release from the CHANGELOG.
 //   - refuse: the reply must start "UNSUPPORTED:", and no pipeline it
 //     offers may use an invented spelling listed (prose may name one to
 //     say it does not exist).
@@ -102,6 +103,9 @@ func grade(f *faq, c evalCase, a answer) (bool, string) {
 		return true, ""
 	case "doc":
 		for _, fact := range c.Facts {
+			if f != nil {
+				fact = strings.ReplaceAll(fact, "{{latest}}", f.latest)
+			}
 			if !strings.Contains(reply, strings.ToLower(fact)) {
 				return false, "missing fact: " + fact
 			}
@@ -120,7 +124,7 @@ func grade(f *faq, c evalCase, a answer) (bool, string) {
 	if !a.Ran {
 		return false, "never ran: " + firstLine(a.Failure)
 	}
-	got := f.box.run(dataFor(a.Pipeline))
+	got := f.box.run(dataFor(runnable(a.Pipeline)))
 	want := f.box.run(dataFor(c.Golden))
 	if got.err != nil {
 		return false, "its rows could not be read: " + firstLine(got.stderr)

@@ -54,6 +54,10 @@
    "facts": ["exclude"]},
   {"id": "doc-tsv", "kind": "doc", "question": "How do I read a tab-separated file?",
    "facts": ["from tsv"]},
+  {"id": "doc-latest-release", "kind": "doc", "question": "What is the latest release of ssql?",
+   "facts": ["{{latest}}"]},
+  {"id": "doc-latest-changes", "kind": "doc", "question": "What changed in the latest release?",
+   "facts": ["{{latest}}", "schema mode"], "note": "the second fact names v4.148.0's subject: update it with each release"},
 
   {"id": "refuse-mysql", "kind": "refuse", "question": "read the users table from my MySQL database and count the rows",
    "forbid": ["from mysql", "from sql", "from db"]},

@@ -40,6 +40,22 @@ func extractPipeline(reply string) string {
 	return strings.TrimSpace(strings.Join(lines, " "))
 }
 
+// saveTo is a trailing `> FILE` (or `>> FILE`) naming a plain file in the
+// working directory.
+var saveTo = regexp.MustCompile(`\s*>>?\s*([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*$`)
+
+// runnable is the pipeline to verify: the text without a trailing
+// redirection to a plain file name. "Save it with > report.go" is ordinary
+// advice, and gemma kept it through every correction (2026-11-16); what is
+// verified is the pipeline that produces the file. The validator still
+// sees any other `>` (a second one, `2>&1`, a path) and refuses it.
+func runnable(p string) string {
+	if m := saveTo.FindStringSubmatchIndex(p); m != nil && !strings.Contains(p[m[2]:m[3]], "..") {
+		return strings.TrimSpace(p[:m[0]])
+	}
+	return p
+}
+
 // validatePipeline checks the text is ssql stages only, and returns the
 // commands it uses (for -help on a retry).
 func validatePipeline(p string) ([]string, error) {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -35,6 +37,51 @@ func TestValidatePipeline(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: want a refusal mentioning %q, got %v", p, want, err)
 		}
+	}
+}
+
+// A trailing save to a plain file is advice, not something to run: the
+// pipeline before it is verified. Every other redirection stays refused.
+func TestRunnable(t *testing.T) {
+	ok := map[string]string{
+		"ssql generate go -pipeline 'ssql from e.csv | ssql count' > report.go": "ssql generate go -pipeline 'ssql from e.csv | ssql count'",
+		"ssql from e.csv | ssql to csv >> all.csv":                              "ssql from e.csv | ssql to csv",
+		"ssql from e.csv | ssql count":                                          "ssql from e.csv | ssql count",
+	}
+	for in, want := range ok {
+		if got := runnable(in); got != want {
+			t.Errorf("runnable(%q) = %q, want %q", in, got, want)
+		}
+		if _, err := validatePipeline(runnable(in)); err != nil {
+			t.Errorf("%q: %v", in, err)
+		}
+	}
+	for _, bad := range []string{
+		"ssql from e.csv > /etc/x",
+		"ssql from e.csv > ../x.csv",
+		"ssql from e.csv > a.csv > b.csv",
+		"ssql from e.csv 2>&1",
+		"ssql from e.csv > out.csv | ssql count",
+		"ssql from e.csv > $HOME",
+	} {
+		if _, err := validatePipeline(runnable(bad)); err == nil {
+			t.Errorf("%q: accepted", bad)
+		}
+	}
+}
+
+// The facts block's release is the CHANGELOG's first released section,
+// past [Unreleased].
+func TestLatestRelease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "CHANGELOG.md")
+	os.WriteFile(path, []byte("# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n## [4.148.0] - 2026-11-15\n\n- schema mode is a lane\n\n## [4.147.0] - 2026-11-14\n\n- older\n"), 0o644)
+	v, d, notes, err := latestRelease(path)
+	if err != nil || v != "4.148.0" || d != "2026-11-15" || notes != "- schema mode is a lane" {
+		t.Errorf("got %q %q %q %v", v, d, notes, err)
+	}
+	os.WriteFile(path, []byte("## [Unreleased]\n"), 0o644)
+	if _, _, _, err := latestRelease(path); err == nil {
+		t.Errorf("a CHANGELOG with no release must fail loudly")
 	}
 }
 
