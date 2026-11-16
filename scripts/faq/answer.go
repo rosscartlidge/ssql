@@ -35,6 +35,8 @@ type answer struct {
 	Pipeline     string        // its pipeline ("" for prose or a refusal)
 	Unsupported  bool          // the model said ssql cannot do it
 	Ran          bool          // the pipeline passed the pre-flight and ran
+	Checked      bool          // a visitor's columns: it passed schema mode, with no rows to run
+	RanOn        string        // "sample", "your-columns" or "your-rows" once verified
 	Illustrative bool          // it names a file the sample data lacks: shown, not run
 	Output       string        // its stdout, when it ran
 	Failure      string        // the last error, when it never ran
@@ -99,6 +101,9 @@ var userDocs = regexp.MustCompile(`^(doc/[^/]+\.md|README\.md|CHANGELOG\.md):(\d
 // retrieve runs docsearch and returns the top user-doc sections, each as
 // its heading line through the next heading, capped.
 func (f *faq) retrieve(question string) (refs []string, text string) {
+	if f.docsK == 0 {
+		return nil, ""
+	}
 	cmd := exec.Command(filepath.Join(f.repo, "scripts", "docsearch.sh"), "-k", "40", question)
 	cmd.Dir = f.repo
 	out, err := cmd.Output()
@@ -149,14 +154,22 @@ func section(path, line string) string {
 	return strings.Join(out, "\n")
 }
 
-// ask answers one question with one model.
-func (f *faq) ask(llm ollama, question string) answer {
+// ask answers one question with one model, over the sample data, or over
+// the columns (and rows) a visitor pasted when v is not nil.
+func (f *faq) ask(llm ollama, question string, v *visitor) answer {
 	var a answer
 	refs, docs := f.retrieve(question)
 	a.Docs = refs
-	user := question
+	user, box := question, f.box
+	if v != nil || docs != "" {
+		user = "Question: " + question
+	}
+	if v != nil {
+		box = f.box.withData(v.dir)
+		user = v.prompt() + "\n\n" + user
+	}
 	if docs != "" {
-		user = "Documentation that may help:\n" + docs + "\n\nQuestion: " + question
+		user = "Documentation that may help:\n" + docs + "\n\n" + user
 	}
 	msgs := []message{{Role: "system", Content: f.system}, {Role: "user", Content: user}}
 	for turn := 0; ; turn++ {
@@ -173,11 +186,11 @@ func (f *faq) ask(llm ollama, question string) answer {
 		if a.Pipeline == "" || a.Unsupported {
 			return a // prose, or a refusal
 		}
-		problem := f.check(&a)
+		problem := f.check(&a, box, v)
 		if problem == "" {
 			return a
 		}
-		if strings.Contains(problem, "no such file or directory") {
+		if strings.Contains(problem, "no such file or directory") && v == nil {
 			// An example over a file the question imagined (`from tsv
 			// data.tsv`): no correction can make it exist. Shown as an
 			// illustration, not run (an eval data case still needs a run).
@@ -193,22 +206,27 @@ func (f *faq) ask(llm ollama, question string) answer {
 			fmt.Fprintf(os.Stderr, "  retry %d: %s\n    after: %s\n", a.Retries, firstLine(problem), a.Pipeline)
 		}
 		msgs = append(msgs, message{Role: "assistant", Content: reply},
-			message{Role: "user", Content: f.feedback(a.Pipeline, problem)})
+			message{Role: "user", Content: f.feedback(a.Pipeline, problem, v)})
 	}
 }
 
 // check validates, pre-flights in schema mode, and runs the pipeline. It
-// returns what went wrong, in ssql's words where ssql said it.
-func (f *faq) check(a *answer) string {
+// returns what went wrong, in ssql's words where ssql said it. A visitor's
+// pasted columns with no rows stop at schema mode: there is nothing to run.
+func (f *faq) check(a *answer, box sandbox, v *visitor) string {
 	if _, err := validatePipeline(a.Pipeline); err != nil {
 		return "the pipeline cannot be run: " + err.Error()
 	}
 	// Schema mode answers from the headers in milliseconds, and refuses an
 	// unknown column with the list of real ones (DFC170).
-	if r := f.box.run(a.Pipeline+" | ssql generate schema", "SSQL_MODE=schema"); r.err != nil {
+	if r := box.run(a.Pipeline+" | ssql generate schema", "SSQL_MODE=schema"); r.err != nil {
 		return strings.TrimSpace(r.stderr)
 	}
-	r := f.box.run(a.Pipeline)
+	if v != nil && v.rows == 0 {
+		a.Checked, a.RanOn, a.Failure = true, "your-columns", ""
+		return ""
+	}
+	r := box.run(a.Pipeline)
 	if r.err != nil {
 		msg := strings.TrimSpace(r.stderr)
 		if msg == "" {
@@ -216,16 +234,22 @@ func (f *faq) check(a *answer) string {
 		}
 		return msg
 	}
-	a.Ran, a.Output, a.Failure = true, r.stdout, ""
+	a.Ran, a.Output, a.Failure, a.RanOn = true, r.stdout, "", "sample"
+	if v != nil {
+		a.RanOn = "your-rows"
+	}
 	return ""
 }
 
 // feedback is the correction turn: the error, and the authoritative help of
 // the commands the pipeline used (generated from the grammar, so it cannot
 // drift from the binary; DFC169 §4.0).
-func (f *faq) feedback(pipeline, problem string) string {
+func (f *faq) feedback(pipeline, problem string, v *visitor) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "That pipeline failed:\n\n%s\n", problem)
+	if v != nil {
+		sb.WriteString("\nRemember: the visitor's data is data.csv, with the columns given above; no other file exists.\n")
+	}
 	cmds, _ := validatePipeline(pipeline)
 	sort.Strings(cmds)
 	for _, c := range cmds {

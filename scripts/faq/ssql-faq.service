@@ -1,0 +1,26 @@
+# The ssql FAQ (DFC169 phase 2) as a user service: the local network and
+# the tailnet only, no Tailscale Funnel.
+#
+#   (cd ~/src/ssql/scripts/faq && go build -o ~/.local/bin/ssql-faq .)
+#   cp ~/src/ssql/scripts/faq/ssql-faq.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now ssql-faq
+#   loginctl enable-linger $USER     # keep it up when logged out
+#   journalctl --user -u ssql-faq -f
+#
+# It must run inside the checkout (docs, prompt, sample data, docsearch),
+# and it builds the checkout's slim ssql for the jail at start-up.
+
+[Unit]
+Description=ssql FAQ (local model, LAN and tailnet)
+After=network-online.target ollama.service
+
+[Service]
+WorkingDirectory=%h/src/ssql
+# go must be on PATH (the slim build); edit to where yours is.
+Environment=PATH=%h/.local/bin:%h/sdk/go1.26.1/bin:%h/go/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/ssql-faq -serve -listen :8484 -models gemma4:26b
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

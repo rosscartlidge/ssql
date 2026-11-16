@@ -293,20 +293,23 @@ A side effect worth having: every question the FAQ can't answer is a
 documentation bug or a missing feature, so it goes to `TODO.md`. The FAQ's
 failure log is a usability study that runs itself.
 
-## 9. Open questions for Ross
+## 9. Open questions for Ross (answered 2026-11-16)
 
-1. **Where it lives.** A panel in the playground page (it shares the data
-   and the run button), or its own page?
-2. **Go questions too, or CLI only at first?** CLI is where small models
-   are strong (15/15). Go needs compile-verify, a heavier jail and 2–5 s
-   builds, now smaller after DFC168.
-3. **Visitors' own data:** header-paste only, or a small upload (≤1 MB,
-   deleted after the answer)? Upload makes it far more useful and makes
-   the jail matter more.
-4. **The availability promise:** "when the laptop is on", or a cheap
-   always-on box for the fallback search?
-5. **Logging.** Is keeping the questions (no IPs) acceptable to say on the
-   page?
+Ross opened phase 2 to **the local network and his tailnet only, with no
+Tailscale Funnel yet**. The answers:
+
+1. **Where it lives:** its own page, served by the FAQ service. The
+   playground is https on GitHub Pages and can't call a plain-http LAN
+   address. Answers link into the public playground instead, with its
+   `#p=` share link.
+2. **Go questions:** CLI only. A Go question gets a doc answer, never a
+   verified program.
+3. **Visitors' own data:** pasted, never uploaded. They paste column names
+   (or a CSV header with a few rows). They are checked in schema mode, and
+   any rows are run.
+4. **Availability:** "when the laptop is on", which is enough on a LAN.
+5. **Logging:** yes, with no addresses and no pasted data, and the page
+   says so.
 
 ## 10. Phase 1 built (2026-11-15)
 
@@ -419,12 +422,93 @@ before a model decision rests on one case.
 
 ### 10.6 Next
 
-Phase 2 is the service and the page (§7):
-- the jail, since phase 1's sandbox is a scratch directory on the developer's
-  machine;
-- the queue;
-- the tunnel.
+Phase 2, built in §11.
 
-The eval should grow toward the ~100 cases of §6 from real questions.
-Ross's §9 questions still decide where the page lives and whether visitors
-can bring their own data.
+## 11. Phase 2 built (2026-11-16): the service on the LAN and the tailnet
+
+```
+cd scripts/faq && go build -o ~/.local/bin/ssql-faq .
+cd ~/src/ssql && ssql-faq -serve -listen :8484 -models gemma4:26b
+```
+
+`ssql-faq.service` is the same command as a systemd user unit; its header
+says how to install it.
+
+### 11.1 What it is
+
+- **`-serve` serves:**
+  - one embedded page (`page.html`: no external scripts; the model's text
+    is escaped before rendering);
+  - `POST /api/ask` (`{question, header?}`);
+  - `GET /api/health`.
+- **Reach:** `privateOnly` answers loopback, RFC 1918, link-local and
+  Tailscale's ranges (100.64.0.0/10, fd7a:115c:a1e0::/48), and returns 403
+  to anything else. It also refuses any request carrying
+  `Tailscale-Funnel-Request`. Funnel traffic arrives over loopback, so that
+  header is what tells it apart. Running `tailscale funnel` by mistake gets
+  403s; going public is a code change, made together with the per-address
+  rate limits a public service needs. `-listen tailscale:PORT` binds the
+  tailnet address alone.
+- **One question at a time** (one GPU). At most four wait, and the rest get
+  503 "busy". The caps are a 2 KB question, 20 KB of pasted data, 200
+  columns and 200 rows. A model turn times out after 120 s. The model is
+  warmed at start-up and kept loaded for 30 minutes.
+- **The jail.** `sandbox.run` with `jail` set runs:
+  - `systemd-run --user --scope`, with TasksMax=64, MemoryMax=1G and no
+    swap;
+  - then `prlimit`, with a 64 MB file and 30 s of CPU;
+  - then `bwrap --unshare-all`.
+
+  Inside, there is no network. The host's `/usr` is read-only, the scratch
+  copy of the data is `/work`, and ssql is at `/run/ssql/ssql`. Everything
+  but `/work` and `/tmp` is read-only (`--remount-ro /`; the first test
+  run found bwrap's root writable). `RLIMIT_NPROC` can't cap a run,
+  because it counts every process the user owns. The scope can, and costs
+  about 15 ms.
+
+  The jail runs the **slim** ssql (DFC151), built from the checkout into
+  `~/.cache/ssql-faq/ssql` at start-up. `-serve` refuses to start without
+  the jail. The CLI's `-ask` and `-eval` use it when it is present.
+- **Pasted data** (`visitor.go`) becomes `data.csv` in a directory of its
+  own, and the prompt names its columns. With names only, verification
+  stops at schema mode: an unknown column still comes back with the real
+  ones, and the answer is labelled "checked against your columns". With
+  rows, the pipeline runs on them. Neither kind gets a playground link,
+  since the playground lacks data.csv.
+- **The log** goes to `~/.local/state/ssql-faq/questions.jsonl`. Each line
+  holds:
+  - the time and the question;
+  - the counts of pasted columns and rows;
+  - the model, the pipeline, the status and the first line of the failure;
+  - the corrections and the seconds.
+
+  It never holds the address or the pasted data. It is phase 3's input:
+  failed questions become eval cases.
+
+### 11.2 Checks
+
+- **Tests (`serve_test.go`), each watched failing by sabotage:**
+  - the allowlist and the Funnel refusal;
+  - the jail, by raw shell past the validator: `/etc/passwd`, the home
+    directory, `/dev/tcp`, writes to `/usr` and `/run`;
+  - an answer verified, with its playground link round-tripping the
+    pipeline;
+  - the log keeps no address;
+  - the limits (413, 400, 503);
+  - a visitor's wrong column corrected through schema mode, then run on
+    pasted rows;
+  - the paste parser.
+- **The eval under the jail with the slim build:** gemma4:26b scores
+  31/33, the same as §10.3. p50 is 1.9 s and p95 7.8 s. The same two
+  cases fail, both model errors.
+- **Live:** the same question asked over loopback, the LAN address and the
+  tailnet address was verified each time, in about 3.7 s. A request with
+  `Tailscale-Funnel-Request` got 403.
+
+### 11.3 Next
+
+- Show it to two or three people on the tailnet, and read the log.
+- Phase 3: failed logged questions become eval cases, and the fixes go to
+  the docs, the prompt or ssql's errors.
+- Going public (Funnel or a tunnel) is deferred. It needs per-address
+  rate limits, a cost ceiling, and a decision on abuse; see TODO.

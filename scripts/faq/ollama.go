@@ -44,7 +44,7 @@ func (o ollama) chat(msgs []message) (string, chatStats, error) {
 		"keep_alive": "30m",
 	})
 	start := time.Now()
-	resp, err := http.Post(o.host+"/api/chat", "application/json", bytes.NewReader(body))
+	resp, err := ollamaClient.Post(o.host+"/api/chat", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", chatStats{}, fmt.Errorf("ollama: %w", err)
 	}
@@ -62,4 +62,23 @@ func (o ollama) chat(msgs []message) (string, chatStats, error) {
 		return "", chatStats{}, fmt.Errorf("ollama: %s", out.Error)
 	}
 	return out.Message.Content, chatStats{out.PromptEvalCount, out.EvalCount, time.Since(start)}, nil
+}
+
+// ollamaClient bounds one model turn: a stuck server fails the question
+// rather than holding the service's only slot.
+var ollamaClient = &http.Client{Timeout: 120 * time.Second}
+
+// warm loads the model and keeps it loaded, so the first visitor does not
+// wait 10-20 s for it (DFC169 §7).
+func (o ollama) warm() error {
+	body, _ := json.Marshal(map[string]any{"model": o.model, "keep_alive": "30m"})
+	resp, err := ollamaClient.Post(o.host+"/api/generate", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("ollama: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ollama: %s", resp.Status)
+	}
+	return nil
 }

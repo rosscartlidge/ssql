@@ -42,6 +42,18 @@ TestSchemaOpsShadowSchemaMode) hold what is fixed.
   header). Found by the DFC169 FAQ harness, 2026-11-15.
 - [ ] serve's completion walk still re-parses argv (hand ops). Retire it
   once autocli can parse a stage without running it.
+- [ ] An empty text cell is `""` in exec and the Go lanes but NULL in every
+  SQL lane (DuckDB's `read_csv`), so `where -if s eq ''` and `-if s ne x`
+  match it in Go and not in SQL. That divergence was accepted in DFC124 §2
+  and is now named by the `blank_column_*` equivalence skips. Either read
+  empty text as `''` in the SQL source or translate `eq ''` as
+  `IS NULL OR = ''`.
+- [ ] Typed: a group whose text values are ALL blank gives `""` where exec
+  gives no value (a plain string field cannot be absent; DFC124 §3).
+- [ ] The FAQ service (DFC169 §11) answers the LAN and the tailnet only and
+  refuses Funnel traffic. Going public (Funnel or a Cloudflare tunnel)
+  needs per-address rate limits, a daily cost ceiling, a decision on abuse,
+  and the offline fallback of §7 (BM25 search in the browser).
 
 ## Bugs found 2026-11-03 (DFC162 §1)
 

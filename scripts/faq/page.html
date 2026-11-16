@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask ssql</title>
+<style>
+:root {
+  --bg: #fbfaf7; --panel: #ffffff; --ink: #1d1f23; --muted: #5f6570; --line: #e3e0d8;
+  --accent: #2f6f5e; --accent-ink: #ffffff; --code: #f3f1ec; --ok: #2f6f5e; --warn: #9a5b13; --bad: #a23b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --panel: #1d2024; --ink: #e8e6e1; --muted: #9aa0a8; --line: #2e3238;
+    --accent: #6cc2a8; --accent-ink: #10221d; --code: #24282d; --ok: #6cc2a8; --warn: #e0a85a; --bad: #e08080;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 820px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+.sub { color: var(--muted); margin: 0 0 24px; }
+form { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+textarea { width: 100%; font: inherit; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; resize: vertical; }
+textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+#q { min-height: 76px; }
+#hdr { min-height: 70px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88rem; }
+details { margin-top: 10px; color: var(--muted); }
+details p { margin: 6px 0; font-size: 0.9rem; }
+.row { display: flex; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+button { font: inherit; border: 0; border-radius: 8px; padding: 9px 18px; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button:disabled { opacity: 0.55; cursor: wait; }
+.examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
+.examples button { background: transparent; color: var(--ink); border: 1px solid var(--line);
+  font-weight: 400; font-size: 0.88rem; padding: 5px 10px; }
+.examples button:hover { border-color: var(--accent); }
+#status { color: var(--muted); font-size: 0.92rem; }
+.answer { margin-top: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.answer .q { color: var(--muted); font-size: 0.92rem; margin-bottom: 8px; }
+.badge { display: inline-block; font-size: 0.8rem; font-weight: 600; border-radius: 99px; padding: 2px 10px; margin-bottom: 8px; border: 1px solid currentColor; }
+.verified { color: var(--ok); } .unverified, .error { color: var(--bad); } .unsupported, .illustration { color: var(--warn); } .prose { color: var(--muted); }
+pre { background: var(--code); border-radius: 8px; padding: 10px 12px; overflow-x: auto;
+  font: 0.86rem/1.45 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9em; background: var(--code); padding: 1px 4px; border-radius: 4px; }
+pre code { background: none; padding: 0; }
+.reply p { margin: 8px 0; }
+.links { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.9rem; margin-top: 8px; }
+a { color: var(--accent); }
+.meta { color: var(--muted); font-size: 0.82rem; margin-top: 10px; }
+footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ask ssql</h1>
+  <p class="sub">Ask how to do something with ssql. A local model answers, and every pipeline it gives is run against the playground's sample data (employees, orders, customers, flights, cities) before you see it.</p>
+
+  <form id="ask">
+    <textarea id="q" placeholder="e.g. what is the average salary in each department?" maxlength="2048" required></textarea>
+    <details id="own">
+      <summary>About your own data? Paste its columns</summary>
+      <p>Paste a CSV header line, or one column name per line. Add a few rows to have the pipeline run on them too. The pasted text is used for this answer only and is not kept.</p>
+      <textarea id="hdr" placeholder="order_id,customer,amount,placed_at"></textarea>
+    </details>
+    <div class="row">
+      <button type="submit" id="go">Ask</button>
+      <span id="status"></span>
+    </div>
+    <div class="examples" id="examples"></div>
+  </form>
+
+  <div id="answers"></div>
+
+  <footer>Runs on a laptop on this network. Questions are kept, without your address, to improve the answers; pasted data is not kept.
+    A model can still be wrong: a <em>verified</em> answer ran, but check that it answers what you asked.</footer>
+</main>
+<script>
+const examples = [
+  "How many employees are in each department?",
+  "Which customers have never placed an order?",
+  "What is the quickest total flying time from SYD to every city?",
+  "How do I read a tab-separated file?",
+  "Can I turn a pipeline into a Go program?",
+];
+const exBox = document.getElementById('examples');
+for (const e of examples) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = e;
+  b.onclick = () => { document.getElementById('q').value = e; ask(); };
+  exBox.appendChild(b);
+}
+
+const labels = {
+  verified: 'verified: it ran on the sample data',
+  unverified: 'not verified: it did not run',
+  unsupported: 'ssql cannot do this',
+  illustration: 'an illustration: it names a file the samples lack',
+  prose: 'answer',
+  error: 'no answer',
+};
+
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// A small, safe renderer: fenced code, inline code, bold, paragraphs.
+// Everything is escaped first; no HTML from the model reaches the page.
+function render(md) {
+  const parts = md.split(/```[a-z]*\n?/);
+  let html = '';
+  parts.forEach((p, i) => {
+    if (i % 2 === 1) { html += '<pre><code>' + esc(p.replace(/\n$/, '')) + '</code></pre>'; return; }
+    for (const para of p.split(/\n{2,}/)) {
+      const t = para.trim();
+      if (!t) continue;
+      let h = esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+      html += '<p>' + h + '</p>';
+    }
+  });
+  return html;
+}
+
+const docBase = 'https://github.com/rosscartlidge/ssql/blob/main/';
+function docLink(ref) {
+  const [file, line] = ref.split(':');
+  return '<a href="' + esc(docBase + file + '#L' + line) + '" target="_blank" rel="noopener">' + esc(ref) + '</a>';
+}
+
+function show(question, r) {
+  const div = document.createElement('div');
+  div.className = 'answer';
+  let label = labels[r.status] || r.status;
+  if (r.status === 'verified' && r.ran_on === 'your-columns') label = 'checked against your columns (not run: no rows)';
+  if (r.status === 'verified' && r.ran_on === 'your-rows') label = 'verified: it ran on your rows';
+  let html = '<div class="q">' + esc(question) + '</div>';
+  html += '<span class="badge ' + esc(r.status) + '">' + esc(label) + '</span>';
+  html += '<div class="reply">' + render(r.reply || '') + '</div>';
+  if (r.status === 'unverified' && r.failure) html += '<p>ssql said:</p><pre>' + esc(r.failure) + '</pre>';
+  if (r.status === 'error') html += '<pre>' + esc(r.failure || '') + '</pre>';
+  if (r.output) html += '<details><summary>Its output</summary><pre>' + esc(r.output) + '</pre></details>';
+  const links = [];
+  if (r.playground) links.push('<a href="' + esc(r.playground) + '" target="_blank" rel="noopener">Open in the playground ↗</a>');
+  if (r.docs && r.docs.length) links.push('Docs: ' + r.docs.map(docLink).join(', '));
+  if (links.length) html += '<div class="links">' + links.join('') + '</div>';
+  html += '<div class="meta">' + r.seconds.toFixed(1) + ' s</div>';
+  div.innerHTML = html;
+  document.getElementById('answers').prepend(div);
+}
+
+async function ask() {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  const header = document.getElementById('hdr').value;
+  const go = document.getElementById('go'), status = document.getElementById('status');
+  go.disabled = true;
+  status.textContent = 'Thinking, then running the pipeline…';
+  try {
+    const res = await fetch('api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, header }) });
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) { status.textContent = body.error || ('error ' + res.status); return; }
+    status.textContent = '';
+    show(q, body);
+  } catch (e) {
+    status.textContent = 'The FAQ service is not answering (is the laptop on?)';
+  } finally {
+    go.disabled = false;
+  }
+}
+
+document.getElementById('ask').addEventListener('submit', e => { e.preventDefault(); ask(); });
+document.getElementById('q').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
+});
+</script>
+</body>
+</html>

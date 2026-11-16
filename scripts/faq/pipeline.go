@@ -199,18 +199,42 @@ func words(st string) (out, subs []string, err error) {
 	return out, subs, nil
 }
 
-// sandbox runs validated pipelines in a scratch copy of the sample data,
-// with only ssql on PATH and a time limit. Phase 1 runs on the developer's
-// machine; the public service adds a jail (DFC169 §4.1).
+// sandbox runs validated pipelines in a scratch copy of the data, with
+// only ssql (and bash, which ssql uses for its own stages) on PATH and a time
+// limit. With jail set (DFC169 §4.1, phase 2) the run happens inside
+// bubblewrap: no network, nothing of the host but /usr read-only and the
+// scratch directory, inside a user systemd scope that caps its tasks and
+// memory. The validator is the first wall; the jail is the second, for
+// whatever the validator misses.
 type sandbox struct {
 	ssql    string // absolute path of the ssql binary
-	dataDir string // the sample files
+	dataDir string // the files a pipeline may read
 	timeout time.Duration
+	jail    bool
 }
 
 type runResult struct {
 	stdout, stderr string
 	err            error
+}
+
+// jailTools are the programs a jailed run needs on the host.
+var jailTools = []string{"bwrap", "systemd-run", "prlimit"}
+
+// jailAvailable reports the first tool the jail lacks, or "".
+func jailAvailable() string {
+	for _, t := range jailTools {
+		if _, err := exec.LookPath(t); err != nil {
+			return t
+		}
+	}
+	return ""
+}
+
+// withData is the same sandbox reading another directory's files.
+func (s sandbox) withData(dir string) sandbox {
+	s.dataDir = dir
+	return s
 }
 
 func (s sandbox) run(pipeline string, env ...string) runResult {
@@ -225,19 +249,26 @@ func (s sandbox) run(pipeline string, env ...string) runResult {
 			os.WriteFile(filepath.Join(dir, filepath.Base(f)), b, 0o644)
 		}
 	}
-	bin := filepath.Join(dir, ".bin")
-	os.Mkdir(bin, 0o755)
-	if err := os.Symlink(s.ssql, filepath.Join(bin, "ssql")); err != nil {
-		return runResult{err: err}
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", "set -o pipefail; "+pipeline)
-	cmd.Dir = dir
-	// ssql first; /usr/bin:/bin after it because ssql runs its own stages
-	// through bash (generate -pipeline, process substitution). The text a
-	// model wrote never reaches them: it was validated to ssql stages.
-	cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + dir, "TZ=UTC"}, env...)
+	script := "set -o pipefail; " + pipeline
+	var cmd *exec.Cmd
+	if s.jail {
+		cmd = exec.CommandContext(ctx, "systemd-run", jailArgs(s.ssql, dir, script, env)...)
+	} else {
+		bin := filepath.Join(dir, ".bin")
+		os.Mkdir(bin, 0o755)
+		if err := os.Symlink(s.ssql, filepath.Join(bin, "ssql")); err != nil {
+			return runResult{err: err}
+		}
+		cmd = exec.CommandContext(ctx, "/bin/bash", "-c", script)
+		cmd.Dir = dir
+		// ssql first; /usr/bin:/bin after it because ssql runs its own
+		// stages through bash (generate -pipeline, process substitution).
+		// The text a model wrote never reaches them: it was validated to
+		// ssql stages.
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + dir, "TZ=UTC"}, env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
@@ -245,6 +276,41 @@ func (s sandbox) run(pipeline string, env ...string) runResult {
 		err = fmt.Errorf("timed out after %v", s.timeout)
 	}
 	return runResult{stdout.String(), stderr.String(), err}
+}
+
+// jailArgs is systemd-run's argument list for one jailed run: a transient
+// user scope (at most 64 tasks, 1 GiB, no swap), prlimit (a 64 MiB file,
+// 30 s of CPU), then bubblewrap with every namespace unshared, so no
+// network, the host's /usr read-only, the scratch directory as /work, and
+// ssql at /run/ssql/ssql; everything but /work and /tmp is read-only.
+func jailArgs(ssql, dir, script string, env []string) []string {
+	args := []string{
+		"--user", "--scope", "--quiet", "--collect",
+		"-p", "TasksMax=64", "-p", "MemoryMax=1G", "-p", "MemorySwapMax=0",
+		"--",
+		"prlimit", "--fsize=67108864", "--cpu=30", "--",
+		"bwrap", "--unshare-all", "--die-with-parent", "--new-session",
+		"--ro-bind", "/usr", "/usr",
+		"--symlink", "usr/bin", "/bin",
+		"--symlink", "usr/lib", "/lib",
+		"--symlink", "usr/lib64", "/lib64",
+		"--ro-bind", ssql, "/run/ssql/ssql",
+		"--bind", dir, "/work",
+		"--chdir", "/work",
+		"--tmpfs", "/tmp",
+		"--proc", "/proc",
+		"--dev", "/dev",
+		"--remount-ro", "/", // the root bwrap built: only /work and /tmp stay writable
+		"--clearenv",
+		"--setenv", "PATH", "/run/ssql:/usr/bin:/bin",
+		"--setenv", "HOME", "/work",
+		"--setenv", "TZ", "UTC",
+	}
+	for _, e := range env {
+		k, v, _ := strings.Cut(e, "=")
+		args = append(args, "--setenv", k, v)
+	}
+	return append(args, "/bin/bash", "-c", script)
 }
 
 // dataFor turns a pipeline's output into JSONL rows for comparison. A

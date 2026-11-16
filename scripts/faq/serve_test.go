@@ -1,0 +1,229 @@
+package main
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// The service answers the LAN and the tailnet, nothing else, and nothing
+// Tailscale Funnel forwards (Ross, 2026-11-16: no Funnel yet).
+func TestPrivateOnly(t *testing.T) {
+	h := privateOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	cases := []struct {
+		addr   string
+		funnel bool
+		want   int
+	}{
+		{"127.0.0.1:5000", false, 200},
+		{"[::1]:5000", false, 200},
+		{"192.168.4.20:5000", false, 200},
+		{"10.131.56.7:5000", false, 200},
+		{"100.106.137.79:5000", false, 200},
+		{"[fd7a:115c:a1e0::1]:5000", false, 200},
+		{"8.8.8.8:5000", false, 403},
+		{"100.128.0.1:5000", false, 403}, // just past Tailscale's 100.64/10
+		{"[2001:db8::1]:5000", false, 403},
+		{"127.0.0.1:5000", true, 403}, // Funnel arrives over loopback
+		{"garbage", false, 403},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = c.addr
+		if c.funnel {
+			r.Header.Set("Tailscale-Funnel-Request", "?1")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != c.want {
+			t.Errorf("%s funnel=%v: %d, want %d", c.addr, c.funnel, w.Code, c.want)
+		}
+	}
+}
+
+// The jail is the second wall: a run sees its scratch directory and /usr,
+// no network, no home, no /etc, and cannot write outside /work.
+func TestJailConfines(t *testing.T) {
+	if missing := jailAvailable(); missing != "" {
+		t.Skipf("no %s", missing)
+	}
+	data := t.TempDir()
+	os.WriteFile(filepath.Join(data, "a.csv"), []byte("x\n1\n"), 0o644)
+	box := sandbox{ssql: ssqlForTest(t), dataDir: data, timeout: 20 * time.Second, jail: true}
+	if r := box.run("ssql from a.csv | ssql count"); r.err != nil || strings.TrimSpace(r.stdout) != "1" {
+		t.Fatalf("a run in the jail: %v %q %s", r.err, r.stdout, r.stderr)
+	}
+	home, _ := os.UserHomeDir()
+	for _, script := range []string{
+		"cat /etc/passwd",
+		"ls " + home,
+		"exec 3<>/dev/tcp/1.1.1.1/80",
+		"echo x > /usr/x",
+		"echo x > /run/ssql/x",
+	} {
+		// Raw shell, past the validator: the jail alone must hold.
+		if r := box.run(script); r.err == nil {
+			t.Errorf("%q succeeded in the jail: %s", script, r.stdout)
+		}
+	}
+	if r := box.run("echo ok > out.txt && cat out.txt"); r.err != nil {
+		t.Errorf("writing the scratch directory: %v %s", r.err, r.stderr)
+	}
+}
+
+// fakeOllama replies with the given turns in order, the last repeating.
+func fakeOllama(t *testing.T, replies ...string) (ollama, *int) {
+	var mu sync.Mutex
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reply := replies[min(n, len(replies)-1)]
+		n++
+		mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"message": message{Role: "assistant", Content: reply}, "eval_count": 5})
+	}))
+	t.Cleanup(srv.Close)
+	return ollama{host: srv.URL, model: "fake"}, &n
+}
+
+func ssqlForTest(t *testing.T) string {
+	bin, err := exec.LookPath("ssql")
+	if err != nil {
+		t.Skip("no ssql on PATH")
+	}
+	return bin
+}
+
+func testServer(t *testing.T, replies ...string) (*server, string) {
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	box := sandbox{ssql: ssqlForTest(t), dataDir: filepath.Join(repo, "cmd", "ssql-playground", "data"), timeout: 20 * time.Second, jail: jailAvailable() == ""}
+	f := &faq{repo: repo, box: box, retries: 2, docsK: 0, system: "test"}
+	llm, _ := fakeOllama(t, replies...)
+	logPath := filepath.Join(t.TempDir(), "q.jsonl")
+	s := newServer(f, llm, logPath)
+	s.tmp = t.TempDir()
+	return s, logPath
+}
+
+func post(t *testing.T, h http.Handler, body any) (*httptest.ResponseRecorder, askResponse) {
+	b, _ := json.Marshal(body)
+	r := httptest.NewRequest("POST", "/api/ask", bytes.NewReader(b))
+	r.RemoteAddr = "192.168.4.20:5555"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	var resp askResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	return w, resp
+}
+
+func TestAskVerifiedWithPlaygroundLink(t *testing.T) {
+	const pipeline = "ssql from employees.csv | ssql where -if dept eq Engineering | ssql count"
+	s, logPath := testServer(t, "Count them:\n```bash\n"+pipeline+"\n```\n")
+	w, resp := post(t, s.handler(), askRequest{Question: "how many engineers?"})
+	if w.Code != 200 || resp.Status != "verified" || !resp.Verified || resp.RanOn != "sample" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	enc, ok := strings.CutPrefix(resp.Playground, playground+"#p=")
+	if !ok {
+		t.Fatalf("playground link %q", resp.Playground)
+	}
+	if dec, _ := base64.RawURLEncoding.DecodeString(enc); string(dec) != pipeline {
+		t.Errorf("the link carries %q", dec)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "how many engineers?") || !strings.Contains(string(log), `"status":"verified"`) {
+		t.Errorf("log line: %s", log)
+	}
+	if strings.Contains(string(log), "192.168") {
+		t.Errorf("the log kept the address: %s", log)
+	}
+}
+
+func TestAskLimits(t *testing.T) {
+	s, _ := testServer(t, "UNSUPPORTED: no")
+	h := s.handler()
+	if w, _ := post(t, h, askRequest{Question: strings.Repeat("x", maxQuestion+1)}); w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("an oversize question: %d", w.Code)
+	}
+	if w, _ := post(t, h, askRequest{Question: " "}); w.Code != http.StatusBadRequest {
+		t.Errorf("an empty question: %d", w.Code)
+	}
+	s.waiting.Store(maxWaiting + 1)
+	if w, _ := post(t, h, askRequest{Question: "hi"}); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("a full queue: %d", w.Code)
+	}
+	s.waiting.Store(0)
+	if w, resp := post(t, h, askRequest{Question: "read my pdf"}); w.Code != 200 || resp.Status != "unsupported" {
+		t.Errorf("a refusal: %d %+v", w.Code, resp)
+	}
+}
+
+// A visitor's pasted columns: the model's wrong column comes back from
+// schema mode with the real ones, and the corrected pipeline is checked
+// against the columns (no rows, so not run, and no playground link).
+func TestAskVisitorColumns(t *testing.T) {
+	s, logPath := testServer(t,
+		"```bash\nssql from data.csv | ssql group-by department -count n\n```",
+		"```bash\nssql from data.csv | ssql group-by dept -count n\n```")
+	w, resp := post(t, s.handler(), askRequest{Question: "count per department", Header: "name,dept,salary"})
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "your-columns" || resp.Playground != "" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if !strings.Contains(resp.Pipeline, "group-by dept ") {
+		t.Errorf("pipeline %q", resp.Pipeline)
+	}
+	log, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(log), `"pasted_cols":3`) || strings.Contains(string(log), "salary") {
+		t.Errorf("the log must count the pasted columns, not keep them: %s", log)
+	}
+	// With rows, it runs on them.
+	s2, _ := testServer(t, "```bash\nssql from data.csv | ssql where -if salary gt 10 | ssql count\n```")
+	_, resp = post(t, s2.handler(), askRequest{Question: "how many earn over 10?", Header: "name,salary\nann,5\nbob,20\n"})
+	if resp.RanOn != "your-rows" || strings.TrimSpace(resp.Output) != "1" {
+		t.Errorf("%+v", resp)
+	}
+}
+
+func TestParseVisitor(t *testing.T) {
+	ok := map[string][]string{
+		"a,b,c":          {"a", "b", "c"},
+		"a\tb":           {"a", "b"},
+		"a\nb\n c \n":    {"a", "b", "c"},
+		"x,y\n1,2\n3,4":  {"x", "y"},
+		" a , b ":        {"a", "b"},
+		"\"q,1\",b\n1,2": {"q,1", "b"},
+	}
+	for in, want := range ok {
+		recs, err := parseVisitor(in)
+		if err != nil || strings.Join(recs[0], "|") != strings.Join(want, "|") {
+			t.Errorf("%q: %v %v", in, recs, err)
+		}
+	}
+	for in, want := range map[string]string{
+		"":                          "nothing",
+		"a,a":                       "twice",
+		"a,,b":                      "no name",
+		"a,b\n1":                    "row 1",
+		strings.Repeat("x", 21<<10): "KB",
+		"a,b\n" + strings.Repeat("1,2\n", maxRows+1): "rows",
+	} {
+		if _, err := parseVisitor(in); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%.20q: want %q, got %v", in, want, err)
+		}
+	}
+}

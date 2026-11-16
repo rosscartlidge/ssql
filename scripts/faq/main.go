@@ -12,6 +12,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,14 +33,29 @@ func main() {
 	ssqlBin := flag.String("ssql", "", "the ssql binary (default: the one on PATH)")
 	verbose := flag.Bool("v", false, "show each case and retry")
 	goldens := flag.Bool("goldens", false, "with -eval: run and print every golden, with no model")
+	serve := flag.Bool("serve", false, "serve the FAQ page to the local network and the tailnet")
+	listen := flag.String("listen", ":8484", "with -serve: the address (tailscale:PORT binds the tailnet address only)")
+	jail := flag.String("jail", "auto", "run pipelines in the bubblewrap jail: on, off, or auto (on when available; -serve requires it)")
+	logFile := flag.String("log", defaultLog(), "with -serve: where questions are kept, without addresses ('' keeps nothing)")
 	flag.Parse()
 
 	repo, err := repoRoot()
 	if err != nil {
 		fail(err)
 	}
+	jailed, err := useJail(*jail, *serve)
+	if err != nil {
+		fail(err)
+	}
 	bin := *ssqlBin
-	if bin == "" {
+	switch {
+	case bin == "" && jailed:
+		// The jail runs the slim build (DFC151: no net/http, no serve, no
+		// URL sources), built from this checkout so it answers for it.
+		if bin, err = buildSlim(repo); err != nil {
+			fail(err)
+		}
+	case bin == "":
 		if bin, err = exec.LookPath("ssql"); err != nil {
 			fail(fmt.Errorf("no ssql on PATH; build one or pass -ssql"))
 		}
@@ -47,7 +63,7 @@ func main() {
 	if bin, err = filepath.Abs(bin); err != nil {
 		fail(err)
 	}
-	box := sandbox{ssql: bin, dataDir: filepath.Join(repo, "cmd", "ssql-playground", "data"), timeout: 20 * time.Second}
+	box := sandbox{ssql: bin, dataDir: filepath.Join(repo, "cmd", "ssql-playground", "data"), timeout: 20 * time.Second, jail: jailed}
 	f, err := newFAQ(repo, box, *retries, *docsK, *verbose)
 	if err != nil {
 		fail(err)
@@ -58,8 +74,24 @@ func main() {
 	}
 
 	switch {
+	case *serve:
+		addr, err := listenAddr(*listen)
+		if err != nil {
+			fail(err)
+		}
+		if *logFile != "" {
+			if err := os.MkdirAll(filepath.Dir(*logFile), 0o700); err != nil {
+				fail(err)
+			}
+		}
+		if err := llms[0].warm(); err != nil {
+			fail(fmt.Errorf("loading %s: %w", llms[0].model, err))
+		}
+		s := newServer(f, llms[0], *logFile)
+		fmt.Fprintf(os.Stderr, "faq: %s on http://%s (LAN and tailnet only; jail on, ssql %s; log %s)\n", llms[0].model, addr, bin, orNone(*logFile))
+		fail((&http.Server{Addr: addr, Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
 	case *ask != "":
-		a := f.ask(llms[0], *ask)
+		a := f.ask(llms[0], *ask, nil)
 		printAnswer(a)
 	case *evalFile != "":
 		cases, err := loadCases(*evalFile)
@@ -119,7 +151,7 @@ func runEval(f *faq, llms []ollama, cases []evalCase, verbose bool) {
 		t := &tally{byKind: map[string][2]int{}}
 		results[llm.model] = t
 		for _, c := range cases {
-			a := f.ask(llm, c.Question)
+			a := f.ask(llm, c.Question, nil)
 			ok, why := grade(f, c, a)
 			k := t.byKind[c.Kind]
 			k[1]++
@@ -170,6 +202,44 @@ func pct(d []time.Duration, p float64) time.Duration {
 		return 0
 	}
 	return d[min(len(d)-1, int(p*float64(len(d))))]
+}
+
+// useJail decides from -jail; the service never runs without the jail.
+func useJail(mode string, serve bool) (bool, error) {
+	missing := jailAvailable()
+	switch mode {
+	case "on":
+		if missing != "" {
+			return false, fmt.Errorf("-jail on: %s is not installed", missing)
+		}
+		return true, nil
+	case "off":
+		if serve {
+			return false, fmt.Errorf("-serve runs pipelines only in the jail; -jail off is for the CLI")
+		}
+		return false, nil
+	case "auto":
+		if missing != "" && serve {
+			return false, fmt.Errorf("-serve needs the jail, and %s is not installed", missing)
+		}
+		return missing == "", nil
+	}
+	return false, fmt.Errorf("-jail %q: want on, off or auto", mode)
+}
+
+// buildSlim builds the checkout's slim ssql into the user cache.
+func buildSlim(repo string) (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, "ssql-faq", "ssql")
+	cmd := exec.Command("go", "build", "-tags", "slim", "-ldflags", "-s -w", "-o", out, "./cmd/ssql")
+	cmd.Dir, cmd.Stderr = repo, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("building the slim ssql: %w", err)
+	}
+	return out, nil
 }
 
 func repoRoot() (string, error) {
