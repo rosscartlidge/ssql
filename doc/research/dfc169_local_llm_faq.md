@@ -2,7 +2,7 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-16
+Last modified: 2026-11-17
 
 [Back to Index](./README.md)
 
@@ -526,7 +526,9 @@ were in the FAQ, and each is now fixed:
   sample files, so an example over `employees.csv` runs and gets its
   playground link. `ran_on` says which file the pipeline read.
 - **There were no follow-ups.** The page now follows the last answer until
-  "New question", and each answer has "Follow up on this answer". The
+  "New session" (a button beside Ask, which also clears the answers; it
+  was a small "New question" link until Ross found it too easy to miss),
+  and each answer has "Follow up on this answer". The
   service gives the model that one earlier exchange as turns. Retrieval
   sees both questions, so "how does it do the conversion?" finds what the
   Go question found.

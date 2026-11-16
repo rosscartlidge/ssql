@@ -33,6 +33,9 @@ details p { margin: 6px 0; font-size: 0.9rem; }
 button { font: inherit; border: 0; border-radius: 8px; padding: 9px 18px; cursor: pointer;
   background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 button:disabled { opacity: 0.55; cursor: wait; }
+button.secondary { background: transparent; color: var(--accent); border: 1.5px solid var(--accent); padding: 7.5px 16px; }
+button.secondary:disabled { opacity: 0.4; cursor: default; }
+button.secondary:not(:disabled):hover { background: var(--accent); color: var(--accent-ink); }
 .examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
 .examples button { background: transparent; color: var(--ink); border: 1px solid var(--line);
   font-weight: 400; font-size: 0.88rem; padding: 5px 10px; }
@@ -68,7 +71,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 
   <form id="ask">
     <div class="chip" id="follow">Following up on <strong id="followq"></strong>
-      <button type="button" class="link" id="newq">New question</button></div>
+      <span>· “New session” starts over</span></div>
     <textarea id="q" placeholder="e.g. what is the average salary in each department?" maxlength="2048" required></textarea>
     <details id="own">
       <summary>About your own data? Paste its columns <span id="inuse"></span></summary>
@@ -78,6 +81,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
     </details>
     <div class="row">
       <button type="submit" id="go">Ask</button>
+      <button type="button" class="secondary" id="newsession" disabled title="Forget this conversation and its answers">New session</button>
       <span id="status"></span>
     </div>
     <div class="examples" id="examples"></div>
@@ -100,7 +104,7 @@ const exBox = document.getElementById('examples');
 for (const e of examples) {
   const b = document.createElement('button');
   b.type = 'button'; b.textContent = e;
-  b.onclick = () => { setFollow(null); document.getElementById('q').value = e; ask(); };
+  b.onclick = () => { setFollow(null); document.getElementById('q').value = e; ask(); };  // an example starts its own conversation
   exBox.appendChild(b);
 }
 
@@ -141,15 +145,27 @@ function docLink(ref) {
 }
 
 // The conversation: a question follows the last answer until "New
-// question". The server gets that one earlier exchange, nothing more.
+// session", which also clears the answers shown (the pasted columns stay;
+// they have their own clear). The server gets that one earlier exchange,
+// nothing more.
 let last = null;
 function setFollow(ex) {
   last = ex;
   const chip = document.getElementById('follow');
   chip.classList.toggle('on', !!ex);
   document.getElementById('followq').textContent = ex ? '“' + ex.question + '”' : '';
+  updateSession();
 }
-document.getElementById('newq').onclick = () => { setFollow(null); document.getElementById('q').focus(); };
+function updateSession() {
+  document.getElementById('newsession').disabled = !last && !document.getElementById('answers').children.length;
+}
+document.getElementById('newsession').onclick = () => {
+  document.getElementById('answers').replaceChildren();
+  document.getElementById('q').value = '';
+  document.getElementById('status').textContent = '';
+  setFollow(null);
+  document.getElementById('q').focus();
+};
 
 // The pasted columns: say when they are in use, and catch a question
 // typed into the wrong box (the server refuses it too).
@@ -195,6 +211,7 @@ function show(question, r) {
   const ex = { question, reply: r.reply || '' };
   div.querySelector('.actions button').onclick = () => { setFollow(ex); document.getElementById('q').focus(); };
   document.getElementById('answers').prepend(div);
+  updateSession();
 }
 
 async function ask() {
