@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -407,7 +408,12 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			for _, spec := range aggSpecs {
 				fieldsToValidate = append(fieldsToValidate, aggInputFields(spec)...) // FIELD and -arg-*'s BY; count has none
 			}
-			if err := validateFieldsSchema(inputSchema, fieldsToValidate, "group-by"); err != nil {
+			if err := validateFieldsSchemaHint(inputSchema, fieldsToValidate, "group-by", func(missing []string) string {
+				if h := countTookAFieldHint(inputSchema, aggSpecs, missing); h != "" {
+					return h
+				}
+				return dashlessFlagHint("group-by", missing)
+			}); err != nil {
 				return err
 			}
 			if err := validateAggSpecs(aggSpecs); err != nil {
@@ -1070,4 +1076,22 @@ func groupByOutputSchema(in *lib.Schema, keys []string, specs groupBySpecs, expr
 		}
 	}
 	return out, exprNames
+}
+
+// countTookAFieldHint: `-count order_id count` (SQL's COUNT(col) habit)
+// leaves "count" a stray group-by field, because -count takes only the
+// result's name and took order_id. The dashless guess ("count looks like
+// the -count flag; flags need the dash") sent the FAQ's model the wrong
+// way twice (DFC169 §11.3, 2026-11-21). When a -count result names an
+// input column and "count" is missing, say what -count took.
+func countTookAFieldHint(schema *lib.Schema, aggs []aggSpec, missing []string) string {
+	if schema == nil || !slices.Contains(missing, "count") {
+		return ""
+	}
+	for _, spec := range aggs {
+		if spec.function == "count" && schema.HasFieldOrPath(spec.result) {
+			return fmt.Sprintf(" — -count takes only the new column's name (it counts rows), so it took %q and left \"count\" as a group-by field; did you mean -count count?", spec.result)
+		}
+	}
+	return ""
 }

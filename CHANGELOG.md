@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`group-by -count order_id count` got the wrong hint.** SQL's
+  `COUNT(col)` habit makes `-count` take `order_id` as the new column's
+  name, which leaves `count` as an unknown group-by field. The error then
+  said "flags need the dash". It now says what `-count` took and suggests
+  `-count count`, both when the pipeline runs and in schema mode. Found by
+  the DFC169 FAQ, whose model followed the old hint the wrong way twice.
 - **`join -as RIGHT NEW` with a right field the right side lacks copied
   nothing, exit 0**, in every lane; the stage after it refused NEW, far
   from the mistake. It now fails with the right side's fields and the

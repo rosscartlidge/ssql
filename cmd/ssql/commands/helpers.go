@@ -233,6 +233,15 @@ func validateWriteTargets(schema *lib.Schema, fields []string, command, hint str
 // validateFieldsSchema checks that all given field names exist in the schema.
 // Returns an error listing missing fields and available fields, or nil if all exist.
 func validateFieldsSchema(schema *lib.Schema, fields []string, command string) error {
+	return validateFieldsSchemaHint(schema, fields, command, func(missing []string) string {
+		return dashlessFlagHint(command, missing)
+	})
+}
+
+// validateFieldsSchemaHint is validateFieldsSchema with the command's own
+// hint for the missing names: group-by knows what its flags took, which
+// the generic dashless guess cannot.
+func validateFieldsSchemaHint(schema *lib.Schema, fields []string, command string, hint func(missing []string) string) error {
 	if schema == nil {
 		return nil // no schema to validate against
 	}
@@ -244,7 +253,7 @@ func validateFieldsSchema(schema *lib.Schema, fields []string, command string) e
 	}
 	if len(missing) > 0 {
 		missing = dedupeStrings(missing)
-		return fmt.Errorf("%w%s", ssql.UnknownFieldsError(command, missing, schema.Fields), dashlessFlagHint(command, missing))
+		return fmt.Errorf("%w%s", ssql.UnknownFieldsError(command, missing, schema.Fields), hint(missing))
 	}
 	return nil
 }
