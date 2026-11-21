@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.148.1] - 2026-11-21
+
 ### Fixed
 
 - **`group-by -count order_id count` got the wrong hint.** SQL's
