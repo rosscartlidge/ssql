@@ -67,7 +67,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 <body>
 <main>
   <h1>Ask ssql</h1>
-  <p class="sub">Ask how to do something with ssql. A local model answers, and every pipeline it gives is run against the playground's sample data (employees, orders, customers, flights, cities) before you see it.</p>
+  <p class="sub">Ask how to do something with ssql. A local model answers, and every pipeline it gives is run against sample data (the playground's employees, orders, customers, flights and cities, and a signal to analyse) before you see it.</p>
 
   <form id="ask">
     <div class="chip" id="follow">Following up on <strong id="followq"></strong>
@@ -89,7 +89,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 
   <div id="answers"></div>
 
-  <footer>Runs on a laptop on this network. Questions are kept, without your address, to improve the answers; pasted data is not kept.
+  <footer>Runs on a laptop on this network. Questions and their answers are kept, without your address, to improve the FAQ; pasted data is not kept.
     A model can still be wrong: a <em>verified</em> answer ran, but check that it answers what you asked.</footer>
 </main>
 <script>

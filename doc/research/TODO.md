@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-16
+Last modified: 2026-11-21
 
 [Back to Index](./README.md)
 
@@ -54,6 +54,20 @@ TestSchemaOpsShadowSchemaMode) hold what is fixed.
   refuses Funnel traffic. Going public (Funnel or a Cloudflare tunnel)
   needs per-address rate limits, a daily cost ceiling, a decision on abuse,
   and the offline fallback of §7 (BM25 search in the browser).
+- [ ] `scripts/docsearch.sh` splits a file at a `#` comment inside a fenced
+  code block as if it were a heading, so the prose after a bash block is
+  filed under the comment ("The sensor reading in force when each alarm
+  fired…" held the codelab's window functions until they got a heading of
+  their own, 2026-11-21, DFC169 §11.3). The FAQ's retrieval and every
+  docsearch user see the wrong sections. Skip fenced blocks when chunking.
+- [ ] `group-by -count order_id count` (SQL's `COUNT(col)` habit) fails
+  with `"count" looks like the -count flag; flags need the dash`, the wrong
+  hint: `-count` takes only a NAME and took `order_id`, leaving `count` a
+  stray grouping field. When a stray field equals an aggregate flag's
+  name and the flag before it consumed a field name, say "`-count` takes
+  only the result's name (it counts rows); did you mean `-count count`?".
+  The FAQ's model made two corrections in the wrong direction on it
+  (2026-11-21, DFC169 §11.3).
 
 ## Bugs found 2026-11-03 (DFC162 §1)
 

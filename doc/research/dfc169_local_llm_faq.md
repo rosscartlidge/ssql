@@ -2,7 +2,7 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-17
+Last modified: 2026-11-21
 
 [Back to Index](./README.md)
 
@@ -580,6 +580,69 @@ were in the FAQ, and each is now fixed:
   version without the path was 33/37, so the size of the addition is not
   the cause. Grading presentation (which columns, and how a month is
   written) separately from rows is the open question for phase 3.
+- **Reading the log on 2026-11-21 turned up four things.**
+  - **The log did not keep the answer**, so the prose answers (a GPU
+    question about an RTX 5090 among them) could not be checked. The log
+    line now has `reply`, clipped to 8 KB. That is the model's text, not
+    the visitor's; the page's notice says answers are kept too.
+  - **"Can you give me a analytic function example" failed three times.**
+    It built the codelab's Fibonacci fold with `group-by` instead of
+    `window`. No user doc said "analytic". The prompt's window example
+    (`doc/ai-cli-generation.md` §5) and the codelab now name it, and the
+    codelab's window examples have a heading of their own: they sat under
+    "Dates". The docsearch chunker also splits a file at a `#` comment
+    inside a code block, so that part of the codelab was filed under a
+    bash comment. With the heading, the window section is the first user
+    doc retrieved for the question. The eval has the question as
+    `doc-analytic-function`.
+  - **Every signal answer was an illustration.** The samples had no signal
+    file, so each fft or spectrogram answer named one (`sensor_data.csv`,
+    `chirp.csv`). Run by hand against a stand-in file, both answers used
+    real flags, but nothing had checked them. The FAQ's samples now add the
+    codelab's `signal.csv` (`samples.go`, built into
+    `~/.cache/ssql-faq/samples`). An answer that reads it gets no
+    playground link, because the playground lacks the file. The eval has
+    `signal-top-frequencies`.
+    Asked live, the first signal answer then ran fft at `-rate 1000`. The
+    file is sampled at 100 Hz, so every frequency came out ten times too
+    high. The run could not catch that. The prompt's file list now
+    carries a note for each sample (`sampleNotes`). signal.csv's says
+    100 Hz, and a test checks the note against the file's own `t` steps.
+    Eval 36/39 after the notes (37/39 before them). orders-per-month
+    flipped once more.
+- **A review turn, and grading rows apart from shape (2026-11-21).** All
+  three misses at 36/39 had the right rows in the wrong shape: a column
+  the question did not ask for (orders-per-customer, quickest-from-syd),
+  or a month written `2024-11-01T00:00:00Z` where it asked for `2024-01`.
+  - **The review turn (`reviewed`, `answer.go`).** After a pipeline runs,
+    the model is shown its first output lines beside the question once
+    more. It replies OK, or gives a corrected answer. The correction
+    replaces the first answer only when it passes every check. A failing
+    correction, a refusal or a setup block keeps the first. `-review=false`
+    turns it off, and the log marks `revised`.
+  - **The eval grades rows apart from shape.** It reports "rows right",
+    which counts a pipeline whose rows hold the golden's values with
+    columns to spare (`rowsHold`). A value written another way is not a
+    right row.
+  - **Same build, back to back:**
+
+    | | Pass | rows right | revised | p50 | p95 |
+    |---|---|---|---|---|---|
+    | without the review | 36/39 | 38/39 | 0 | 1.9 s | 5.3 s |
+    | with the review | 38/39 | 39/39 | 2 | 2.6 s | 7.2 s |
+
+    The review fixed orders-per-month and orders-per-customer, and broke
+    nothing that passed. quickest-from-syd's review said OK with the extra
+    `src` column still there.
+  - **Asked live, a shape question failed before the review could run.**
+    The model wrote `group-by customer_id name -count order_id count`,
+    SQL's `COUNT(col)`. ssql's error said `"count" looks like the -count
+    flag; flags need the dash`, which is wrong here: `-count` takes only a
+    name, and it had taken `order_id`. Both corrections followed the
+    wrong hint. Filed in TODO as an ssql error-message fix.
+  - **The first question after hours idle takes ~16 s.** The model is kept
+    loaded for only 30 minutes after a question, so it loads again. Left
+    as it is, so it doesn't hold the laptop's GPU memory around the clock.
 
 Replayed live, the sentence is refused with a 400. The Go question,
 asked with and without pasted columns, is answered and verified. The

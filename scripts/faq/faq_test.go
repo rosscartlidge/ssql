@@ -140,14 +140,14 @@ func TestExtractPipeline(t *testing.T) {
 func TestGradeRefusal(t *testing.T) {
 	c := evalCase{Kind: "refuse", Forbid: []string{"from pdf"}}
 	denies := answer{Reply: "UNSUPPORTED: ssql has no `from pdf`; convert the PDF to CSV first.", Unsupported: true}
-	if ok, why := grade(nil, c, denies); !ok {
+	if ok, why := gradeAnswer(nil, c, denies); !ok {
 		t.Errorf("a refusal naming the missing command in prose failed: %s", why)
 	}
 	invents := answer{Reply: "UNSUPPORTED: maybe\n```bash\nssql from pdf report.pdf\n```", Unsupported: true}
-	if ok, _ := grade(nil, c, invents); ok {
+	if ok, _ := gradeAnswer(nil, c, invents); ok {
 		t.Errorf("a pipeline using the invented command passed")
 	}
-	if ok, _ := grade(nil, c, answer{Reply: "ssql from csv x.csv"}); ok {
+	if ok, _ := gradeAnswer(nil, c, answer{Reply: "ssql from csv x.csv"}); ok {
 		t.Errorf("an answer without UNSUPPORTED passed")
 	}
 }
@@ -161,6 +161,27 @@ func TestUnsupportedDetection(t *testing.T) {
 	for _, r := range []string{"ssql cannot be unsupported", "```bash\nssql from x\n```"} {
 		if unsupported.MatchString(r) {
 			t.Errorf("%q read as a refusal", r)
+		}
+	}
+}
+
+func TestRowsHold(t *testing.T) {
+	row := func(vals ...string) string { return strings.Join(vals, "\x1f") }
+	want := []string{row("4", "alice"), row("7", "bob")}
+	for _, c := range []struct {
+		got     []string
+		ordered bool
+		holds   bool
+	}{
+		{[]string{row("1", "4", "alice"), row("2", "7", "bob")}, false, true}, // an extra id column
+		{[]string{row("2", "7", "bob"), row("1", "4", "alice")}, false, true}, // any order
+		{[]string{row("2", "7", "bob"), row("1", "4", "alice")}, true, false}, // the order is the answer
+		{[]string{row("4", "alice")}, false, false},                           // a row missing
+		{[]string{row("4", "alice"), row("8", "bob")}, false, false},          // a wrong value
+		{[]string{row("2024-11-01T00:00:00Z", "3")}, false, false},            // another format is not the value
+	} {
+		if got := rowsHold(c.got, want, c.ordered); got != c.holds {
+			t.Errorf("%q ordered=%v: %v, want %v", c.got, c.ordered, got, c.holds)
 		}
 	}
 }

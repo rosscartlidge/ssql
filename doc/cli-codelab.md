@@ -845,7 +845,10 @@ reading current at each one:
 ssql from alarms.csv | ssql join sensor.csv -asof ts | ssql to table
 ```
 
-Window functions rank, lag, and run totals *without collapsing rows*:
+### Window (analytic) functions
+
+Window functions (SQL also calls them analytic functions) rank, lag, and
+run totals *without collapsing rows*:
 
 ```bash
 # Salary rank within each department

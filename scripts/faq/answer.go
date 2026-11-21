@@ -30,6 +30,7 @@ type faq struct {
 	system  string // the CLI prompt plus the sample data's schemas
 	latest  string // the latest release, X.Y.Z (the eval's {{latest}})
 	keys    string // the shell key bindings, as ssql -help-keybinding lists them
+	review  bool   // a pipeline that ran is shown its output and the question once more
 	verbose bool
 }
 
@@ -42,6 +43,7 @@ type answer struct {
 	RanOn        string        // "sample", "your-columns" or "your-rows" once verified
 	Illustrative bool          // it names a file the sample data lacks: shown, not run
 	Setup        bool          // shell setup (eval "$(ssql -FLAG)", install), not a pipeline
+	Revised      bool          // the review turn replaced the first pipeline that ran
 	Output       string        // its stdout, when it ran
 	Failure      string        // the last error, when it never ran
 	Retries      int           // corrections used
@@ -131,7 +133,7 @@ What v%s changed (its CHANGELOG section; for earlier releases, see CHANGELOG.md)
 		for _, ln := range strings.Split(strings.TrimSpace(r.stdout), "\n")[1:] {
 			cols = append(cols, strings.Replace(ln, ",", " (", 1)+")")
 		}
-		fmt.Fprintf(&sb, "- `%s`: %s\n", name, strings.Join(cols, ", "))
+		fmt.Fprintf(&sb, "- `%s`: %s%s\n", name, strings.Join(cols, ", "), sampleNotes[name])
 	}
 	return &faq{repo: repo, box: box, retries: retries, docsK: docsK, system: sb.String(), verbose: verbose, latest: latest, keys: keys}, nil
 }
@@ -296,6 +298,9 @@ func (f *faq) askAfter(llm ollama, question string, v *visitor, prev *exchange) 
 			problem = f.check(&a, box, v)
 		}
 		if problem == "" {
+			if f.review && a.Ran && !a.Setup {
+				return f.reviewed(llm, append(msgs, message{Role: "assistant", Content: reply}), question, a, box, v)
+			}
 			return a
 		}
 		if strings.Contains(problem, "no such file or directory") {
@@ -463,4 +468,39 @@ func readmeSection(path, heading string) (string, error) {
 		rest = rest[:i]
 	}
 	return strings.TrimSpace(rest), nil
+}
+
+// reviewOK is a review reply that keeps the answer.
+var reviewOK = regexp.MustCompile(`(?i)^[\s*_"'` + "`" + `]*ok\b`)
+
+// reviewed shows the model what its pipeline printed, beside the question,
+// once: right rows in the wrong shape was every eval miss on 2026-11-21 (a
+// column not asked for, a month written 2024-11-01T00:00:00Z where the
+// question said 2024-01). A revision replaces the answer only when it
+// passes every check the first one did; anything else keeps the first.
+func (f *faq) reviewed(llm ollama, msgs []message, question string, a answer, box sandbox, v *visitor) answer {
+	out := strings.Split(strings.TrimSpace(a.Output), "\n")
+	if len(out) > 12 {
+		out = append(out[:12], "…")
+	}
+	msgs = append(msgs, message{Role: "user", Content: fmt.Sprintf("Your pipeline ran. Its first lines of output:\n\n```\n%s\n```\n\n"+
+		"The question was: %s\n\nCheck the output against the question: the columns it asks to see and no others, "+
+		"and values written the way it asks. If the output already answers it, reply with exactly OK. "+
+		"If not, give your whole answer again, corrected, in the same format. "+
+		"The visitor never saw this message: do not mention it.", strings.Join(out, "\n"), question)})
+	reply, st, err := llm.chat(msgs)
+	a.Wall += st.Wall
+	a.GenTokens += st.GenTokens
+	p := extractPipeline(reply)
+	if err != nil || reviewOK.MatchString(reply) || p == "" || runnable(p) == runnable(a.Pipeline) ||
+		unsupported.MatchString(reply) || setupLines(reply) != nil || f.checkKeys(reply) != "" {
+		return a
+	}
+	b := a
+	b.Reply, b.Pipeline, b.Ran, b.Checked, b.Output, b.RanOn = reply, p, false, false, "", ""
+	if f.check(&b, box, v) != "" || !b.Ran {
+		return a
+	}
+	b.Revised = true
+	return b
 }

@@ -76,6 +76,8 @@ type logLine struct {
 	Pipeline    string  `json:"pipeline,omitempty"`
 	Status      string  `json:"status"`
 	Failure     string  `json:"failure,omitempty"`
+	Reply       string  `json:"reply,omitempty"`   // the model's answer, so prose can be reviewed (2026-11-21)
+	Revised     bool    `json:"revised,omitempty"` // the review turn changed the pipeline
 	Corrections int     `json:"corrections"`
 	Seconds     float64 `json:"seconds"`
 }
@@ -204,7 +206,7 @@ func respond(a answer, v *visitor, took time.Duration) askResponse {
 	}
 	// The playground holds the same sample files; a visitor's data.csv
 	// is not there.
-	if resp.Verified && !a.Setup && (v == nil || !v.readBy(a.Pipeline)) {
+	if resp.Verified && !a.Setup && !readsFAQOnly(a.Pipeline) && (v == nil || !v.readBy(a.Pipeline)) {
 		resp.Playground = playground + "#p=" + base64.RawURLEncoding.EncodeToString([]byte(runnable(a.Pipeline)))
 	}
 	return resp
@@ -215,7 +217,7 @@ func (s *server) record(req askRequest, v *visitor, a answer, resp askResponse) 
 		return
 	}
 	l := logLine{Time: time.Now().UTC().Format(time.RFC3339), Question: req.Question, Model: s.llm.model,
-		Pipeline: a.Pipeline, Status: resp.Status, Failure: firstLine(resp.Failure), Corrections: a.Retries, Seconds: resp.Seconds}
+		Pipeline: a.Pipeline, Status: resp.Status, Failure: firstLine(resp.Failure), Reply: clip(a.Reply, 8<<10), Revised: a.Revised, Corrections: a.Retries, Seconds: resp.Seconds}
 	if v != nil {
 		l.PastedCols, l.PastedRows = len(v.cols), v.rows
 	}

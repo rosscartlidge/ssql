@@ -6,7 +6,8 @@
 //	go -C scripts/faq run . -eval cases.json -models gemma4:26b,gemma4:31b
 //
 // The ssql binary is the one on PATH unless -ssql names another; the sample
-// data is the playground's (cmd/ssql-playground/data).
+// data is the playground's (cmd/ssql-playground/data) plus the codelab's
+// signal.csv (samples.go).
 package main
 
 import (
@@ -32,6 +33,7 @@ func main() {
 	docsK := flag.Int("docs", 4, "documentation sections given with a question")
 	ssqlBin := flag.String("ssql", "", "the ssql binary (default: the one on PATH)")
 	verbose := flag.Bool("v", false, "show each case and retry")
+	review := flag.Bool("review", true, "show the model a pipeline's output and the question once more, to fix its shape")
 	goldens := flag.Bool("goldens", false, "with -eval: run and print every golden, with no model")
 	serve := flag.Bool("serve", false, "serve the FAQ page to the local network and the tailnet")
 	listen := flag.String("listen", ":8484", "with -serve: the address (tailscale:PORT binds the tailnet address only)")
@@ -63,11 +65,16 @@ func main() {
 	if bin, err = filepath.Abs(bin); err != nil {
 		fail(err)
 	}
-	box := sandbox{ssql: bin, dataDir: filepath.Join(repo, "cmd", "ssql-playground", "data"), timeout: 20 * time.Second, jail: jailed}
+	samples, err := buildSamples(repo)
+	if err != nil {
+		fail(err)
+	}
+	box := sandbox{ssql: bin, dataDir: samples, timeout: 20 * time.Second, jail: jailed}
 	f, err := newFAQ(repo, box, *retries, *docsK, *verbose)
 	if err != nil {
 		fail(err)
 	}
+	f.review = *review
 	var llms []ollama
 	for _, m := range strings.Split(*models, ",") {
 		llms = append(llms, ollama{host: *host, model: strings.TrimSpace(m), ctx: *ctxSize})
@@ -145,10 +152,10 @@ func printAnswer(a answer) {
 
 func runEval(f *faq, llms []ollama, cases []evalCase, verbose bool) {
 	type tally struct {
-		pass, total, retries int
-		byKind               map[string][2]int
-		walls                []time.Duration
-		fails                []string
+		pass, rows, total, retries, revised int
+		byKind                              map[string][2]int
+		walls                               []time.Duration
+		fails                               []string
 	}
 	results := map[string]*tally{}
 	for _, llm := range llms {
@@ -156,7 +163,13 @@ func runEval(f *faq, llms []ollama, cases []evalCase, verbose bool) {
 		results[llm.model] = t
 		for _, c := range cases {
 			a := f.ask(llm, c.Question, nil)
-			ok, why := grade(f, c, a)
+			ok, rows, why := grade(f, c, a)
+			if rows {
+				t.rows++
+			}
+			if a.Revised {
+				t.revised++
+			}
 			k := t.byKind[c.Kind]
 			k[1]++
 			if ok {
@@ -171,21 +184,29 @@ func runEval(f *faq, llms []ollama, cases []evalCase, verbose bool) {
 			t.walls = append(t.walls, a.Wall)
 			if verbose {
 				mark := "PASS"
+				if a.Revised {
+					mark = "PASS (revised)"
+				}
 				if !ok {
 					mark = "FAIL " + why + "\n    pipeline: " + orNone(a.Pipeline)
+					if a.Revised {
+						mark = "FAIL (revised) " + why + "\n    pipeline: " + orNone(a.Pipeline)
+					}
 				}
 				fmt.Fprintf(os.Stderr, "%s %-28s %5.1fs r%d %s\n", llm.model, c.ID, a.Wall.Seconds(), a.Retries, mark)
 			}
 		}
 	}
-	fmt.Printf("\n| Model | Pass | pipeline | doc | refuse | corrections | p50 | p95 |\n|---|---|---|---|---|---|---|---|\n")
+	// Pass is the answer as asked; rows right counts a pipeline whose rows
+	// hold the golden's values with columns to spare (the shape missed).
+	fmt.Printf("\n| Model | Pass | rows right | pipeline | doc | refuse | corrections | revised | p50 | p95 |\n|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, llm := range llms {
 		t := results[llm.model]
 		slices.Sort(t.walls)
 		kind := func(k string) string { v := t.byKind[k]; return fmt.Sprintf("%d/%d", v[0], v[1]) }
-		fmt.Printf("| %s | %d/%d (%.0f%%) | %s | %s | %s | %d | %.1fs | %.1fs |\n", llm.model, t.pass, t.total,
-			100*float64(t.pass)/float64(max(t.total, 1)), kind("pipeline"), kind("doc"), kind("refuse"),
-			t.retries, pct(t.walls, 0.5).Seconds(), pct(t.walls, 0.95).Seconds())
+		fmt.Printf("| %s | %d/%d (%.0f%%) | %d/%d | %s | %s | %s | %d | %d | %.1fs | %.1fs |\n", llm.model, t.pass, t.total,
+			100*float64(t.pass)/float64(max(t.total, 1)), t.rows, t.total, kind("pipeline"), kind("doc"), kind("refuse"),
+			t.retries, t.revised, pct(t.walls, 0.5).Seconds(), pct(t.walls, 0.95).Seconds())
 	}
 	for _, llm := range llms {
 		if fs := results[llm.model].fails; len(fs) > 0 {

@@ -85,7 +85,24 @@ func checkGoldens(box sandbox, cases []evalCase) error {
 	return nil
 }
 
-func grade(f *faq, c evalCase, a answer) (bool, string) {
+// grade is pass, rows right (pass, or a pipeline whose rows hold the
+// golden's values with extra columns), and why it failed.
+func grade(f *faq, c evalCase, a answer) (pass, rows bool, why string) {
+	pass, why = gradeAnswer(f, c, a)
+	if pass {
+		return true, true, ""
+	}
+	if c.Kind == "pipeline" && a.Ran && !a.Illustrative && !a.Unsupported {
+		got := f.box.run(dataFor(runnable(a.Pipeline)))
+		want := f.box.run(dataFor(c.Golden))
+		if got.err == nil && want.err == nil && rowsHold(canonRows(got.stdout, c.Ordered), canonRows(want.stdout, c.Ordered), c.Ordered) {
+			return false, true, "rows right, shape missed: " + why
+		}
+	}
+	return false, false, why
+}
+
+func gradeAnswer(f *faq, c evalCase, a answer) (bool, string) {
 	reply := strings.ToLower(a.Reply)
 	switch c.Kind {
 	case "refuse":
@@ -186,4 +203,46 @@ func canonValue(v any) string {
 		b, _ := json.Marshal(x)
 		return string(b)
 	}
+}
+
+// rowsHold reports whether got has want's rows, each got row holding its
+// want row's values and possibly more (a column not asked for). Ordered
+// rows pair by position; otherwise each want row takes an unused got row.
+func rowsHold(got, want []string, ordered bool) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	holds := func(g, w string) bool {
+		have := map[string]int{}
+		for _, v := range strings.Split(g, "\x1f") {
+			have[v]++
+		}
+		for _, v := range strings.Split(w, "\x1f") {
+			if have[v] == 0 {
+				return false
+			}
+			have[v]--
+		}
+		return true
+	}
+	used := make([]bool, len(got))
+	for i, w := range want {
+		if ordered {
+			if !holds(got[i], w) {
+				return false
+			}
+			continue
+		}
+		found := false
+		for j, g := range got {
+			if !used[j] && holds(g, w) {
+				used[j], found = true, true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

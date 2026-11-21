@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -352,6 +354,87 @@ func TestAskKeysChecked(t *testing.T) {
 		got := strings.TrimPrefix(f.checkKeys(reply), keysProblem)
 		if got != want {
 			t.Errorf("%q: %q, want %q", reply, got, want)
+		}
+	}
+}
+
+// A signal answer runs on the FAQ's signal.csv, and gets no playground link
+// (the playground lacks the file); the log keeps the answer's text.
+func TestAskSignalSample(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples, err := buildSamples(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, logPath := testServer(t, "The strongest frequencies:\n```bash\nssql from signal.csv | ssql fft -field amplitude -rate 100 | ssql top 3 -field magnitude\n```")
+	s.f.box.dataDir = samples
+	w, resp := post(t, s.handler(), askRequest{Question: "strongest frequencies?"})
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "sample" || resp.Playground != "" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if log, _ := os.ReadFile(logPath); !strings.Contains(string(log), `"reply":"The strongest frequencies`) {
+		t.Errorf("the log must keep the reply: %s", log)
+	}
+}
+
+// The 100 Hz in sampleNotes is the data's own: t steps by 0.01 s.
+func TestSampleNotesMatchTheData(t *testing.T) {
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(repo, "doc", "codelab-data", "signal.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	var prev float64
+	for i, ln := range lines[1:] {
+		tv, err := strconv.ParseFloat(strings.Split(ln, ",")[0], 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i > 0 && math.Abs(tv-prev-0.01) > 1e-9 {
+			t.Fatalf("row %d: t steps by %g, sampleNotes says 0.01", i+1, tv-prev)
+		}
+		prev = tv
+	}
+	if !strings.Contains(sampleNotes["signal.csv"], "100 Hz") {
+		t.Errorf("note: %q", sampleNotes["signal.csv"])
+	}
+}
+
+// The review turn: shown its output beside the question, the model may
+// correct the shape, and the correction replaces the answer only when it
+// runs; OK, or a correction that fails, keeps the first answer.
+func TestAskReview(t *testing.T) {
+	first := "```bash\nssql from employees.csv | ssql group-by dept -count n\n```"
+	fixed := "```bash\nssql from employees.csv | ssql group-by dept -count n | ssql include n\n```"
+	for _, c := range []struct {
+		name, review, want string
+		revised            bool
+	}{
+		{"corrected", fixed, "ssql include n", true},
+		{"ok", "OK", "group-by dept -count n", false},
+		{"broken correction", "```bash\nssql from employees.csv | ssql include nope\n```", "group-by dept -count n", false},
+	} {
+		s, logPath := testServer(t, first, c.review)
+		s.f.review = true
+		w, resp := post(t, s.handler(), askRequest{Question: "only the counts per department, please"})
+		if w.Code != 200 || resp.Status != "verified" || !strings.Contains(resp.Pipeline, c.want) {
+			t.Errorf("%s: %d %+v", c.name, w.Code, resp)
+			continue
+		}
+		review := lastCall[len(lastCall)-1].Content
+		if c.name == "ok" && (!strings.Contains(review, "only the counts per department") || !strings.Contains(review, "dept")) {
+			t.Errorf("the review must show the question and the output: %s", review)
+		}
+		if log, _ := os.ReadFile(logPath); strings.Contains(string(log), `"revised":true`) != c.revised {
+			t.Errorf("%s: log %s", c.name, log)
 		}
 	}
 }

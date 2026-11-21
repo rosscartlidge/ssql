@@ -202,7 +202,7 @@ ssql from logs.csv  | ssql group-by session -first url landing -last url exit -c
 ssql from data.csv  | ssql group-by dept -median salary med -percentile salary 0.9 p90 -stddev salary sd -arg-max name salary top_earner
 ssql from sales.csv | ssql group-by region product -count n -sum revenue total -rollup    # + region_n, region_total, n, total on every row
 ssql from sales.csv | ssql group-by region product -count n -cube                          # rollup plus every combination
-ssql from orders.csv | ssql window -partition customer_id -order order_id -sum total running -row-number seq   # per-row, nothing collapses
+ssql from orders.csv | ssql window -partition customer_id -order order_id -sum total running -row-number seq   # window (analytic) functions: per-row, nothing collapses
 ssql from range 10 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib                              # a fold per row: state, step, result (Fibonacci)
 ssql from sales.csv | ssql pivot -row region -col quarter -val revenue -func sum
 ```
