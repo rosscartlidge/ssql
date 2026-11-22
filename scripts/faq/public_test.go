@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -208,5 +210,43 @@ func TestLogRotates(t *testing.T) {
 	}
 	if cur.Size() >= 2*s.logMax || old.Size() < s.logMax {
 		t.Errorf("current %d bytes, old %d", cur.Size(), old.Size())
+	}
+}
+
+// -log-shared: the public instance's owner reads its log as a member of
+// the ssql-faq group, so the log is 0640 in a 0750 directory even under
+// the unit's UMask=0077, and an existing 0600 log is opened up at start.
+// Without it, both stay the owner's alone.
+func TestLogShared(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+	dir := filepath.Join(t.TempDir(), "state")
+	logPath := filepath.Join(dir, "q.jsonl")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath+".1", []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := shareLog(logPath, true); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := testServer(t, "UNSUPPORTED: no")
+	s.logPath, s.logPerm = logPath, 0o640
+	if w, _ := post(t, s.handler(), askRequest{Question: "read my pdf"}); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	for path, want := range map[string]os.FileMode{dir: 0o750, logPath: 0o640, logPath + ".1": 0o640} {
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want %v", path, fi.Mode().Perm(), err, want)
+		}
+	}
+	if err := shareLog(logPath, false); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{dir: 0o700, logPath: 0o600} {
+		if fi, _ := os.Stat(path); fi.Mode().Perm() != want {
+			t.Errorf("unshared %s: %v, want %v", path, fi.Mode().Perm(), want)
+		}
 	}
 }

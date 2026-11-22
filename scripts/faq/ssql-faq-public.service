@@ -22,7 +22,7 @@ Description=ssql FAQ, public instance (loopback, for Tailscale Funnel)
 WorkingDirectory=%h/app/repo
 ExecStart=%h/app/bin/ssql-faq -serve -public -listen 127.0.0.1:8485 \
     -repo %h/app/repo -ssql %h/app/bin/ssql -docsearch %h/app/bin/docsearch \
-    -models gemma4:26b -per-hour 10 -per-day 200
+    -models gemma4:26b -per-hour 10 -per-day 200 -log-shared
 Environment=PATH=/usr/bin:/bin
 Restart=on-failure
 RestartSec=10

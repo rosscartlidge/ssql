@@ -39,6 +39,7 @@ type server struct {
 	waiting atomic.Int32  // questions queued or running
 	logPath string        // "" keeps nothing
 	logMax  int64         // past this size the log moves to .1 (0: no cap)
+	logPerm os.FileMode   // 0600, or 0640 with -log-shared
 	logMu   sync.Mutex
 	tmp     string   // where visitors' data.csv directories go
 	page    []byte   // the page as this mode says it
@@ -88,7 +89,7 @@ type logLine struct {
 }
 
 func newServer(f *faq, llm ollama, logPath string) *server {
-	return &server{f: f, llm: llm, run: make(chan struct{}, 1), logPath: logPath, logMax: 64 << 20, tmp: os.TempDir(), page: pageHTML}
+	return &server{f: f, llm: llm, run: make(chan struct{}, 1), logPath: logPath, logMax: 64 << 20, logPerm: 0o600, tmp: os.TempDir(), page: pageHTML}
 }
 
 // makePublic turns s into the public instance: the public footer and the
@@ -267,12 +268,17 @@ func (s *server) record(req askRequest, v *visitor, a answer, resp askResponse) 
 			fmt.Fprintln(os.Stderr, "faq: question log:", err)
 		}
 	}
-	f, err := os.OpenFile(s.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(s.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, s.logPerm)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "faq: question log:", err)
 		return
 	}
 	defer f.Close()
+	// Chmod, not the create mode, so the service's umask (the public
+	// unit's is 0077) cannot take the group's read away.
+	if err := f.Chmod(s.logPerm); err != nil {
+		fmt.Fprintln(os.Stderr, "faq: question log:", err)
+	}
 	f.Write(append(b, '\n'))
 }
 
@@ -303,6 +309,29 @@ func listenAddr(addr string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("-listen %s: no Tailscale address on any interface (is tailscale up?)", addr)
+}
+
+// shareLog makes the log's directory, and sets the directory's and any
+// existing log's permissions: the group may read them with -log-shared,
+// no one but the owner without it. Chmod, so the umask has no say.
+func shareLog(path string, shared bool) error {
+	dirPerm, filePerm := os.FileMode(0o700), os.FileMode(0o600)
+	if shared {
+		dirPerm, filePerm = 0o750, 0o640
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, dirPerm); err != nil {
+		return err
+	}
+	for _, f := range []string{path, path + ".1"} {
+		if err := os.Chmod(f, filePerm); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // defaultLog is where questions are kept.

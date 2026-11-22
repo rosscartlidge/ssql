@@ -722,6 +722,11 @@ fails loudly if the footer text it replaces changes).
 
 **Log:** each line is marked `public`. Past `-log-max` (64 MB) the log
 moves to `.1`, keeping one old generation. This applies to both instances.
+The public log is group-readable (`-log-shared`): 0640 in a 0750
+directory. The server sets this with chmod, so the unit's `UMask=0077`
+cannot remove it. The install adds whoever ran sudo to the `ssql-faq`
+group, so Ross reads the log without sudo, and `ssql-faq` still reads
+nothing of his.
 
 **Server timeouts:** read 30 s, idle 2 min, headers 16 KB.
 

@@ -39,6 +39,7 @@ func main() {
 	listen := flag.String("listen", ":8484", "with -serve: the address (tailscale:PORT binds the tailnet address only)")
 	jail := flag.String("jail", "auto", "run pipelines in the bubblewrap jail: on, off, or auto (on when available; -serve requires it)")
 	logFile := flag.String("log", defaultLog(), "with -serve: where questions are kept, without addresses ('' keeps nothing)")
+	logShared := flag.Bool("log-shared", false, "with -serve: make the log and its directory readable by the service's group (the public instance's, so its owner can read it without sudo)")
 	logMax := flag.Int64("log-max", 64<<20, "with -serve: past this many bytes the log moves to LOG.1, keeping one old generation")
 	public := flag.Bool("public", false, "with -serve: the public instance Tailscale Funnel points at (loopback -listen only, limits per visitor and per day)")
 	perHour := flag.Int("per-hour", 10, "with -public: questions one visitor may ask an hour")
@@ -104,7 +105,7 @@ func main() {
 			}
 		}
 		if *logFile != "" {
-			if err := os.MkdirAll(filepath.Dir(*logFile), 0o700); err != nil {
+			if err := shareLog(*logFile, *logShared); err != nil {
 				fail(err)
 			}
 		}
@@ -113,6 +114,9 @@ func main() {
 		}
 		s := newServer(f, llms[0], *logFile)
 		s.logMax = *logMax
+		if *logShared {
+			s.logPerm = 0o640
+		}
 		reach := "LAN and tailnet only"
 		if *public {
 			if err := s.makePublic(*perHour, *perDay); err != nil {

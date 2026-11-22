@@ -21,6 +21,7 @@ USER_NAME=ssql-faq
 HOME_DIR=/var/lib/ssql-faq
 APP=$HOME_DIR/app
 UNIT=ssql-faq-public.service
+LOG=$HOME_DIR/.local/state/ssql-faq/questions.jsonl
 STAGE=${XDG_CACHE_HOME:-$HOME/.cache}/ssql-faq-public-stage
 
 repo() { git -C "$(dirname "$0")" rev-parse --show-toplevel; }
@@ -71,7 +72,16 @@ install_root() {
 	mv "$APP.new" "$APP"
 	rm -rf "$APP.old"
 	# What the service may write, and its unit.
-	install -d -o "$USER_NAME" -g "$USER_NAME" -m 700 "$HOME_DIR/.cache" "$HOME_DIR/.local" "$HOME_DIR/.local/state" "$HOME_DIR/.config" "$HOME_DIR/.config/systemd" "$HOME_DIR/.config/systemd/user"
+	install -d -o "$USER_NAME" -g "$USER_NAME" -m 700 "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/.config/systemd" "$HOME_DIR/.config/systemd/user"
+	# The way to the question log is open to the ssql-faq group (the
+	# service's -log-shared makes the log itself 0640), and whoever ran sudo
+	# joins it: the owner reads the log without sudo, and ssql-faq still
+	# reads nothing of theirs.
+	install -d -o "$USER_NAME" -g "$USER_NAME" -m 750 "$HOME_DIR/.local" "$HOME_DIR/.local/state"
+	if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && ! id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx "$USER_NAME"; then
+		usermod -aG "$USER_NAME" "$SUDO_USER"
+		echo "added $SUDO_USER to the $USER_NAME group: log in again (or run: newgrp $USER_NAME) to read the log without sudo"
+	fi
 	install -o "$USER_NAME" -g "$USER_NAME" -m 644 "$src/$UNIT" "$HOME_DIR/.config/systemd/user/$UNIT"
 	loginctl enable-linger "$USER_NAME"
 	for _ in $(seq 1 20); do [ -S "/run/user/$uid/bus" ] && break; sleep 0.5; done
@@ -86,11 +96,12 @@ status() {
 		sudo systemctl --user -M "$USER_NAME@" status "$UNIT" --no-pager -n 5 || true
 	echo "health (today's answered and refused questions):"
 	curl -s --max-time 5 http://127.0.0.1:8485/api/health && echo
-	echo "today's answers by status (the log is ssql-faq's own, so this asks sudo):"
-	local log=$HOME_DIR/.local/state/ssql-faq/questions.jsonl
+	echo "today's answers by status ($LOG):"
 	local lines
-	if ! lines=$(sudo -u "$USER_NAME" sh -c "test ! -e '$log' || cat '$log'"); then
-		echo "  could not read the log (sudo refused)"
+	if [ -r "$LOG" ]; then
+		lines=$(cat "$LOG")
+	elif ! lines=$(sudo -u "$USER_NAME" sh -c "test ! -e '$LOG' || cat '$LOG'"); then
+		echo "  could not read the log (not in the $USER_NAME group yet, and sudo refused)"
 	elif [ -z "$lines" ]; then
 		echo "  nothing asked yet"
 	else
