@@ -23,8 +23,9 @@ var unsupported = regexp.MustCompile("(?i)^[\\s*_#>`]*unsupported\\b")
 // never runs is reported as such, never shown as an answer.
 
 type faq struct {
-	repo    string // the ssql checkout (docs, prompt, docsearch)
-	search  string // the docsearch command (default: the checkout's scripts/docsearch.sh)
+	repo    string          // the ssql checkout (docs, prompt, docsearch)
+	search  string          // the docsearch command (default: the checkout's scripts/docsearch.sh)
+	install map[string]bool // the install docs' command lines (installLines)
 	box     sandbox
 	retries int
 	docsK   int
@@ -114,6 +115,10 @@ What v%s changed (its CHANGELOG section; for earlier releases, see CHANGELOG.md)
 
 %s
 `, path)
+	install, err := installLines(repo)
+	if err != nil {
+		return nil, err
+	}
 	keys, err := keyBindings(box)
 	if err != nil {
 		return nil, err
@@ -136,7 +141,7 @@ What v%s changed (its CHANGELOG section; for earlier releases, see CHANGELOG.md)
 		}
 		fmt.Fprintf(&sb, "- `%s`: %s%s\n", name, strings.Join(cols, ", "), sampleNotes[name])
 	}
-	return &faq{repo: repo, box: box, retries: retries, docsK: docsK, system: sb.String(), verbose: verbose, latest: latest, keys: keys}, nil
+	return &faq{repo: repo, box: box, retries: retries, docsK: docsK, system: sb.String(), verbose: verbose, latest: latest, keys: keys, install: install}, nil
 }
 
 // releaseHeading is a released CHANGELOG section: ## [4.148.0] - 2026-11-15.
@@ -291,8 +296,8 @@ func (f *faq) askAfter(llm ollama, question string, v *visitor, prev *exchange) 
 		case a.Pipeline == "":
 			a.Failure = ""
 			return a // prose
-		case setupLines(reply) != nil:
-			lines := setupLines(reply)
+		case setupLines(reply, f.install) != nil:
+			lines := setupLines(reply, f.install)
 			a.Setup, a.Ran, a.RanOn, a.Output = true, false, "", ""
 			problem, a.Ran = box.checkSetup(lines)
 			if a.Ran {
@@ -498,7 +503,7 @@ func (f *faq) reviewed(llm ollama, msgs []message, question string, a answer, bo
 	a.GenTokens += st.GenTokens
 	p := extractPipeline(reply)
 	if err != nil || reviewOK.MatchString(reply) || p == "" || runnable(p) == runnable(a.Pipeline) ||
-		unsupported.MatchString(reply) || setupLines(reply) != nil || f.checkKeys(reply) != "" {
+		unsupported.MatchString(reply) || setupLines(reply, f.install) != nil || f.checkKeys(reply) != "" {
 		return a
 	}
 	b := a

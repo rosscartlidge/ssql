@@ -119,7 +119,11 @@ func testServer(t *testing.T, replies ...string) (*server, string) {
 		t.Fatal(err)
 	}
 	box := sandbox{ssql: ssqlForTest(t), dataDir: filepath.Join(repo, "cmd", "ssql-playground", "data"), timeout: 20 * time.Second, jail: jailAvailable() == ""}
-	f := &faq{repo: repo, box: box, retries: 2, docsK: 0, system: "test"}
+	install, err := installLines(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &faq{repo: repo, box: box, retries: 2, docsK: 0, system: "test", install: install}
 	llm, _ := fakeOllama(t, replies...)
 	logPath := filepath.Join(t.TempDir(), "q.jsonl")
 	s := newServer(f, llm, logPath)
@@ -298,15 +302,33 @@ func TestAskShellSetup(t *testing.T) {
 	if _, resp := post(t, s.handler(), askRequest{Question: "completion?"}); resp.Status != "unverified" || !strings.Contains(resp.Failure, "unknown flag") {
 		t.Errorf("%+v", resp)
 	}
-	// Install lines are shown, not run.
-	s, _ = testServer(t, "```bash\ngo install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest\n```")
-	if _, resp := post(t, s.handler(), askRequest{Question: "install?"}); resp.Status != "setup" || resp.Verified {
-		t.Errorf("%+v", resp)
+	// Install lines are shown, not run: the README's own brew line, two
+	// commands joined by && (Ross's log, 2026-11-22: refused as a pipeline).
+	for _, block := range []string{
+		"go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest",
+		"brew tap rosscartlidge/ssql && brew install ssql",
+	} {
+		s, _ = testServer(t, "```bash\n"+block+"\n```")
+		if _, resp := post(t, s.handler(), askRequest{Question: "install?"}); resp.Status != "setup" || resp.Verified {
+			t.Errorf("%s: %+v", block, resp)
+		}
 	}
 }
 
 func TestSetupLines(t *testing.T) {
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	install, err := installLines(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for reply, want := range map[string]int{
+		"```bash\nbrew tap rosscartlidge/ssql && brew install ssql\n```":                  1,
+		"```bash\nbrew tap rosscartlidge/ssql\nbrew install ssql\n```":                    2,
+		"```bash\nbrew tap rosscartlidge/ssql && rm -rf ~\n```":                           0,
+		"```bash\nbrew install ssql && ssql from employees.csv | ssql count\n```":         0,
 		"```bash\neval \"$(ssql -shell-init)\"  # in ~/.bashrc\n```":                      1,
 		"```\neval \"$(ssql -field-keybinding)\"\neval \"$(ssql -help-keybinding)\"\n```": 2,
 		"```bash\nsudo dpkg -i ssql_4.148.0_amd64.deb\n```":                               1,
@@ -317,7 +339,7 @@ func TestSetupLines(t *testing.T) {
 		"```bash\neval \"$(ssql -shell-init)\"\nrm -rf ~\n```":                            0,
 		"```bash\neval \"$(ssql -shell-init; id)\"\n```":                                  0,
 	} {
-		if got := len(setupLines(reply)); got != want {
+		if got := len(setupLines(reply, install)); got != want {
 			t.Errorf("%q: %d lines, want %d", reply, got, want)
 		}
 	}

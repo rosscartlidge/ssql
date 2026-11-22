@@ -385,9 +385,44 @@ var (
 	trailingNote = regexp.MustCompile(`\s+#.*$`)
 )
 
+// installDocs are the files that own the install commands.
+var installDocs = []string{"README.md", "doc/install.md"}
+
+// installLines is every line of the install docs' code blocks, split at
+// &&, so an install line in a reply is accepted when the docs say it
+// (Ross's log, 2026-11-22: the README's own `brew tap rosscartlidge/ssql
+// && brew install ssql` was refused as a pipeline, twice corrected, and
+// came back unverified). The lines are shown to the visitor, never run.
+func installLines(repo string) (map[string]bool, error) {
+	known := map[string]bool{}
+	for _, name := range installDocs {
+		b, err := os.ReadFile(filepath.Join(repo, name))
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range fencedAll.FindAllStringSubmatch(string(b), -1) {
+			for _, ln := range strings.Split(m[1], "\n") {
+				for _, part := range strings.Split(trailingNote.ReplaceAllString(ln, ""), "&&") {
+					if part = strings.TrimSpace(part); part != "" && !strings.HasPrefix(part, "#") {
+						known[part] = true
+					}
+				}
+			}
+		}
+	}
+	if !known["go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest"] {
+		return nil, fmt.Errorf("the install docs (%s) no longer show `go install …@latest`; installLines reads their code blocks", strings.Join(installDocs, ", "))
+	}
+	return known, nil
+}
+
+// fencedAll is any fenced block, whatever its language.
+var fencedAll = regexp.MustCompile("(?s)```[a-z]*\\s*\\n(.*?)```")
+
 // setupLines is the reply's first fenced block as setup lines, or nil when
-// any line is something else.
-func setupLines(reply string) []string {
+// any line is something else: a setup eval, or install commands (joined by
+// && or not) that the install docs show, or a .deb line of any version.
+func setupLines(reply string, install map[string]bool) []string {
 	m := fenced.FindStringSubmatch(reply)
 	if m == nil {
 		return nil
@@ -398,12 +433,23 @@ func setupLines(reply string) []string {
 		if ln == "" || strings.HasPrefix(ln, "#") {
 			continue
 		}
-		if !setupEval.MatchString(ln) && !setupInstall.MatchString(ln) {
+		if !setupEval.MatchString(ln) && !documented(ln, install) {
 			return nil
 		}
 		lines = append(lines, ln)
 	}
 	return lines
+}
+
+// documented reports whether every &&-joined part of ln is an install line.
+func documented(ln string, install map[string]bool) bool {
+	for _, part := range strings.Split(ln, "&&") {
+		part = strings.TrimSpace(part)
+		if !install[part] && !setupInstall.MatchString(part) {
+			return false
+		}
+	}
+	return true
 }
 
 // checkSetup returns what is wrong with a setup block, in words for the
