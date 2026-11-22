@@ -784,7 +784,12 @@ transient unit, `systemd-run --user`, on 127.0.0.1:8486:
 - **The remaining risks:** a kernel bug reachable through user namespaces,
   which would land in an account holding nothing; and a model coaxed into
   saying something silly on a public page.
-- **Funnel is Ross's step** (`tailscale funnel --bg 8485`; off with
-  `tailscale funnel --https=443 off`), after trying the installed
-  instance.
+- **Funnel is Ross's step**, after trying the installed instance. Use
+  port 8443: `tailscale funnel --bg --https=8443 8485`, and
+  `tailscale funnel --https=8443 off` to stop. A bare
+  `tailscale funnel --bg 8485` would replace what `tailscale serve`
+  already maps on 443 (on derra, the llama bridge at 127.0.0.1:8765).
+- **Installed 2026-11-22.** Ross ran the sudo install. A question sent as
+  Funnel traffic to the installed instance ran verified in the jail as
+  `ssql-faq`, and `/api/health` counted it.
 

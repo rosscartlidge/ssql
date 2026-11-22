@@ -4,9 +4,11 @@
 # read-only app tree; the LAN instance (ssql-faq.service, as you) is
 # separate and unchanged.
 #
-# Funnel itself is a separate, deliberate step:
-#   tailscale funnel --bg 8485      # on
-#   tailscale funnel --https=443 off  # off
+# Funnel itself is a separate, deliberate step, on port 8443 so it leaves
+# whatever `tailscale serve` already maps on 443 alone (on derra, the llama
+# bridge; a bare `tailscale funnel --bg 8485` would replace it):
+#   tailscale funnel --bg --https=8443 8485   # on: https://HOST.ts.net:8443/
+#   tailscale funnel --https=8443 off         # off
 #
 # The service is hardened beyond the jail its pipelines run in: no new
 # privileges, the whole filesystem read-only but its cache and log, a

@@ -87,9 +87,18 @@ status() {
 	echo "health (today's answered and refused questions):"
 	curl -s --max-time 5 http://127.0.0.1:8485/api/health && echo
 	echo "today's answers by status (the log is ssql-faq's own, so this asks sudo):"
-	sudo -u "$USER_NAME" cat "$HOME_DIR/.local/state/ssql-faq/questions.jsonl" |
-		ssql from jsonl | ssql where -if time ge "$(date -u +%F)" | ssql group-by status -count n | ssql to table || true
-	echo "Funnel: $(tailscale funnel status 2>&1 | head -3)"
+	local log=$HOME_DIR/.local/state/ssql-faq/questions.jsonl
+	local lines
+	if ! lines=$(sudo -u "$USER_NAME" sh -c "test ! -e '$log' || cat '$log'"); then
+		echo "  could not read the log (sudo refused)"
+	elif [ -z "$lines" ]; then
+		echo "  nothing asked yet"
+	else
+		printf '%s\n' "$lines" |
+			ssql from jsonl | ssql where -if time ge "$(date -u +%F)" | ssql group-by status -count n | ssql to table || true
+	fi
+	echo "Funnel (on: tailscale funnel --bg --https=8443 8485; off: tailscale funnel --https=8443 off):"
+	tailscale funnel status 2>&1 | sed 's/^/  /'
 }
 
 case ${1:-} in
