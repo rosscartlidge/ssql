@@ -82,6 +82,25 @@ func TestJailConfines(t *testing.T) {
 	}
 }
 
+// A long pipeline fits the jail's task limit: each ssql stage is a Go
+// process, and with a thread per core (24 on derra) four stages could pass
+// 64 tasks, failing with "pthread_create failed: Resource temporarily
+// unavailable" now and then (found 2026-11-23 by TestAskGeneratedGo).
+func TestJailFitsALongPipeline(t *testing.T) {
+	if missing := jailAvailable(); missing != "" {
+		t.Skipf("no %s", missing)
+	}
+	data := t.TempDir()
+	os.WriteFile(filepath.Join(data, "a.csv"), []byte("x\n1\n"), 0o644)
+	box := sandbox{ssql: ssqlForTest(t), dataDir: data, timeout: 20 * time.Second, jail: true}
+	p := "ssql from a.csv" + strings.Repeat(" | ssql where -if x ge 0", 8) + " | ssql count"
+	for i := range 5 {
+		if r := box.run(p); r.err != nil || strings.TrimSpace(r.stdout) != "1" {
+			t.Fatalf("run %d: %v %q %s", i+1, r.err, r.stdout, r.stderr)
+		}
+	}
+}
+
 // fakeOllama replies with the given turns in order, the last repeating,
 // and keeps the messages of the latest call in lastCall.
 var lastCall []message
@@ -498,5 +517,25 @@ func TestAskGeneratedGo(t *testing.T) {
 	}
 	if !strings.Contains(resp.Output, "package main") || !strings.Contains(resp.Output, "typed.") || resp.Playground != "" {
 		t.Errorf("want the Go program and no playground link: %+v", resp)
+	}
+}
+
+// Two commands in one block (the Go answer after another question,
+// 2026-11-23) get a correction that says so, not a parse error from the
+// two joined into one line; the model's one-command answer then runs.
+func TestAskTwoCommandsInOneBlock(t *testing.T) {
+	two := "Both:\n```bash\n# filter\nssql from employees.csv | ssql where -if age gt 40 | ssql count\n# group\nssql from employees.csv | ssql group-by dept -count n\n```\n"
+	one := "```bash\nssql from employees.csv | ssql where -if age gt 40 | ssql count\n```\n"
+	s, _ := testServer(t, two, one)
+	w, resp := post(t, s.handler(), askRequest{Question: "how many are over 40?"})
+	if w.Code != 200 || resp.Status != "verified" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	var said string
+	for _, m := range lastCall {
+		said += m.Content
+	}
+	if !strings.Contains(said, "2 commands") {
+		t.Errorf("the correction did not say the block held two commands:\n%s", said)
 	}
 }

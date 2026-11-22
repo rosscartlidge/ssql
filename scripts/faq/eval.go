@@ -34,7 +34,12 @@ type evalCase struct {
 	Ordered  bool     `json:"ordered,omitempty"`
 	Facts    []string `json:"facts,omitempty"`
 	Forbid   []string `json:"forbid,omitempty"`
-	Note     string   `json:"note,omitempty"`
+	// Status is what the page and the log must show for a doc answer
+	// (respond's status: "verified", "setup", ...). Facts alone pass an
+	// answer whose command came back unverified (the brew and Go answers
+	// of 2026-11-22), and the log's status is what review.sh shows.
+	Status string `json:"status,omitempty"`
+	Note   string `json:"note,omitempty"`
 }
 
 type evalResult struct {
@@ -126,6 +131,13 @@ func gradeAnswer(f *faq, c evalCase, a answer) (bool, string) {
 			if !strings.Contains(reply, strings.ToLower(fact)) {
 				return false, "missing fact: " + fact
 			}
+		}
+		if got := respond(a, nil, 0); c.Status != "" && got.Status != c.Status {
+			why := "status " + got.Status + ", want " + c.Status
+			if got.Failure != "" {
+				why += ": " + firstLine(got.Failure)
+			}
+			return false, why
 		}
 		return true, ""
 	}

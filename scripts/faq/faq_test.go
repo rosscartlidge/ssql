@@ -137,6 +137,26 @@ func TestExtractPipeline(t *testing.T) {
 	}
 }
 
+// A block's commands: a line continues the one before when that ends in
+// \ or |, or when it starts with |; any other line is a new command.
+func TestBlockCommands(t *testing.T) {
+	for _, c := range []struct {
+		block string
+		want  []string
+	}{
+		{"ssql from e.csv \\\n  | ssql count", []string{"ssql from e.csv | ssql count"}},
+		{"ssql from e.csv |\n  ssql count", []string{"ssql from e.csv | ssql count"}},
+		{"ssql from e.csv\n  | ssql count", []string{"ssql from e.csv | ssql count"}},
+		{"# one\nssql from a.csv | ssql count\n\n# two\nssql from b.csv | ssql to table",
+			[]string{"ssql from a.csv | ssql count", "ssql from b.csv | ssql to table"}},
+	} {
+		got := blockCommands("x\n```bash\n" + c.block + "\n```\n")
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%q: %q, want %q", c.block, got, c.want)
+		}
+	}
+}
+
 func TestGradeRefusal(t *testing.T) {
 	c := evalCase{Kind: "refuse", Forbid: []string{"from pdf"}}
 	denies := answer{Reply: "UNSUPPORTED: ssql has no `from pdf`; convert the PDF to CSV first.", Unsupported: true}
@@ -149,6 +169,32 @@ func TestGradeRefusal(t *testing.T) {
 	}
 	if ok, _ := gradeAnswer(nil, c, answer{Reply: "ssql from csv x.csv"}); ok {
 		t.Errorf("an answer without UNSUPPORTED passed")
+	}
+}
+
+// A doc case with a status fails an answer the page would show otherwise,
+// even when the reply holds every fact.
+func TestGradeStatus(t *testing.T) {
+	reply := "```bash\nssql generate go -run -pipeline 'ssql from e.csv'\n```"
+	pipe := "ssql generate go -run -pipeline 'ssql from e.csv'"
+	c := evalCase{Kind: "doc", Facts: []string{"generate go"}, Status: "verified"}
+	if ok, why := gradeAnswer(nil, c, answer{Reply: reply, Pipeline: pipe, Ran: true, RanOn: "generated"}); !ok {
+		t.Errorf("a generated program failed: %s", why)
+	}
+	ok, why := gradeAnswer(nil, c, answer{Reply: reply, Pipeline: pipe, Failure: "go: downloading go1.26.1"})
+	if ok || !strings.Contains(why, "go: downloading") {
+		t.Errorf("an unverified command passed (%v) or did not say why: %s", ok, why)
+	}
+	brew := "```bash\nbrew tap rosscartlidge/ssql && brew install ssql\n```"
+	setup := evalCase{Kind: "doc", Facts: []string{"install"}, Status: "setup"}
+	if ok, why := gradeAnswer(nil, setup, answer{Reply: brew, Pipeline: "brew tap rosscartlidge/ssql && brew install ssql", Setup: true}); !ok {
+		t.Errorf("install lines shown failed: %s", why)
+	}
+	if ok, _ := gradeAnswer(nil, setup, answer{Reply: brew, Pipeline: "brew tap rosscartlidge/ssql && brew install ssql", Failure: `"&" is shell syntax`}); ok {
+		t.Errorf("refused install lines passed")
+	}
+	if ok, _ := gradeAnswer(nil, evalCase{Kind: "doc", Facts: []string{"generate go"}}, answer{Reply: reply, Pipeline: pipe}); !ok {
+		t.Errorf("a case without a status now checks it")
 	}
 }
 

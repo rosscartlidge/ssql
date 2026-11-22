@@ -832,3 +832,35 @@ and the reply. Filters: `-lan`/`-public`, `-since` (today, a date, `6h`,
 `3d`), `-status REGEX`, `-grep REGEX`, `-n N`, `-brief` (no replies). `-f`
 follows both logs. It reads the public log directly, through `sg ssql-faq`
 when the group membership is newer than the login, else through sudo.
+
+### 12.6 The brew and Go answers as eval cases (2026-11-23)
+
+A doc case can now name the `status` the page and the log must show
+(`respond`'s status: `verified`, `setup`, ...). Facts alone had passed
+`doc-go-program` while the live answer came back unverified. The new
+case `doc-install-any` asks "How do i install ssql?" and wants `setup`;
+`doc-go-program` now wants `verified`. Statuses are the words
+`review.sh` prints, so a bad log entry becomes a case directly.
+
+Writing them found two problems:
+- **The jail's task cap.** It allowed 64 tasks, and every ssql stage is a
+  Go process with a thread per core (24 on derra). Pipelines of four or
+  more stages failed now and then with "pthread_create failed: Resource
+  temporarily unavailable"; `TestAskGeneratedGo` was flaky because of it.
+  The jail now sets `GOMAXPROCS=2` and allows 256 tasks.
+  `TestJailFitsALongPipeline` failed before the fix.
+- **`doc-go-program` fails whenever another question came just before
+  it.** Asked twice in a row, the answer is right. Right after a
+  different question (Ollama's prompt cache, presumably), the model gives
+  two commands in one block, and `extractPipeline` joined them into one
+  line, which no correction could fix. Now `blockCommands` splits a block
+  (a line continues the last one only after `\` or `|`, or when it starts
+  with `|`). A block with more than one command gets a correction that
+  lists them and asks for one pipeline. The case passes after one
+  correction, asked right after the install case, and live on the LAN
+  instance the same pair came back `setup` then `verified`.
+
+Full eval: 37/40. `orders-per-month` passes on its own, at HEAD and with
+the change; it fails only in the full run, so it depends on what was
+asked just before, like the Go case. `doc-latest-changes` was stale (it
+named v4.148.0) and now names v4.148.1's `-count count` fix.

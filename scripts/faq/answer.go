@@ -340,6 +340,15 @@ func (f *faq) askAfter(llm ollama, question string, v *visitor, prev *exchange) 
 // returns what went wrong, in ssql's words where ssql said it. A visitor's
 // pasted columns with no rows stop at schema mode: there is nothing to run.
 func (f *faq) check(a *answer, box sandbox, v *visitor) string {
+	if cmds := blockCommands(a.Reply); len(cmds) > 1 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "the bash block holds %d commands, and only one pipeline can be checked:", len(cmds))
+		for i, c := range cmds {
+			fmt.Fprintf(&b, "\n%d. %s", i+1, c)
+		}
+		b.WriteString("\nPut exactly one pipeline in the block; say anything else in prose")
+		return b.String()
+	}
 	run := runnable(a.Pipeline)
 	if _, err := validatePipeline(run); err != nil {
 		return "the pipeline cannot be run: " + err.Error()

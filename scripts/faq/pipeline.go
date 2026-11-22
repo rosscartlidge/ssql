@@ -25,19 +25,35 @@ var fenced = regexp.MustCompile("(?s)```(?:bash|sh|shell)?\\s*\\n(.*?)```")
 // extractPipeline is the first fenced block's pipeline (continuation lines
 // joined), or "" when the reply has none.
 func extractPipeline(reply string) string {
+	return strings.Join(blockCommands(reply), " ")
+}
+
+// blockCommands is the commands in the reply's first bash block. A line
+// continues the one before when that ends in \ or |, or when it starts
+// with |; any other line starts a new command. Joined blindly, two
+// commands made one line no correction could fix (2026-11-23).
+func blockCommands(reply string) []string {
 	m := fenced.FindStringSubmatch(reply)
 	if m == nil {
-		return ""
+		return nil
 	}
-	var lines []string
+	var cmds []string
+	open := false // the last command continues onto the next line
 	for _, ln := range strings.Split(m[1], "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" || strings.HasPrefix(ln, "#") {
 			continue
 		}
-		lines = append(lines, strings.TrimSpace(strings.TrimSuffix(ln, "\\")))
+		cont := strings.HasSuffix(ln, "\\")
+		ln = strings.TrimSpace(strings.TrimSuffix(ln, "\\"))
+		if len(cmds) > 0 && (open || strings.HasPrefix(ln, "|")) {
+			cmds[len(cmds)-1] += " " + ln
+		} else {
+			cmds = append(cmds, ln)
+		}
+		open = cont || strings.HasSuffix(ln, "|")
 	}
-	return strings.TrimSpace(strings.Join(lines, " "))
+	return cmds
 }
 
 // saveTo is a trailing `> FILE` (or `>> FILE`) naming a plain file in the
@@ -342,14 +358,18 @@ func (s sandbox) run(pipeline string, env ...string) runResult {
 }
 
 // jailArgs is systemd-run's argument list for one jailed run: a transient
-// user scope (at most 64 tasks, 1 GiB, no swap), prlimit (a 64 MiB file,
+// user scope (at most 256 tasks, 1 GiB, no swap), prlimit (a 64 MiB file,
 // 30 s of CPU), then bubblewrap with every namespace unshared, so no
 // network, the host's /usr read-only, the scratch directory as /work, and
 // ssql at /run/ssql/ssql; everything but /work and /tmp is read-only.
+// GOMAXPROCS=2: every stage is a Go process with a thread per core by
+// default (24 on derra), so under the old 64 tasks a four-stage pipeline
+// failed now and then with "pthread_create failed"; the sample data is
+// small enough that two threads lose nothing.
 func jailArgs(ssql, dir, script string, env []string) []string {
 	args := []string{
 		"--user", "--scope", "--quiet", "--collect",
-		"-p", "TasksMax=64", "-p", "MemoryMax=1G", "-p", "MemorySwapMax=0",
+		"-p", "TasksMax=256", "-p", "MemoryMax=1G", "-p", "MemorySwapMax=0",
 		"--",
 		"prlimit", "--fsize=67108864", "--cpu=30", "--",
 		"bwrap", "--unshare-all", "--die-with-parent", "--new-session",
@@ -368,6 +388,7 @@ func jailArgs(ssql, dir, script string, env []string) []string {
 		"--setenv", "PATH", "/run/ssql:/usr/bin:/bin",
 		"--setenv", "HOME", "/work",
 		"--setenv", "TZ", "UTC",
+		"--setenv", "GOMAXPROCS", "2",
 	}
 	for _, e := range env {
 		k, v, _ := strings.Cut(e, "=")
