@@ -39,11 +39,23 @@ func main() {
 	listen := flag.String("listen", ":8484", "with -serve: the address (tailscale:PORT binds the tailnet address only)")
 	jail := flag.String("jail", "auto", "run pipelines in the bubblewrap jail: on, off, or auto (on when available; -serve requires it)")
 	logFile := flag.String("log", defaultLog(), "with -serve: where questions are kept, without addresses ('' keeps nothing)")
+	logMax := flag.Int64("log-max", 64<<20, "with -serve: past this many bytes the log moves to LOG.1, keeping one old generation")
+	public := flag.Bool("public", false, "with -serve: the public instance Tailscale Funnel points at (loopback -listen only, limits per visitor and per day)")
+	perHour := flag.Int("per-hour", 10, "with -public: questions one visitor may ask an hour")
+	perDay := flag.Int("per-day", 200, "with -public: questions answered in total per UTC day")
+	repoFlag := flag.String("repo", "", "the ssql docs tree (default: the git checkout this runs in)")
+	search := flag.String("docsearch", "", "the docsearch command (default: REPO/scripts/docsearch.sh)")
 	flag.Parse()
 
-	repo, err := repoRoot()
-	if err != nil {
-		fail(err)
+	if *public && !*serve {
+		fail(fmt.Errorf("-public is a mode of -serve"))
+	}
+	repo := *repoFlag
+	var err error
+	if repo == "" {
+		if repo, err = repoRoot(); err != nil {
+			fail(err)
+		}
 	}
 	jailed, err := useJail(*jail, *serve)
 	if err != nil {
@@ -74,7 +86,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	f.review = *review
+	f.review, f.search = *review, *search
 	var llms []ollama
 	for _, m := range strings.Split(*models, ",") {
 		llms = append(llms, ollama{host: *host, model: strings.TrimSpace(m), ctx: *ctxSize})
@@ -86,6 +98,11 @@ func main() {
 		if err != nil {
 			fail(err)
 		}
+		if *public {
+			if err := loopbackListen(addr); err != nil {
+				fail(err)
+			}
+		}
 		if *logFile != "" {
 			if err := os.MkdirAll(filepath.Dir(*logFile), 0o700); err != nil {
 				fail(err)
@@ -95,8 +112,18 @@ func main() {
 			fail(fmt.Errorf("loading %s: %w", llms[0].model, err))
 		}
 		s := newServer(f, llms[0], *logFile)
-		fmt.Fprintf(os.Stderr, "faq: %s on http://%s (LAN and tailnet only; jail on, ssql %s; log %s)\n", llms[0].model, addr, bin, orNone(*logFile))
-		fail((&http.Server{Addr: addr, Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
+		s.logMax = *logMax
+		reach := "LAN and tailnet only"
+		if *public {
+			if err := s.makePublic(*perHour, *perDay); err != nil {
+				fail(err)
+			}
+			reach = fmt.Sprintf("PUBLIC via Funnel; %d questions per visitor an hour, %d a day", *perHour, *perDay)
+		}
+		fmt.Fprintf(os.Stderr, "faq: %s on http://%s (%s; jail on, ssql %s; log %s)\n", llms[0].model, addr, reach, bin, orNone(*logFile))
+		srv := &http.Server{Addr: addr, Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10}
+		fail(srv.ListenAndServe())
 	case *ask != "":
 		a := f.ask(llms[0], *ask, nil)
 		printAnswer(a)

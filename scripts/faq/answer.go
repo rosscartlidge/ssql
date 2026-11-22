@@ -24,6 +24,7 @@ var unsupported = regexp.MustCompile("(?i)^[\\s*_#>`]*unsupported\\b")
 
 type faq struct {
 	repo    string // the ssql checkout (docs, prompt, docsearch)
+	search  string // the docsearch command (default: the checkout's scripts/docsearch.sh)
 	box     sandbox
 	retries int
 	docsK   int
@@ -175,7 +176,11 @@ func (f *faq) retrieve(question string) (refs []string, text string) {
 	if f.docsK == 0 {
 		return nil, ""
 	}
-	cmd := exec.Command(filepath.Join(f.repo, "scripts", "docsearch.sh"), "-k", "40", question)
+	search := f.search
+	if search == "" {
+		search = filepath.Join(f.repo, "scripts", "docsearch.sh")
+	}
+	cmd := exec.Command(search, "-k", "40", question)
 	cmd.Dir = f.repo
 	out, err := cmd.Output()
 	if err != nil {

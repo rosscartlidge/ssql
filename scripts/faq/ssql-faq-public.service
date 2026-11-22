@@ -1,0 +1,46 @@
+# The public ssql FAQ (DFC169 §11.4): a user unit of the dedicated ssql-faq
+# user, on loopback only, for Tailscale Funnel to point at. Installed by
+# scripts/faq/install-public.sh, which also creates the user and its
+# read-only app tree; the LAN instance (ssql-faq.service, as you) is
+# separate and unchanged.
+#
+# Funnel itself is a separate, deliberate step:
+#   tailscale funnel --bg 8485      # on
+#   tailscale funnel --https=443 off  # off
+#
+# The service is hardened beyond the jail its pipelines run in: no new
+# privileges, the whole filesystem read-only but its cache and log, a
+# private /tmp, homes inaccessible, and memory and task caps on the lot.
+# Namespaces stay allowed: the jail (bubblewrap) needs them.
+
+[Unit]
+Description=ssql FAQ, public instance (loopback, for Tailscale Funnel)
+
+[Service]
+WorkingDirectory=%h/app/repo
+ExecStart=%h/app/bin/ssql-faq -serve -public -listen 127.0.0.1:8485 \
+    -repo %h/app/repo -ssql %h/app/bin/ssql -docsearch %h/app/bin/docsearch \
+    -models gemma4:26b -per-hour 10 -per-day 200
+Environment=PATH=/usr/bin:/bin
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.cache %h/.local/state
+PrivateTmp=yes
+InaccessiblePaths=-/home -/root -/media -/mnt -/srv
+# Not ProtectKernelTunables: its read-only overmounts of /proc make the
+# kernel refuse the jail's own /proc ("bwrap: Can't mount proc on
+# /newroot/proc: Operation not permitted"), tried 2026-11-22.
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+UMask=0077
+MemoryMax=3G
+TasksMax=256
+
+[Install]
+WantedBy=default.target

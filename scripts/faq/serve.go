@@ -38,8 +38,12 @@ type server struct {
 	run     chan struct{} // one question at a time: one GPU
 	waiting atomic.Int32  // questions queued or running
 	logPath string        // "" keeps nothing
+	logMax  int64         // past this size the log moves to .1 (0: no cap)
 	logMu   sync.Mutex
-	tmp     string // where visitors' data.csv directories go
+	tmp     string   // where visitors' data.csv directories go
+	page    []byte   // the page as this mode says it
+	public  bool     // -public: Funnel's instance (public.go)
+	limit   *limiter // -public: questions per client and per day
 }
 
 type askRequest struct {
@@ -78,25 +82,49 @@ type logLine struct {
 	Failure     string  `json:"failure,omitempty"`
 	Reply       string  `json:"reply,omitempty"`   // the model's answer, so prose can be reviewed (2026-11-21)
 	Revised     bool    `json:"revised,omitempty"` // the review turn changed the pipeline
+	Public      bool    `json:"public,omitempty"`  // asked of the public instance
 	Corrections int     `json:"corrections"`
 	Seconds     float64 `json:"seconds"`
 }
 
 func newServer(f *faq, llm ollama, logPath string) *server {
-	return &server{f: f, llm: llm, run: make(chan struct{}, 1), logPath: logPath, tmp: os.TempDir()}
+	return &server{f: f, llm: llm, run: make(chan struct{}, 1), logPath: logPath, logMax: 64 << 20, tmp: os.TempDir(), page: pageHTML}
+}
+
+// makePublic turns s into the public instance: the public footer and the
+// limits per client and per day.
+func (s *server) makePublic(perHour, perDay int) error {
+	page, err := publicPage(pageHTML)
+	if err != nil {
+		return err
+	}
+	s.page, s.public, s.limit = page, true, newLimiter(perHour, perDay)
+	return nil
 }
 
 func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(pageHTML)
+		w.Write(s.page)
 	})
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"model": s.llm.model, "busy": s.waiting.Load(), "logging": s.logPath != ""})
+		h := map[string]any{"model": s.llm.model, "busy": s.waiting.Load(), "logging": s.logPath != "", "public": s.public}
+		if s.limit != nil {
+			h["today"] = s.limit.today()
+		}
+		writeJSON(w, http.StatusOK, h)
 	})
 	mux.HandleFunc("POST /api/ask", s.ask)
+	if s.public {
+		return publicOnly(mux)
+	}
 	return privateOnly(mux)
+}
+
+func securityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
 }
 
 // privateOnly answers the LAN and the tailnet and refuses everything else.
@@ -112,8 +140,7 @@ func privateOnly(next http.Handler) http.Handler {
 			http.Error(w, "this FAQ answers the local network and the tailnet only", http.StatusForbidden)
 			return
 		}
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
+		securityHeaders(w)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -170,6 +197,15 @@ func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.waiting.Add(-1)
+	// Counted only once the question is accepted: a malformed or turned
+	// away one costs the visitor nothing.
+	if s.limit != nil {
+		if msg, retry := s.limit.allow(clientKey(r)); msg != "" {
+			w.Header().Set("Retry-After", fmt.Sprint(int(retry.Seconds())+1))
+			writeError(w, http.StatusTooManyRequests, msg)
+			return
+		}
+	}
 	select {
 	case s.run <- struct{}{}:
 	case <-r.Context().Done():
@@ -221,10 +257,16 @@ func (s *server) record(req askRequest, v *visitor, a answer, resp askResponse) 
 	if v != nil {
 		l.PastedCols, l.PastedRows = len(v.cols), v.rows
 	}
-	l.FollowUp = req.Previous != nil
+	l.FollowUp, l.Public = req.Previous != nil, s.public
 	b, _ := json.Marshal(l)
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
+	// One old generation is kept, so the log cannot fill the disk.
+	if fi, err := os.Stat(s.logPath); err == nil && s.logMax > 0 && fi.Size() >= s.logMax {
+		if err := os.Rename(s.logPath, s.logPath+".1"); err != nil {
+			fmt.Fprintln(os.Stderr, "faq: question log:", err)
+		}
+	}
 	f, err := os.OpenFile(s.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "faq: question log:", err)

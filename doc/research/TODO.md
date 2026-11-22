@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-21
+Last modified: 2026-11-22
 
 [Back to Index](./README.md)
 
@@ -60,6 +60,10 @@ TestSchemaOpsShadowSchemaMode) hold what is fixed.
   fired…" held the codelab's window functions until they got a heading of
   their own, 2026-11-21, DFC169 §11.3). The FAQ's retrieval and every
   docsearch user see the wrong sections. Skip fenced blocks when chunking.
+- [ ] The FAQ has no deadline for a whole question: each model call has
+  120 s and each run 20 s, but corrections and the review multiply them.
+  The public instance's queue and limits bound the load, not one
+  visitor's wait (DFC169 §12.3). Thread a context through `askAfter`.
 - [x] `group-by -count order_id count` (SQL's `COUNT(col)` habit) fails
   with `"count" looks like the -count flag; flags need the dash`, the wrong
   hint: `-count` takes only a NAME and took `order_id`, leaving `count` a

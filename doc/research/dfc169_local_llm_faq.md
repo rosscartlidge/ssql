@@ -2,7 +2,7 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-21
+Last modified: 2026-11-22
 
 [Back to Index](./README.md)
 
@@ -672,5 +672,119 @@ unchanged: 31/33, p50 1.8 s.
 - Show it to two or three people on the tailnet, and read the log.
 - Phase 3: failed logged questions become eval cases, and the fixes go to
   the docs, the prompt or ssql's errors.
-- Going public (Funnel or a tunnel) is deferred. It needs per-address
-  rate limits, a cost ceiling, and a decision on abuse; see TODO.
+- Going public was deferred. It needed per-address rate limits, a cost
+  ceiling, and a decision on abuse. §12 builds that.
+
+## 12. The public instance (2026-11-22)
+
+Ross asked to open the FAQ through Tailscale Funnel, worried about the
+security. The assessment: pipeline execution was already well defended. The
+checker allows ssql stages only. The jail is bubblewrap with no network
+and a read-only `/usr`, under systemd-run and prlimit caps. What a public
+service lacked was everything around the jail:
+
+- the server ran as Ross, with his home readable;
+- one GPU could be held by anyone;
+- the log had no cap;
+- keeping the `*.ts.net` name quiet protects nothing, because its HTTPS
+  certificate is published in Certificate Transparency logs, which
+  scanners read.
+
+### 12.1 What was built
+
+**A second instance, the only thing Funnel points at:**
+`ssql-faq -serve -public -listen 127.0.0.1:8485` (`scripts/faq/public.go`).
+The LAN and tailnet instance keeps `privateOnly`, which refuses Funnel,
+unchanged.
+
+**Loopback only, enforced.** Each request is identified by the address in
+`X-Forwarded-For`. tailscaled's Funnel proxy sets that header to the public
+client's IP and sets `Tailscale-Funnel-Request: ?1`, overwriting anything the
+client sent (`ipn/ipnlocal/serve.go`: `addProxyForwardedHeaders`,
+`addTailscaleIdentityHeaders`, read 2026-11-22 on main). That is only
+trustworthy if nothing else can connect, so:
+- `-public` refuses a non-loopback `-listen` (`loopbackListen`);
+- `publicOnly` refuses non-loopback peers.
+
+**Limits** (`limiter`, in memory, never logged):
+- 10 questions per visitor per hour (`-per-hour`); an IPv6 visitor is
+  counted by its /64.
+- 200 answered per UTC day across everyone (`-per-day`).
+- Past either, the answer is 429 with `Retry-After`.
+- Only accepted questions count; a malformed one or one turned away as busy
+  costs the visitor nothing.
+- The client map is swept past 10,000 entries.
+- `/api/health` reports the day's answered and refused counts. The refused
+  count is the abuse signal, since refusals are not logged.
+
+**The page says it is public:** its footer is replaced (`publicPage`, which
+fails loudly if the footer text it replaces changes).
+
+**Log:** each line is marked `public`. Past `-log-max` (64 MB) the log
+moves to `.1`, keeping one old generation. This applies to both instances.
+
+**Server timeouts:** read 30 s, idle 2 min, headers 16 KB.
+
+**A dedicated user** (`scripts/faq/install-public.sh`):
+- `stage` runs as Ross. It builds the faq, slim ssql and docsearch binaries.
+  It exports the committed user docs and sample data only: no journals, no
+  `claude/`, no research docs. It copies the docsearch cache (hashes and
+  vectors, no text) and warms it.
+- `sudo … install STAGE` creates the `ssql-faq` system user (home
+  `/var/lib/ssql-faq`) and installs the app tree root-owned and read-only.
+  It enables linger and starts the user unit `ssql-faq-public.service`.
+- `status` shows the unit, health, today's answers by status (an ssql
+  pipeline over the log), and Funnel's state.
+
+**The hardened unit:**
+- `NoNewPrivileges`;
+- `ProtectSystem=strict` with only the cache and log writable;
+- `PrivateTmp`;
+- `/home`, `/root`, `/media`, `/mnt`, `/srv` inaccessible;
+- `ProtectKernelModules`, `ProtectControlGroups`, `RestrictSUIDSGID`,
+  `LockPersonality`, `RestrictRealtime`;
+- `UMask=0077`, `MemoryMax=3G`, `TasksMax=256`.
+
+What the unit leaves out:
+- `RestrictNamespaces`, because bubblewrap needs namespaces.
+- `ProtectKernelTunables`. Its read-only overmounts of `/proc` make the
+  kernel refuse the jail's own `/proc` mount ("bwrap: Can't mount proc on
+  /newroot/proc: Operation not permitted"; tried 2026-11-22).
+- `ProtectHome`. It hides `/run/user` too, and `systemd-run --user` needs
+  that; `InaccessiblePaths` does the job instead.
+
+### 12.2 Checks
+
+`public_test.go` covers:
+- loopback-only answering;
+- loopback-only `-listen`;
+- the client key, including the IPv6 /64;
+- the limiter: hourly, daily, a new UTC day, the day's counts, and the
+  sweep;
+- end to end through the handler (429 with `Retry-After`, another visitor
+  unaffected, the public mark, no addresses in the log, the public footer,
+  a LAN address refused);
+- log rotation.
+
+I broke each guard once and confirmed a test failed.
+
+The hardening was then tried as Ross with the same properties in a
+transient unit, `systemd-run --user`, on 127.0.0.1:8486:
+- three questions sent as Funnel traffic ran verified in the jail;
+- the fourth from the same address got 429;
+- another address was answered;
+- the log kept no addresses.
+
+### 12.3 Left open
+
+- **Nothing bounds a whole question's time.** Each model call has 120 s and
+  each run 20 s, but corrections and the review multiply them. The queue
+  (one running, four waiting) and the limits bound the damage, not the
+  latency.
+- **The remaining risks:** a kernel bug reachable through user namespaces,
+  which would land in an account holding nothing; and a model coaxed into
+  saying something silly on a public page.
+- **Funnel is Ross's step** (`tailscale funnel --bg 8485`; off with
+  `tailscale funnel --https=443 off`), after trying the installed
+  instance.
+
