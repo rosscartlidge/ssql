@@ -236,6 +236,8 @@ func respond(a answer, v *visitor, took time.Duration) askResponse {
 		resp.Status, resp.Verified = "verified", true
 	case a.Setup && a.Failure == "":
 		resp.Status = "setup" // install lines only: nothing here can run them
+	case a.RanOn == "generated":
+		resp.Status, resp.Verified, resp.Output = "verified", true, clip(a.Output, 32<<10) // the program is the answer
 	case a.Ran || a.Checked:
 		resp.Status, resp.Verified, resp.Output = "verified", true, clip(a.Output, 4000)
 	default:
@@ -243,7 +245,7 @@ func respond(a answer, v *visitor, took time.Duration) askResponse {
 	}
 	// The playground holds the same sample files; a visitor's data.csv
 	// is not there.
-	if resp.Verified && !a.Setup && !readsFAQOnly(a.Pipeline) && (v == nil || !v.readBy(a.Pipeline)) {
+	if resp.Verified && !a.Setup && a.RanOn != "generated" && !readsFAQOnly(a.Pipeline) && (v == nil || !v.readBy(a.Pipeline)) {
 		resp.Playground = playground + "#p=" + base64.RawURLEncoding.EncodeToString([]byte(runnable(a.Pipeline)))
 	}
 	return resp

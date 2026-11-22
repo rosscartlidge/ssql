@@ -56,6 +56,53 @@ func runnable(p string) string {
 	return p
 }
 
+// shownGo is the pipeline with each `ssql generate go` stage's -run and
+// -build BIN dropped, so the FAQ shows the Go program instead of
+// compiling it: the jail has no network to fetch the toolchain or the
+// module, and a visitor asking for Go code wants the code (Ross,
+// 2026-11-22, the first public question: "Can I turn a pipeline into a Go
+// program?" came back unverified with go's download error). The reply
+// keeps the command the model wrote, which is right on the visitor's
+// machine. ok is false when nothing was dropped.
+func shownGo(p string) (shown string, ok bool) {
+	stages, err := splitTop(p)
+	if err != nil {
+		return p, false
+	}
+	for i, st := range stages {
+		ws, subs, err := words(st)
+		if err != nil || len(subs) > 0 || len(ws) < 3 || ws[0] != "ssql" || ws[1] != "generate" || ws[2] != "go" {
+			continue
+		}
+		kept := []string{"ssql", "generate", "go"}
+		dropped := false
+		for j := 3; j < len(ws); j++ {
+			switch ws[j] {
+			case "-run":
+				dropped = true
+			case "-build":
+				dropped = true
+				j++ // and the binary's name
+			default:
+				kept = append(kept, shellQuote(ws[j]))
+			}
+		}
+		if dropped {
+			stages[i], ok = strings.Join(kept, " "), true
+		}
+	}
+	return strings.Join(stages, " | "), ok
+}
+
+// shellQuote is w as one shell word: bare when it is plainly safe, else in
+// single quotes.
+func shellQuote(w string) string {
+	if w != "" && strings.Trim(w, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.,/=:@+") == "" {
+		return w
+	}
+	return "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+}
+
 // validatePipeline checks the text is ssql stages only, and returns the
 // commands it uses (for -help on a retry).
 func validatePipeline(p string) ([]string, error) {

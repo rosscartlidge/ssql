@@ -308,7 +308,7 @@ func (f *faq) askAfter(llm ollama, question string, v *visitor, prev *exchange) 
 			problem = f.check(&a, box, v)
 		}
 		if problem == "" {
-			if f.review && a.Ran && !a.Setup {
+			if f.review && a.Ran && !a.Setup && a.RanOn != "generated" {
 				return f.reviewed(llm, append(msgs, message{Role: "assistant", Content: reply}), question, a, box, v)
 			}
 			return a
@@ -344,10 +344,14 @@ func (f *faq) check(a *answer, box sandbox, v *visitor) string {
 	if _, err := validatePipeline(run); err != nil {
 		return "the pipeline cannot be run: " + err.Error()
 	}
+	run, generated := shownGo(run)
 	// Schema mode answers from the headers in milliseconds, and refuses an
-	// unknown column with the list of real ones (DFC170).
-	if r := box.run(run+" | ssql generate schema", "SSQL_MODE=schema"); r.err != nil {
-		return strings.TrimSpace(r.stderr)
+	// unknown column with the list of real ones (DFC170). A program is not
+	// rows: generate go checks the pipeline it is given itself.
+	if !generated {
+		if r := box.run(run+" | ssql generate schema", "SSQL_MODE=schema"); r.err != nil {
+			return strings.TrimSpace(r.stderr)
+		}
 	}
 	mine := v != nil && v.readBy(a.Pipeline)
 	if mine && v.rows == 0 {
@@ -363,6 +367,9 @@ func (f *faq) check(a *answer, box sandbox, v *visitor) string {
 		return msg
 	}
 	a.Ran, a.Output, a.Failure, a.RanOn = true, r.stdout, "", "sample"
+	if generated {
+		a.RanOn = "generated"
+	}
 	if mine {
 		a.RanOn = "your-rows"
 	}

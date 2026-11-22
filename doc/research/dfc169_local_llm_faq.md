@@ -798,3 +798,27 @@ transient unit, `systemd-run --user`, on 127.0.0.1:8486:
   Funnel traffic to the installed instance ran verified in the jail as
   `ssql-faq`, and `/api/health` counted it.
 
+
+### 12.4 Funnel on (2026-11-22)
+
+Ross turned Funnel on at `https://derra.tail3f2e6c.ts.net:8443/`.
+
+The first public question, "Can I turn a pipeline into a Go program?", got
+the codelab's `ssql generate go -run -pipeline '…'`. It came back
+unverified with go's toolchain download error, because the jail has no
+network.
+
+Ross: when people ask for Go code, give them the code rather than run it.
+
+`shownGo` (`scripts/faq/pipeline.go`) runs each `generate go` stage
+without `-run` or `-build BIN`, so the visitor sees the program itself.
+The rest is adjusted to fit:
+- the reply keeps the model's command, which is right on the visitor's
+  machine;
+- the schema pre-flight is skipped, because a program is not rows;
+- the review turn leaves the program alone;
+- the program is shown open, up to 32 KB, and the page labels it
+  "generated, not compiled here".
+
+Live, the same question went from unverified after 2 corrections in
+10.6 s to verified with none in 4.9 s.

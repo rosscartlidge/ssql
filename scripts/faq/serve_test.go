@@ -460,3 +460,43 @@ func TestAskReview(t *testing.T) {
 		}
 	}
 }
+
+func TestShownGo(t *testing.T) {
+	for in, want := range map[string]string{
+		`ssql generate go -run -pipeline 'ssql from employees.csv | ssql count'`:           `ssql generate go -pipeline 'ssql from employees.csv | ssql count'`,
+		`ssql generate go -build ./hc -pipeline 'ssql from e.csv | ssql where -if a eq b'`: `ssql generate go -pipeline 'ssql from e.csv | ssql where -if a eq b'`,
+		`ssql generate go -run -pipeline "ssql from e.csv | ssql update -set n it's"`:      `ssql generate go -pipeline 'ssql from e.csv | ssql update -set n it'\''s'`,
+		`ssql from e.csv | ssql generate go -run`:                                          `ssql from e.csv | ssql generate go`,
+	} {
+		if got, ok := shownGo(in); !ok || got != want {
+			t.Errorf("%s:\n got  %s (%v)\n want %s", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{
+		`ssql generate go -pipeline 'ssql from employees.csv | ssql count'`, // already the program
+		`ssql from employees.csv | ssql count`,
+		`ssql generate sql -run`, // not generate go
+	} {
+		if got, ok := shownGo(in); ok || got != in {
+			t.Errorf("%s: changed to %s", in, got)
+		}
+	}
+}
+
+// Asked for Go code, the FAQ shows the program: `generate go -run` cannot
+// compile in the jail (no network for the toolchain), and the visitor
+// wants the code (Ross, 2026-11-22, the first public question came back
+// unverified with go's download error). The reply keeps the -run command
+// for the visitor's machine, and the review turn leaves a program alone.
+func TestAskGeneratedGo(t *testing.T) {
+	const cmd = "ssql generate go -run -pipeline 'ssql from employees.csv | ssql where -if dept eq Engineering | ssql group-by city -count n | ssql to table'"
+	s, _ := testServer(t, "Yes:\n```bash\n"+cmd+"\n```\n", "```bash\nssql from employees.csv | ssql count\n```")
+	s.f.review = true
+	w, resp := post(t, s.handler(), askRequest{Question: "Can I turn a pipeline into a Go program?"})
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "generated" || resp.Pipeline != cmd {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if !strings.Contains(resp.Output, "package main") || !strings.Contains(resp.Output, "typed.") || resp.Playground != "" {
+		t.Errorf("want the Go program and no playground link: %+v", resp)
+	}
+}
