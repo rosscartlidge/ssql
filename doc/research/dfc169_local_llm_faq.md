@@ -2,7 +2,7 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-22
+Last modified: 2026-11-23
 
 [Back to Index](./README.md)
 
@@ -822,3 +822,13 @@ The rest is adjusted to fit:
 
 Live, the same question went from unverified after 2 corrections in
 10.6 s to verified with none in 4.9 s.
+
+### 12.5 Reviewing the logs (2026-11-23)
+
+`scripts/faq/review.sh` reads both instances' logs, including the rotated
+`.1` generation, merged by time, one block per question: time, instance,
+status, seconds, corrections; then the question, the pipeline, the failure
+and the reply. Filters: `-lan`/`-public`, `-since` (today, a date, `6h`,
+`3d`), `-status REGEX`, `-grep REGEX`, `-n N`, `-brief` (no replies). `-f`
+follows both logs. It reads the public log directly, through `sg ssql-faq`
+when the group membership is newer than the login, else through sudo.
