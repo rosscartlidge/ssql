@@ -864,3 +864,30 @@ Full eval: 37/40. `orders-per-month` passes on its own, at HEAD and with
 the change; it fails only in the full run, so it depends on what was
 asked just before, like the Go case. `doc-latest-changes` was stale (it
 named v4.148.0) and now names v4.148.1's `-count count` fix.
+
+### 12.7 flatten in schema mode (2026-11-23)
+
+A public follow-up asked about structured data. The model pulled JSON out
+of log lines with `extract`, then ran `flatten payload | group-by
+payload.user_id`. `app.log` is not in the sample data, so only the schema
+pre-flight ran, and all three tries got "unknown field(s): payload.user_id
+(available: line_number, ts)".
+
+Two things were wrong:
+- **The model's pipeline.** `extract`'s groups are strings, and `flatten`
+  refuses a string. It needed `cast -type payload json` first.
+- **ssql's schema mode.** flatten's schema op answered a header without
+  `payload` and without any keys. Its own comment said the keys are "not
+  known here". So the correct pipeline, with the cast, was refused too.
+  Schema mode broke DFC170's rule that unknown is no header, and the
+  model was steered away from the real problem.
+
+The fix, in ssql:
+- flatten's schema op answers only when the input already lists
+  `FIELD.key`; otherwise it declines, and schema mode writes no header;
+- a field whose type can never hold an object is refused up front, as
+  exec refuses it on its first row;
+- JSON text in a string gets "cast -type FIELD json first" in both modes.
+
+`TestFlattenSchemaMode` failed on all three counts before the fix.
+`doc/cli-nested-data.md` §9 names the cast for `extract`'s JSON.

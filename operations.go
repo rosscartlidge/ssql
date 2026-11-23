@@ -1474,7 +1474,11 @@ func FlattenField(field string, depth int, keep bool) Filter[Record, Record] {
 					continue
 				}
 				if !isJSON || !strings.HasPrefix(strings.TrimSpace(string(js)), "{") {
-					panic(fmt.Errorf("flatten: row %d: field %q holds %s, not an object (use explode for a list)", row, field, describeValue(v)))
+					hint := "use explode for a list"
+					if str, ok := v.(string); ok && strings.HasPrefix(strings.TrimSpace(str), "{") {
+						hint = fmt.Sprintf("it is JSON text: cast -type %s json first", field)
+					}
+					panic(fmt.Errorf("flatten: row %d: field %q holds %s, not an object (%s)", row, field, describeValue(v), hint))
 				}
 				pairs, err := flattenObject(js, field, depth)
 				if err != nil {

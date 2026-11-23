@@ -12,8 +12,11 @@ import (
 
 func init() {
 	// Schema op: the object field is removed (unless -keep); its keys are
-	// data, so the new names are learnt from the records at run time and
-	// are not known here.
+	// data, learnt from the records at run time. They are known here only
+	// when the input already lists FIELD.key (a JSONL source's header
+	// does); otherwise the op declines, so schema mode writes no header
+	// rather than one without them, which refused every stage after it
+	// that named a key (DFC169 §12.7, 2026-11-23).
 	registerSchemaOp("flatten", func(_ any, in []string, args []string) ([]string, bool) {
 		pos, flags := walkStage(args, map[string]int{"-depth": 1, "-keep": 0, "-generate": 0, "-g": 0})
 		field := ""
@@ -27,12 +30,14 @@ func init() {
 			}
 		}
 		var out []string
+		listed := false
 		for _, f := range in {
 			if f != field || keep {
 				out = append(out, f)
 			}
+			listed = listed || strings.HasPrefix(f, field+".")
 		}
-		return out, true
+		return out, listed
 	})
 }
 
@@ -103,8 +108,15 @@ func RegisterFlatten(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return err
 				}
 			}
-			// Schema mode answers after the checks exec makes (DFC170).
+			// Schema mode answers after the checks exec makes (DFC170):
+			// a field whose type can never hold an object is the error
+			// exec gives on its first row.
 			if schemaMode() {
+				if sr.Schema != nil {
+					if err := flattenFieldType(field, sr.Schema.TypeOf(field)); err != nil {
+						return err
+					}
+				}
 				return answerSchemaMode(ctx, "flatten", sr.Schema)
 			}
 			out := ssql.FlattenField(field, depth, keep)(sr.Records)
@@ -118,6 +130,18 @@ func RegisterFlatten(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		}).
 		Done()
 	return cmd
+}
+
+// flattenFieldType refuses a field whose declared type cannot hold an
+// object; json, any and an unknown type may.
+func flattenFieldType(field, typ string) error {
+	switch typ {
+	case "", "any", "json":
+		return nil
+	case "string":
+		return fmt.Errorf("flatten: field %q is a string, not an object (if it holds JSON text: cast -type %s json first)", field, field)
+	}
+	return fmt.Errorf("flatten: field %q is %s, not an object", field, typ)
 }
 
 // flattenOutputSchema: the input's fields minus the object (unless keep),

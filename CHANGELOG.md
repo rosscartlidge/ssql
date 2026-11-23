@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Schema mode said `flatten` makes no new columns.** Its keys are data,
+  so unless the input header already lists `FIELD.key` (a JSONL source's
+  does), schema mode cannot know them, but it answered a header without
+  them. A stage after it that named a key, such as `cast -type payload
+  json | flatten payload | group-by payload.user_id`, was refused by
+  schema mode, `run -check` and Ctrl-O while the pipeline ran fine. The
+  answer is now "unknown" (no header). A field whose type can never hold
+  an object (a `string` from `extract`, say) is refused up front, as the
+  run refuses it, and JSON text in a string gets the hint `cast -type
+  FIELD json first` in both. Found by the DFC169 FAQ, whose model was told
+  three times that `payload.user_id` did not exist.
+
 ## [4.148.1] - 2026-11-21
 
 ### Fixed

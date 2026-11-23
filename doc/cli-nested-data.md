@@ -271,6 +271,12 @@ ssql from blobs.csv | ssql cast -type payload json | ssql update -set-expr n 'le
 A cell that is not JSON stops the pipeline and names it, as every cast
 does; `-invalid missing` leaves such cells empty instead.
 
+The same holds for JSON that `extract` pulls out of a log line: its
+groups are strings, so `… | ssql extract -field line -re '(?P<ts>\S+)
+(?P<payload>\{.*\})' | ssql cast -type payload json | ssql flatten
+payload` is the way to columns. `flatten` on the text alone refuses it
+and names the cast.
+
 ## 10. The same pipelines as Go and as SQL
 
 Everything above runs in every lane. `generate go` compiles the revenue
