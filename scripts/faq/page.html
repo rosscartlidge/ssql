@@ -43,6 +43,11 @@ button.secondary:not(:disabled):hover { background: var(--accent); color: var(--
 .examples select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .what { margin: 0 0 10px; }
 #status { color: var(--muted); font-size: 0.92rem; }
+#sharebox { display: none; margin-top: 10px; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 0.88rem; color: var(--muted); }
+#sharebox.on { display: flex; }
+#sharebox input { flex: 1 1 260px; min-width: 0; font: 0.82rem ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.shared { margin-top: 22px; padding: 10px 14px; border: 1px dashed var(--accent); border-radius: 10px; color: var(--muted); font-size: 0.92rem; }
 .answer { margin-top: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
 .answer .q { color: var(--muted); font-size: 0.92rem; margin-bottom: 8px; }
 .badge { display: inline-block; font-size: 0.8rem; font-weight: 600; border-radius: 99px; padding: 2px 10px; margin-bottom: 8px; border: 1px solid currentColor; }
@@ -90,11 +95,14 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
     <div class="row">
       <button type="submit" id="go">Ask</button>
       <button type="button" class="secondary" id="newsession" disabled title="Forget this conversation and its answers">New session</button>
+      <button type="button" class="secondary" id="share" disabled title="A link that shows these questions and answers to someone else">Share this session</button>
       <span id="status"></span>
     </div>
+    <div id="sharebox"><input id="sharelink" readonly aria-label="Link to this session"><span id="sharenote"></span></div>
     <div class="examples"><select id="examples" aria-label="Example questions"></select></div>
   </form>
 
+  <div id="sharednote" class="shared" hidden></div>
   <div id="answers"></div>
 
   <footer>Runs on a laptop on this network. Questions, their answers and your 👍/👎 are kept, without your address, to improve the FAQ; pasted data is not kept.
@@ -175,9 +183,14 @@ function setFollow(ex) {
 }
 function updateSession() {
   document.getElementById('newsession').disabled = !last && !document.getElementById('answers').children.length;
+  document.getElementById('share').disabled = !session.length;
 }
 document.getElementById('newsession').onclick = () => {
   document.getElementById('answers').replaceChildren();
+  session = [];
+  document.getElementById('sharednote').hidden = true;
+  document.getElementById('sharebox').classList.remove('on');
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   document.getElementById('q').value = '';
   document.getElementById('status').textContent = '';
   setFollow(null);
@@ -206,7 +219,87 @@ function updateInUse() {
 hdr.addEventListener('input', updateInUse);
 document.getElementById('clearhdr').onclick = () => { hdr.value = ''; updateInUse(); };
 
+// Sharing (Ross, 2026-11-24): the session travels in the link itself,
+// compressed after #s=, so nothing is stored anywhere. A shared link is
+// someone else's input: clean() keeps only fields of the right shape, the
+// renderer escapes all text, and only real playground and doc links
+// survive, so a crafted link cannot put markup or a javascript: URL on
+// the page. Votes stay with the asker: shared answers carry no id.
+let session = []; // [{q, r}], oldest first: what Share sends
+const playgroundURL = 'https://rosscartlidge.github.io/ssql/playground.html';
+const shareFields = ['status', 'ran_on', 'program', 'reply', 'pipeline', 'failure', 'output', 'playground', 'docs', 'seconds'];
+
+function clean(r) {
+  const o = {};
+  for (const k of ['status', 'ran_on', 'reply', 'pipeline', 'failure', 'output']) {
+    if (typeof r[k] === 'string') o[k] = r[k];
+  }
+  if (!labels[o.status]) o.status = 'prose';
+  if (['Go', 'Rust', 'SQL'].includes(r.program)) o.program = r.program;
+  o.seconds = typeof r.seconds === 'number' && isFinite(r.seconds) ? r.seconds : 0;
+  if (typeof r.playground === 'string' && r.playground.startsWith(playgroundURL + '#p=')) o.playground = r.playground;
+  o.docs = Array.isArray(r.docs) ? r.docs.filter(d => typeof d === 'string' && /^[\w./-]+:\d+$/.test(d) && !d.includes('..')) : [];
+  return o;
+}
+
+async function pack(obj) {
+  const z = new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+  const bytes = new Uint8Array(await new Response(z).arrayBuffer());
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function unpack(text) {
+  const bin = atob(text.replace(/-/g, '+').replace(/_/g, '/'));
+  const z = new Blob([Uint8Array.from(bin, c => c.charCodeAt(0))]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return JSON.parse(await new Response(z).text());
+}
+
+document.getElementById('share').onclick = async () => {
+  const x = session.map(e => ({ q: e.q, r: Object.fromEntries(shareFields.filter(k => e.r[k] !== undefined && e.r[k] !== '').map(k => [k, e.r[k]])) }));
+  const link = location.origin + location.pathname + '#s=' + await pack({ v: 1, t: new Date().toISOString().slice(0, 10), x });
+  const n = x.length + ' question' + (x.length === 1 ? '' : 's');
+  const box = document.getElementById('sharebox'), input = document.getElementById('sharelink'), note = document.getElementById('sharenote');
+  input.value = link;
+  box.classList.add('on');
+  input.focus();
+  input.select();
+  try {
+    await navigator.clipboard.writeText(link);
+    note.textContent = 'Copied: a link to these ' + n + '.';
+  } catch (e) {
+    // http on the LAN has no clipboard API: the selected link is ready for Ctrl-C.
+    note.textContent = 'Copy this link (' + n + ').';
+  }
+};
+
+// A link with #s= opens the shared session, read-only, ready for a follow-up.
+async function openShared() {
+  const m = location.hash.match(/^#s=([A-Za-z0-9_-]+)$/);
+  if (!m) return;
+  const note = document.getElementById('sharednote');
+  let doc;
+  try {
+    doc = await unpack(m[1]);
+  } catch (e) {
+    doc = null;
+  }
+  if (!doc || doc.v !== 1 || !Array.isArray(doc.x)) {
+    note.textContent = 'This link should show a shared session, but it is damaged (cut short when it was copied?).';
+    note.hidden = false;
+    return;
+  }
+  const x = doc.x.filter(e => e && typeof e.q === 'string' && e.r && typeof e.r === 'object').slice(0, 50);
+  for (const e of x) show(e.q, clean(e.r));
+  const when = typeof doc.t === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(doc.t) ? ' on ' + doc.t : '';
+  note.textContent = 'A shared session: ' + x.length + ' question' + (x.length === 1 ? '' : 's') + ' someone asked' + when +
+    '. Each answer was checked when it was asked. Ask your own question, or follow up on the latest answer.';
+  note.hidden = false;
+  if (x.length) setFollow({ question: x[x.length - 1].q, reply: clean(x[x.length - 1].r).reply || '' });
+}
+
 function show(question, r) {
+  session.push({ q: question, r });
   const div = document.createElement('div');
   div.className = 'answer';
   let label = labels[r.status] || r.status;
@@ -292,6 +385,7 @@ async function ask() {
 }
 
 document.getElementById('ask').addEventListener('submit', e => { e.preventDefault(); ask(); });
+openShared();
 document.getElementById('q').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
 });

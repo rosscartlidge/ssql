@@ -1012,3 +1012,36 @@ patching the message would have been a second copy of that grammar.
 Every ssql command, and every shell user, gets the better message.
 `TestStrayArgumentNamesTheFlagBeforeIt` failed on five cases before the
 fix.
+
+### 12.13 Sharing a session (2026-11-24)
+
+Ross wanted to send a session to another person. He chose to carry it
+in the link, over a short link stored on the server or a downloaded
+file.
+
+- **The link.** "Share this session" packs the page's exchanges into
+  `#s=`, a JSON document `{v:1, t:date, x:[{q, r}]}`, raw-deflated and
+  base64url-encoded. Nothing is stored, so the privacy note doesn't
+  change. Two questions came to 526 characters.
+- **Copying.** On plain-http LAN pages there's no clipboard API, so the
+  page also shows the link, selected, ready to copy.
+- **Opening it.** A page opened with `#s=` renders the session under a
+  banner ("A shared session: N questions someone asked on DATE"), with
+  the follow-up set to the latest answer.
+- **A shared link is untrusted input.** `clean()` keeps only fields of
+  the right shape. Every text goes through the escaping renderer, the
+  status must be a known one, and the playground link must be the real
+  playground. Doc refs must look like `file:line`, with no `..`. A
+  hostile link (markup in the question and the reply, `javascript:`
+  playground and doc links, a status with an attribute in it) rendered
+  inert in headless Chrome.
+- **Votes stay with the asker.** Shared answers carry no id, so there
+  are no thumbs on them.
+- **Origin.** The link uses the page's own address, so a link made on
+  the LAN instance only opens on the LAN. For people outside, share from
+  the public page.
+
+Checked in headless Chrome: a good link and a hostile one, and a round
+trip of the Share button's own link (questions intact, no ids). The
+page has no browser test harness of its own, so these were one-off
+checks rather than gates.
