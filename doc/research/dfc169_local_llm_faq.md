@@ -891,3 +891,26 @@ The fix, in ssql:
 
 `TestFlattenSchemaMode` failed on all three counts before the fix.
 `doc/cli-nested-data.md` §9 names the cast for `extract`'s JSON.
+
+### 12.8 A column read in the update that creates it (2026-11-23)
+
+A public follow-up asked what dividing a decimal `amt` by 3 and
+multiplying by 3 gives. The model wrote
+`update -set-expr amt 'decimal("0.10")' -set-expr check 'round((amt / 3) * 3, 2)'`.
+Every assignment of one update sees the row as it entered (`ssql
+conventions -category evaluation`), so `amt` is unknown to `check`. The
+model never sees the conventions, though: its correction gets ssql's
+error and the commands' `-help`. The error was exec's bare
+"expression references unknown field(s): amt" at the first row, after
+schema mode had accepted the pipeline. Two corrections did not find the
+second update, and the answer went out unverified.
+
+The fix, in ssql: `update` refuses the read up front (from the header,
+so in schema mode too, and at the first row of headerless input) in the
+words `generate sql` already used, which name the second update
+(`createdHere`, `updateCreatedHereError` in `commands/update_sets.go`).
+`TestUpdateReadsAFieldItCreates` failed in exec, schema and headerless
+input before it. Live, "a total, then a tax of 10% of that total" took
+one correction and came back verified with two updates. The eval case
+`update-reads-new-column` passes, though the model wrote two updates
+first time, so it guards the answer rather than the correction.

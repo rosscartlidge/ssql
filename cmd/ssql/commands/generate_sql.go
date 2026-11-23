@@ -3281,7 +3281,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			}
 			for _, a := range assignments {
 				if a.field == name {
-					return fmt.Errorf("update references unknown field %q: this update creates it, and an update's assignments all see the row as it entered (ssql conventions -category evaluation) — pipe into a second update to read it (available: %s)", name, strings.Join(q.columns, ", "))
+					return updateCreatedHereError(name, q.columns)
 				}
 			}
 		}

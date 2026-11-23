@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"fmt"
+	"strings"
+
 	cf "github.com/rosscartlidge/autocli/v4"
 )
 
@@ -114,4 +117,57 @@ func setExprsOf(sets []clauseSet) []setExpr {
 		}
 	}
 	return out
+}
+
+// createdHere is the field an update's assignments read that the same
+// update creates and its input does not have, or "". Every assignment
+// sees the row as it entered (`ssql conventions -category evaluation`),
+// so such a read is unknown, and every lane refuses it in these words
+// (updateCreatedHereError). Exec said only "expression references
+// unknown field(s): amt" at the first row, after schema mode had
+// accepted the pipeline, until 2026-11-23: the FAQ's model took two
+// corrections and never found the second update.
+func createdHere(reads []string, created map[string]bool, has func(string) bool) string {
+	for _, name := range reads {
+		if created[name] && !has(name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// updateCreatedHereError is the one wording of createdHere's refusal.
+func updateCreatedHereError(name string, available []string) error {
+	return fmt.Errorf("update references unknown field %q: this update creates it, and an update's assignments all see the row as it entered (ssql conventions -category evaluation) — pipe into a second update to read it, e.g. … | ssql update -set-expr %s … | ssql update -set-expr NEW '… %s …' (available: %s)", name, name, name, strings.Join(available, ", "))
+}
+
+// clauseReads is every field one update clause reads: its -if
+// conditions, its expressions' identifiers (exprFieldRefs, exec's rule)
+// less the clause's parameter names, and the columns -set-field and
+// -set-bucket copy.
+func clauseReads(conds []Condition, exprConds []ExprCond, sets []clauseSet, params []ExprParam) []string {
+	isParam := map[string]bool{}
+	for _, p := range params {
+		isParam[p.Name] = true
+	}
+	reads := conditionFields(conds)
+	add := func(expression string) {
+		for _, r := range exprFieldRefs(expression) {
+			if !isParam[r] {
+				reads = append(reads, r)
+			}
+		}
+	}
+	for _, ec := range exprConds {
+		add(ec.Expression)
+	}
+	for _, st := range sets {
+		if st.kind == clauseSetExpr {
+			add(st.expression)
+		}
+		if st.source != "" {
+			reads = append(reads, st.source)
+		}
+	}
+	return reads
 }

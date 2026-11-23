@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -140,6 +141,8 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			var clauses []updateClause
 			var readFields []string // fields the clauses READ: validated against the first record
+			var reads []string            // every field a clause reads, expressions included (createdHere)
+			created := map[string]bool{} // the fields this update assigns
 
 			for _, clause := range ctx.Clauses {
 				uc := updateClause{}
@@ -171,6 +174,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 				readFields = append(readFields, conditionFields(conditions)...)
 				readFields = append(readFields, exprParamFieldNames(params)...)
+				reads = append(reads, clauseReads(conditions, exprConds, sets, params)...)
+				for _, st := range sets {
+					created[st.field] = true
+				}
 				for _, ec := range exprConds {
 					eval, err := compileClauseExpr(ec.Expression, params)
 					if err != nil {
@@ -216,6 +223,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Read JSONL from stdin (with schema if present)
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
+			if sch := schemaAndRecords.Schema; sch != nil {
+				if name := createdHere(reads, created, sch.HasFieldOrPath); name != "" {
+					return updateCreatedHereError(name, sch.Fields)
+				}
+			}
 			// Field names checked against the header up front (as where);
 			// the first-record check below remains for headerless input.
 			if err := validateFieldsSchema(schemaAndRecords.Schema, readFields, "update"); err != nil {
@@ -265,6 +277,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if isFirstRecord {
 					schemaFields = maps.Collect(frozen.All())
 					isFirstRecord = false
+					if name := createdHere(reads, created, frozen.Has); name != "" {
+						evalErr = updateCreatedHereError(name, slices.Sorted(maps.Keys(schemaFields)))
+						return mut
+					}
 					// -if / -if-field / -set-field / -param-field name fields
 					// that must exist; an unknown one is a typo, loud.
 					if err := validateFields(frozen, readFields, "update"); err != nil {

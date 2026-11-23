@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An `update` expression that read a column the same update creates
+  failed late and without the fix.** Every assignment of one update sees
+  the row as it entered (`ssql conventions -category evaluation`), so
+  `update -set-expr amt '…' -set-expr check 'amt * 3'` is an error, but
+  exec reported only "expression references unknown field(s): amt" at the
+  first row, and schema mode (Ctrl-O, `run -check`, the FAQ's pre-flight)
+  accepted it. Both now refuse up front, as `generate sql` already did,
+  saying this update creates the field and to pipe into a second update.
+
 ## [4.148.2] - 2026-11-23
 
 ### Fixed
