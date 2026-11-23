@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A stray argument after a flag names the flag** (autocli v4.23.2):
+  `window -rank salary dept_rank` said only "window takes no positional
+  arguments"; it now leads with "-rank takes 1 argument (result), so
+  \"dept_rank\" is left over". Every command gets it; the FAQ's model
+  took two corrections without finding the fix from the old wording.
+
 ## [4.148.3] - 2026-11-23
 
 ### Fixed

@@ -988,3 +988,27 @@ The rules for that `echo`:
 The playground has no `echo`, so such an answer gets no playground
 link. Live, the question was verified. `TestValidatePipeline`'s new
 cases and `TestAskPipelineDocument` failed before the fix.
+
+### 12.12 A stray argument names the flag before it (2026-11-24)
+
+**The failure.** A public follow-up asking for analytic functions went
+out unverified after two corrections, on
+`window … -rank salary dept_rank`. `-rank` takes one argument, the
+result column, and the error said only "window takes no positional
+arguments (see -help)". The model had `window -help` in both
+corrections and still didn't see which flag had too many arguments.
+
+**The fix, in autocli v4.23.2.** The parser records what each
+positional came straight after. Under `StrictPositionals`, the error
+now leads with that flag:
+
+```
+-rank takes 1 argument (result), so "dept_rank" is left over; window takes no positional arguments
+```
+
+**Where it belongs.** It's in autocli rather than the FAQ, because
+commands are the authority on their own grammar (DFC115). The FAQ
+patching the message would have been a second copy of that grammar.
+Every ssql command, and every shell user, gets the better message.
+`TestStrayArgumentNamesTheFlagBeforeIt` failed on five cases before the
+fix.
