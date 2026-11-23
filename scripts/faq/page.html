@@ -63,7 +63,12 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 .link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 0.88rem;
   font-weight: 400; cursor: pointer; text-decoration: underline; }
 #inuse { color: var(--accent); font-weight: 600; }
-.answer .actions { margin-top: 10px; }
+.answer .actions { margin-top: 10px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.vote { background: transparent; border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px;
+  font-size: 1rem; font-weight: 400; cursor: pointer; filter: grayscale(1); opacity: 0.75; }
+.vote:hover, .vote[aria-pressed="true"] { filter: none; opacity: 1; border-color: var(--accent); }
+.vote[aria-pressed="true"] { background: var(--code); }
+.voted { color: var(--muted); font-size: 0.82rem; }
 </style>
 </head>
 <body>
@@ -92,7 +97,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 
   <div id="answers"></div>
 
-  <footer>Runs on a laptop on this network. Questions and their answers are kept, without your address, to improve the FAQ; pasted data is not kept.
+  <footer>Runs on a laptop on this network. Questions, their answers and your 👍/👎 are kept, without your address, to improve the FAQ; pasted data is not kept.
     A model can still be wrong: a <em>verified</em> answer ran, but check that it answers what you asked.</footer>
 </main>
 <script>
@@ -222,12 +227,32 @@ function show(question, r) {
   if (r.docs && r.docs.length) links.push('Docs: ' + r.docs.map(docLink).join(', '));
   if (links.length) html += '<div class="links">' + links.join('') + '</div>';
   html += '<div class="meta">' + r.seconds.toFixed(1) + ' s</div>';
-  html += '<div class="actions"><button type="button" class="link">Follow up on this answer</button></div>';
+  html += '<div class="actions"><button type="button" class="link follow">Follow up on this answer</button>';
+  if (r.id) html += '<button type="button" class="vote" data-vote="up" aria-pressed="false" aria-label="A good answer" title="A good answer">👍</button>' +
+    '<button type="button" class="vote" data-vote="down" aria-pressed="false" aria-label="A poor answer" title="A poor answer">👎</button><span class="voted"></span>';
+  html += '</div>';
   div.innerHTML = html;
   const ex = { question, reply: r.reply || '' };
-  div.querySelector('.actions button').onclick = () => { setFollow(ex); document.getElementById('q').focus(); };
+  div.querySelector('.actions .follow').onclick = () => { setFollow(ex); document.getElementById('q').focus(); };
+  div.querySelectorAll('.vote').forEach(b => { b.onclick = () => vote(div, r.id, b.dataset.vote); });
   document.getElementById('answers').prepend(div);
   updateSession();
+}
+
+// A vote is kept in the question log with the answer's id (no address).
+// Pressing the other thumb changes it; the server allows a few changes.
+async function vote(div, id, v) {
+  const note = div.querySelector('.voted');
+  try {
+    const res = await fetch('api/vote', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, vote: v }) });
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) { note.textContent = body.error || ('error ' + res.status); return; }
+    div.querySelectorAll('.vote').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.vote === v)));
+    note.textContent = v === 'up' ? 'Thanks!' : 'Thanks. A follow-up can say what was wrong.';
+  } catch (e) {
+    note.textContent = 'The vote did not reach the service.';
+  }
 }
 
 async function ask() {

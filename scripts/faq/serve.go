@@ -45,6 +45,7 @@ type server struct {
 	page    []byte   // the page as this mode says it
 	public  bool     // -public: Funnel's instance (public.go)
 	limit   *limiter // -public: questions per client and per day
+	votes   ballots  // the answers that can be voted on
 }
 
 type askRequest struct {
@@ -57,6 +58,7 @@ type askRequest struct {
 const maxPrevReply = 8 << 10
 
 type askResponse struct {
+	ID         string   `json:"id,omitempty"` // names the answer for a vote; only when the log is kept
 	Reply      string   `json:"reply"`
 	Pipeline   string   `json:"pipeline,omitempty"`
 	Verified   bool     `json:"verified"`
@@ -73,6 +75,7 @@ type askResponse struct {
 // pasted data (only how much of it there was).
 type logLine struct {
 	Time        string  `json:"time"`
+	ID          string  `json:"id,omitempty"` // what a vote line names
 	Question    string  `json:"question"`
 	PastedCols  int     `json:"pasted_cols,omitempty"`
 	PastedRows  int     `json:"pasted_rows,omitempty"`
@@ -117,6 +120,7 @@ func (s *server) handler() http.Handler {
 		writeJSON(w, http.StatusOK, h)
 	})
 	mux.HandleFunc("POST /api/ask", s.ask)
+	mux.HandleFunc("POST /api/vote", s.vote)
 	if s.public {
 		return publicOnly(mux)
 	}
@@ -216,6 +220,9 @@ func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 	a := s.f.askAfter(s.llm, req.Question, v, req.Previous)
 	<-s.run
 	resp := respond(a, v, time.Since(start))
+	if s.logPath != "" {
+		resp.ID = s.votes.issue(req.Question)
+	}
 	s.record(req, v, a, resp)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -255,13 +262,18 @@ func (s *server) record(req askRequest, v *visitor, a answer, resp askResponse) 
 	if s.logPath == "" {
 		return
 	}
-	l := logLine{Time: time.Now().UTC().Format(time.RFC3339), Question: req.Question, Model: s.llm.model,
+	l := logLine{Time: time.Now().UTC().Format(time.RFC3339), ID: resp.ID, Question: req.Question, Model: s.llm.model,
 		Pipeline: a.Pipeline, Status: resp.Status, Failure: firstLine(resp.Failure), Reply: clip(a.Reply, 8<<10), Revised: a.Revised, Corrections: a.Retries, Seconds: resp.Seconds}
 	if v != nil {
 		l.PastedCols, l.PastedRows = len(v.cols), v.rows
 	}
 	l.FollowUp, l.Public = req.Previous != nil, s.public
-	b, _ := json.Marshal(l)
+	s.appendLog(l)
+}
+
+// appendLog adds one JSON line to the question log.
+func (s *server) appendLog(line any) {
+	b, _ := json.Marshal(line)
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
 	// One old generation is kept, so the log cannot fill the disk.

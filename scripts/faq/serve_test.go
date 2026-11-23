@@ -539,3 +539,59 @@ func TestAskTwoCommandsInOneBlock(t *testing.T) {
 		t.Errorf("the correction did not say the block held two commands:\n%s", said)
 	}
 }
+
+// TestVote: an answer carries an id when the log is kept, a vote on it is
+// a log line of its own naming the id and the question (no address), and
+// only an id this server gave out can be voted on, a few times at most.
+func TestVote(t *testing.T) {
+	s, logPath := testServer(t, "Count them:\n```bash\nssql from employees.csv | ssql count\n```\n")
+	h := s.handler()
+	_, resp := post(t, h, askRequest{Question: "how many employees?"})
+	if resp.ID == "" {
+		t.Fatalf("no id on the answer: %+v", resp)
+	}
+	vote := func(id, v string) int {
+		b, _ := json.Marshal(voteRequest{ID: id, Vote: v})
+		r := httptest.NewRequest("POST", "/api/vote", bytes.NewReader(b))
+		r.RemoteAddr = "192.168.4.20:5555"
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	if c := vote(resp.ID, "down"); c != 200 {
+		t.Fatalf("vote: %d", c)
+	}
+	if c := vote(resp.ID, "up"); c != 200 { // a change of mind
+		t.Fatalf("second vote: %d", c)
+	}
+	log, _ := os.ReadFile(logPath)
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[0], `"id":"`+resp.ID+`"`) {
+		t.Fatalf("log: %s", log)
+	}
+	var vl voteLine
+	if err := json.Unmarshal([]byte(lines[2]), &vl); err != nil || vl.ID != resp.ID || vl.Vote != "up" || vl.Question != "how many employees?" {
+		t.Errorf("vote line %q: %+v %v", lines[2], vl, err)
+	}
+	if strings.Contains(string(log), "192.168") {
+		t.Errorf("the log kept the address: %s", log)
+	}
+	if c := vote("0123456789abcdef", "up"); c != 404 {
+		t.Errorf("a vote on an id never given out: %d", c)
+	}
+	if c := vote(resp.ID, "meh"); c != 400 {
+		t.Errorf("a vote that is not up or down: %d", c)
+	}
+	vote(resp.ID, "up")
+	vote(resp.ID, "up")
+	if c := vote(resp.ID, "up"); c != 404 {
+		t.Errorf("a fifth vote on one answer: %d", c)
+	}
+
+	// No log, no id, no votes.
+	s2, _ := testServer(t, "Count them:\n```bash\nssql from employees.csv | ssql count\n```\n")
+	s2.logPath = ""
+	if _, r2 := post(t, s2.handler(), askRequest{Question: "how many employees?"}); r2.ID != "" {
+		t.Errorf("an id with no log: %q", r2.ID)
+	}
+}

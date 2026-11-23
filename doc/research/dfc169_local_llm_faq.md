@@ -914,3 +914,27 @@ input before it. Live, "a total, then a tax of 10% of that total" took
 one correction and came back verified with two updates. The eval case
 `update-reads-new-column` passes, though the model wrote two updates
 first time, so it guards the answer rather than the correction.
+
+### 12.9 Votes on answers (2026-11-23)
+
+Ross: "we need a thumbs-up / thumbs-down button for answers, and the
+result needs to be stored in the log."
+
+- **Ids:** every answer carries an `id` when the log is kept (no log, no
+  id, no buttons). The answer's log line carries the same id.
+- **Votes:** `POST /api/vote {id, vote: up|down}` appends a line of its
+  own, `{time, id, vote, question, public}`. The log stays append-only,
+  and a vote line can be read without its answer (`review.sh -f`).
+- **Limits:** only an id this process gave out can be voted on (the last
+  1024 answers), at most four times, so a visitor can change their mind
+  but can't write arbitrary lines. A restart forgets the ids, and the
+  page then says the answer can no longer be voted on. Votes aren't
+  rate-limited on their own: they ride on the answers, which are.
+- **Page:** 👍 and 👎 sit beside "Follow up on this answer". The chosen
+  thumb is shown in colour, and a 👎 suggests a follow-up to say what was
+  wrong. The footer says votes are kept, without the address.
+- **`review.sh`:** a visitor's last vote shows on the answer's header
+  line. `-vote up|down|any` filters by it, the summary counts both, and
+  `-f` prints a vote as it arrives.
+
+`TestVote` failed with no route.
