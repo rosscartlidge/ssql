@@ -30,6 +30,7 @@ Do these in order; each assumes the one before it.
 
 - [Performance, Measured](performance.md) — the DuckDB comparison and the typed/parallel numbers, with the pipelines that produce them
 - [The Go Library, by Example](library-tour.md) — the `Record` API one capability at a time
+- [A Short History of ssql](history.md) — the milestones from StreamV3 (September 2025) to today, with the release that carried each
 
 ## Using an LLM
 
