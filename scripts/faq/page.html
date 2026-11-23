@@ -36,10 +36,12 @@ button:disabled { opacity: 0.55; cursor: wait; }
 button.secondary { background: transparent; color: var(--accent); border: 1.5px solid var(--accent); padding: 7.5px 16px; }
 button.secondary:disabled { opacity: 0.4; cursor: default; }
 button.secondary:not(:disabled):hover { background: var(--accent); color: var(--accent-ink); }
-.examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
-.examples button { background: transparent; color: var(--ink); border: 1px solid var(--line);
-  font-weight: 400; font-size: 0.88rem; padding: 5px 10px; }
-.examples button:hover { border-color: var(--accent); }
+.examples { margin: 14px 0 0; }
+.examples select { font: inherit; font-size: 0.9rem; color: var(--ink); background: var(--bg); width: 100%; max-width: 100%;
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+.examples select:hover { border-color: var(--accent); }
+.examples select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.what { margin: 0 0 10px; }
 #status { color: var(--muted); font-size: 0.92rem; }
 .answer { margin-top: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
 .answer .q { color: var(--muted); font-size: 0.92rem; margin-bottom: 8px; }
@@ -67,6 +69,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 <body>
 <main>
   <h1>Ask ssql</h1>
+  <p class="what"><strong>ssql</strong> is Unix pipelines for tabular data: read a CSV, JSON or Parquet file, then filter, join, group and sort it one small command per step, and compile the same pipeline to a fast Go program or SQL when it matters. It is free and open source, <a href="https://github.com/rosscartlidge/ssql">on GitHub</a>.</p>
   <p class="sub">Ask how to do something with ssql. A local model answers, and every pipeline it gives is run against sample data (the playground's employees, orders, customers, flights and cities, and a signal to analyse) before you see it.</p>
 
   <form id="ask">
@@ -84,7 +87,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
       <button type="button" class="secondary" id="newsession" disabled title="Forget this conversation and its answers">New session</button>
       <span id="status"></span>
     </div>
-    <div class="examples" id="examples"></div>
+    <div class="examples"><select id="examples" aria-label="Example questions"></select></div>
   </form>
 
   <div id="answers"></div>
@@ -99,14 +102,21 @@ const examples = [
   "What is the quickest total flying time from SYD to every city?",
   "How do I read a tab-separated file?",
   "Can I turn a pipeline into a Go program?",
+  "Do you have a fancy example of analytic (window) functions?",
+  "How do I find the main frequencies in a signal?",
+  "Can ssql use a GPU (CUDA) to speed things up?",
+  "What do you think about ssql?",
+  "What's the hardest question you've answered about ssql?",
 ];
 const exBox = document.getElementById('examples');
-for (const e of examples) {
-  const b = document.createElement('button');
-  b.type = 'button'; b.textContent = e;
-  b.onclick = () => { setFollow(null); document.getElementById('q').value = e; ask(); };  // an example starts its own conversation
-  exBox.appendChild(b);
-}
+exBox.add(new Option('Or try an example question…', ''));
+for (const e of examples) exBox.add(new Option(e, e));
+exBox.onchange = () => {
+  const e = exBox.value;
+  exBox.selectedIndex = 0;  // back to the prompt, so the same example can be picked again
+  if (!e) return;
+  setFollow(null); document.getElementById('q').value = e; ask();  // an example starts its own conversation
+};
 
 const labels = {
   verified: 'verified: it ran on the sample data',
