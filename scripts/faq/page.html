@@ -214,13 +214,16 @@ function show(question, r) {
   if (r.status === 'verified' && r.ran_on === 'your-rows') label = 'verified: it ran on your rows';
   if (r.status === 'unverified' && !r.pipeline) label = 'not verified';
   if (r.status === 'verified' && r.ran_on === 'setup') label = 'verified: ssql printed this setup, and bash accepts it';
-  if (r.status === 'verified' && r.ran_on === 'generated') label = 'verified: ssql generated this Go program from the sample data (shown below, not compiled here)';
+  const lang = r.program || 'Go';
+  if (r.status === 'verified' && r.ran_on === 'generated') label = lang === 'SQL'
+    ? 'verified: ssql generated this SQL from the sample data (shown below, not run on DuckDB here)'
+    : 'verified: ssql generated this ' + lang + ' program from the sample data (shown below, not compiled here)';
   let html = '<div class="q">' + esc(question) + '</div>';
   html += '<span class="badge ' + esc(r.status) + '">' + esc(label) + '</span>';
   html += '<div class="reply">' + render(r.reply || '') + '</div>';
   if (r.status === 'unverified' && r.failure) html += '<p>ssql said:</p><pre>' + esc(r.failure) + '</pre>';
   if (r.status === 'error') html += '<pre>' + esc(r.failure || '') + '</pre>';
-  if (r.output && r.ran_on === 'generated') html += '<details open><summary>The Go program</summary><pre>' + esc(r.output) + '</pre></details>';
+  if (r.output && r.ran_on === 'generated') html += '<details open><summary>The ' + esc(lang === 'SQL' ? 'SQL' : lang + ' program') + '</summary><pre>' + esc(r.output) + '</pre></details>';
   else if (r.output) html += '<details><summary>Its output</summary><pre>' + esc(r.output) + '</pre></details>';
   const links = [];
   if (r.playground) links.push('<a href="' + esc(r.playground) + '" target="_blank" rel="noopener">Open in the playground ↗</a>');

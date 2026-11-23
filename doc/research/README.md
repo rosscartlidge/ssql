@@ -176,7 +176,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC166 | 2026-11-10 | 2026-11-10 | [Where the System Time Goes: Memory in the Generated Go and Rust Programs](./dfc166_memory_go_vs_rust.md) |
 | DFC167 | 2026-11-10 | 2026-11-10 | [Editing a Pipeline in the Editor: Pretty on the Way In, a Language Server Inside](./dfc167_editor_pretty_and_lsp.md) |
 | DFC168 | 2026-11-11 | 2026-11-15 | [Heavy formats as packages a program imports](./dfc168_heavy_formats_as_packages.md) |
-| DFC169 | 2026-11-15 | 2026-11-23 | [A Dynamic FAQ on a Local Model: Teaching Gemma to Answer for ssql](./dfc169_local_llm_faq.md) |
+| DFC169 | 2026-11-15 | 2026-11-24 | [A Dynamic FAQ on a Local Model: Teaching Gemma to Answer for ssql](./dfc169_local_llm_faq.md) |
 | DFC170 | 2026-11-15 | 2026-11-15 | [Schema Mode Is a Lane: Making Its Predictions Exact](./dfc170_schema_mode_is_a_lane.md) |
 
 <!-- DFC-INDEX-END -->

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -72,31 +73,42 @@ func runnable(p string) string {
 	return p
 }
 
-// shownGo is the pipeline with each `ssql generate go` stage's -run and
-// -build BIN dropped, so the FAQ shows the Go program instead of
-// compiling it: the jail has no network to fetch the toolchain or the
-// module, and a visitor asking for Go code wants the code (Ross,
-// 2026-11-22, the first public question: "Can I turn a pipeline into a Go
-// program?" came back unverified with go's download error). The reply
-// keeps the command the model wrote, which is right on the visitor's
-// machine. ok is false when nothing was dropped.
-func shownGo(p string) (shown string, ok bool) {
+// shownProgram is the pipeline with each `ssql generate go` or `generate
+// rust` stage's -run and -build BIN (-r, -b) dropped, so the FAQ shows the
+// program instead of compiling it: the jail has no network to fetch a
+// toolchain or a module, and a visitor asking for code wants the code
+// (Ross, 2026-11-22, the first public question: "Can I turn a pipeline
+// into a Go program?" came back unverified with go's download error; on
+// 2026-11-24 "how do you create rust code?" did the same with "cargo not
+// found"). `generate sql -run` and a bare `| duckdb` after `generate sql`
+// (the two forms the docs teach) need DuckDB, which the jail lacks too, so
+// the SQL is shown instead. The reply keeps the command the model wrote,
+// which is right on the visitor's machine. lang is the program's
+// language, Go, Rust or SQL, or "" when nothing was dropped.
+func shownProgram(p string) (shown, lang string) {
 	stages, err := splitTop(p)
 	if err != nil {
-		return p, false
+		return p, ""
 	}
-	for i, st := range stages {
-		ws, subs, err := words(st)
-		if err != nil || len(subs) > 0 || len(ws) < 3 || ws[0] != "ssql" || ws[1] != "generate" || ws[2] != "go" {
+	for i := 0; i < len(stages); i++ {
+		ws, subs, err := words(stages[i])
+		if err != nil || len(subs) > 0 || len(ws) < 3 || ws[0] != "ssql" || ws[1] != "generate" || programLang[ws[2]] == "" {
 			continue
 		}
-		kept := []string{"ssql", "generate", "go"}
+		if ws[2] == "sql" && i == len(stages)-2 && strings.TrimSpace(stages[i+1]) == "duckdb" {
+			stages, lang = stages[:i+1], "SQL"
+		}
+		kept := []string{"ssql", "generate", ws[2]}
 		dropped := false
 		for j := 3; j < len(ws); j++ {
 			switch ws[j] {
-			case "-run":
+			case "-run", "-r":
 				dropped = true
-			case "-build":
+			case "-build", "-b":
+				if ws[2] == "sql" { // no -build: leave it to the command's error
+					kept = append(kept, shellQuote(ws[j]))
+					continue
+				}
 				dropped = true
 				j++ // and the binary's name
 			default:
@@ -104,11 +116,14 @@ func shownGo(p string) (shown string, ok bool) {
 			}
 		}
 		if dropped {
-			stages[i], ok = strings.Join(kept, " "), true
+			stages[i], lang = strings.Join(kept, " "), programLang[ws[2]]
 		}
 	}
-	return strings.Join(stages, " | "), ok
+	return strings.Join(stages, " | "), lang
 }
+
+// programLang names the generate targets whose -run builds a program.
+var programLang = map[string]string{"go": "Go", "rust": "Rust", "sql": "SQL"}
 
 // shellQuote is w as one shell word: bare when it is plainly safe, else in
 // single quotes.
@@ -123,7 +138,7 @@ func shellQuote(w string) string {
 // commands it uses (for -help on a retry).
 func validatePipeline(p string) ([]string, error) {
 	cmds := map[string]bool{}
-	if err := validateStages(p, cmds, 0); err != nil {
+	if err := validateStages(p, cmds, 0, false); err != nil {
 		return nil, err
 	}
 	var out []string
@@ -133,7 +148,7 @@ func validatePipeline(p string) ([]string, error) {
 	return out, nil
 }
 
-func validateStages(p string, cmds map[string]bool, depth int) error {
+func validateStages(p string, cmds map[string]bool, depth int, docSub bool) error {
 	if depth > 2 {
 		return fmt.Errorf("process substitution nested too deep")
 	}
@@ -141,13 +156,21 @@ func validateStages(p string, cmds map[string]bool, depth int) error {
 	if err != nil {
 		return err
 	}
-	for _, st := range stages {
+	for i, st := range stages {
 		words, subs, err := words(st)
 		if err != nil {
 			return err
 		}
 		if len(words) == 0 {
 			return fmt.Errorf("an empty stage")
+		}
+		// echo hands a pipeline document to ssql run, as the docs do:
+		// `echo '[…]' | ssql run -stdin` or `ssql run <(echo '[…]')`.
+		if words[0] == "echo" && i == 0 && (docSub && len(stages) == 1 || len(stages) > 1 && feedsRun(stages[1])) {
+			if err := validateDocument(words[1:]); err != nil {
+				return err
+			}
+			continue
 		}
 		if words[0] != "ssql" {
 			return fmt.Errorf("every stage must be an ssql command; %q is not", words[0])
@@ -161,7 +184,7 @@ func validateStages(p string, cmds map[string]bool, depth int) error {
 			}
 		}
 		for _, s := range subs {
-			if err := validateStages(s, cmds, depth+1); err != nil {
+			if err := validateStages(s, cmds, depth+1, len(words) > 1 && words[1] == "run"); err != nil {
 				return err
 			}
 		}
@@ -203,6 +226,38 @@ func splitTop(p string) ([]string, error) {
 // words splits a stage into its words, unquoting, and lifts out each
 // `<( … )` as a sub-pipeline. A character a shell would act on outside
 // quotes is refused.
+// echoesDocument reports whether the pipeline hands ssql run a document
+// with echo, which the playground cannot run (it has no echo).
+func echoesDocument(p string) bool {
+	return echoStage.MatchString(p)
+}
+
+var echoStage = regexp.MustCompile(`(^|\||<\()\s*echo\s`)
+
+// feedsRun reports whether stage is `ssql run …`.
+func feedsRun(stage string) bool {
+	ws, _, err := words(stage)
+	return err == nil && len(ws) > 1 && ws[0] == "ssql" && ws[1] == "run"
+}
+
+// validateDocument checks echo's arguments are one pipeline document (a
+// JSON list of argument lists) whose arguments obey the rule an ssql
+// stage's do: only the sample files in the working directory.
+func validateDocument(args []string) error {
+	var doc [][]string
+	if len(args) != 1 || json.Unmarshal([]byte(args[0]), &doc) != nil || len(doc) == 0 {
+		return fmt.Errorf("echo may only hand ssql run one pipeline document, a JSON list of argument lists in single quotes")
+	}
+	for _, stage := range doc {
+		for _, w := range stage {
+			if strings.HasPrefix(w, "/") || strings.Contains(w, "..") {
+				return fmt.Errorf("argument %q: only the sample files in the working directory can be read", w)
+			}
+		}
+	}
+	return nil
+}
+
 func words(st string) (out, subs []string, err error) {
 	var w strings.Builder
 	in := false

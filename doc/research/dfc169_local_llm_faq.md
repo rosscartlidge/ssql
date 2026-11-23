@@ -2,7 +2,7 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-23
+Last modified: 2026-11-24
 
 [Back to Index](./README.md)
 
@@ -938,3 +938,53 @@ result needs to be stored in the log."
   `-f` prints a vote as it arrives.
 
 `TestVote` failed with no route.
+
+### 12.10 Rust and SQL programs, shown not run (2026-11-24)
+
+**The failures.** A public follow-up, "how do you create rust code?", went
+out unverified. The model's answer was `ssql generate rust -run -pipeline …`,
+which is right, but the jail has no cargo, and building DataFusion takes
+minutes anyway. SQL had the same gap in two forms, both of which the docs
+teach:
+
+- `generate sql -run` failed with "needs duckdb on PATH";
+- `… | ssql generate sql | duckdb` was refused by the validator, because
+  `duckdb` isn't an ssql stage.
+
+**The fix.** `shownGo` became `shownProgram`. It drops `-run`/`-r` and
+`-build`/`-b` from `generate go` and `generate rust`, `-run` from
+`generate sql`, and a bare trailing `| duckdb` after `generate sql`. The
+FAQ then shows the generated program, and the page names its language
+(`program`: Go, Rust or SQL). The validator now checks the pipeline that
+actually runs. A `duckdb` with arguments is still refused, and the model
+gets a correction. Live, all three questions were verified.
+`TestShownProgram` failed on each new case before the fix.
+
+### 12.11 Pipeline documents (2026-11-24)
+
+**The failure.** A public question, "is there a way to represent a
+pipeline as data rather than as a bash script", went out unverified
+after two corrections. The model's answer,
+`ssql run <(echo '[["from","csv","-arg","employees.csv"],…]')`, was
+right, and the document ran as written, but the validator allows only
+ssql stages, so `echo` was refused. The docs teach the same form
+(`echo '[…]' | ssql run -check -stdin`, cli-codelab-catalog §3).
+
+**The fix.** The validator now allows `echo` in exactly the two places
+that hand `ssql run` a document:
+
+- the first stage, when the next stage is `ssql run`;
+- the only stage of a `<( )` that is an argument of `ssql run`.
+
+The rules for that `echo`:
+
+- It takes one argument. `words()` has already refused `$`, backticks
+  and every other shell metacharacter, so the argument can't expand.
+- The argument must parse as a document: a JSON list of string lists.
+- Each string in it obeys the rule ssql arguments do: no leading `/`
+  and no `..`. A document can't read past the samples, which the jail
+  would refuse anyway.
+
+The playground has no `echo`, so such an answer gets no playground
+link. Live, the question was verified. `TestValidatePipeline`'s new
+cases and `TestAskPipelineDocument` failed before the fix.

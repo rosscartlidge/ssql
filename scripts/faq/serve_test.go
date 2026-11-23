@@ -480,23 +480,32 @@ func TestAskReview(t *testing.T) {
 	}
 }
 
-func TestShownGo(t *testing.T) {
+func TestShownProgram(t *testing.T) {
 	for in, want := range map[string]string{
 		`ssql generate go -run -pipeline 'ssql from employees.csv | ssql count'`:           `ssql generate go -pipeline 'ssql from employees.csv | ssql count'`,
 		`ssql generate go -build ./hc -pipeline 'ssql from e.csv | ssql where -if a eq b'`: `ssql generate go -pipeline 'ssql from e.csv | ssql where -if a eq b'`,
 		`ssql generate go -run -pipeline "ssql from e.csv | ssql update -set n it's"`:      `ssql generate go -pipeline 'ssql from e.csv | ssql update -set n it'\''s'`,
 		`ssql from e.csv | ssql generate go -run`:                                          `ssql from e.csv | ssql generate go`,
+		`ssql from e.csv | ssql generate go -r`:                                            `ssql from e.csv | ssql generate go`,
+		`ssql generate go -b hc -pipeline 'ssql from e.csv | ssql count'`:                  `ssql generate go -pipeline 'ssql from e.csv | ssql count'`,
+		`ssql generate rust -run -pipeline 'ssql from employees.csv | ssql count'`:         `ssql generate rust -pipeline 'ssql from employees.csv | ssql count'`,
+		`ssql from e.csv | ssql generate rust -build ./hc`:                                 `ssql from e.csv | ssql generate rust`,
+		`ssql generate sql -run -pipeline 'ssql from e.csv | ssql count'`:                  `ssql generate sql -pipeline 'ssql from e.csv | ssql count'`,
+		`ssql generate sql -pipeline 'ssql from e.csv | ssql count' | duckdb`:              `ssql generate sql -pipeline 'ssql from e.csv | ssql count'`,
+		`ssql from e.csv | ssql count | ssql generate sql | duckdb`:                        `ssql from e.csv | ssql count | ssql generate sql`,
 	} {
-		if got, ok := shownGo(in); !ok || got != want {
-			t.Errorf("%s:\n got  %s (%v)\n want %s", in, got, ok, want)
+		if got, lang := shownProgram(in); lang == "" || got != want {
+			t.Errorf("%s:\n got  %s (%q)\n want %s", in, got, lang, want)
 		}
 	}
 	for _, in := range []string{
 		`ssql generate go -pipeline 'ssql from employees.csv | ssql count'`, // already the program
 		`ssql from employees.csv | ssql count`,
-		`ssql generate sql -run`, // not generate go
+		`ssql generate sql -pipeline 'ssql from e.csv | ssql count'`,                 // already the SQL
+		`ssql generate sql -pipeline 'ssql from e.csv | ssql count' | duckdb -c 'x'`, // not a bare duckdb: the validator's
+		`ssql from e.csv | ssql to csv | duckdb`,                                     // duckdb after no generate sql
 	} {
-		if got, ok := shownGo(in); ok || got != in {
+		if got, lang := shownProgram(in); lang != "" || got != in {
 			t.Errorf("%s: changed to %s", in, got)
 		}
 	}
@@ -593,5 +602,19 @@ func TestVote(t *testing.T) {
 	s2.logPath = ""
 	if _, r2 := post(t, s2.handler(), askRequest{Question: "how many employees?"}); r2.ID != "" {
 		t.Errorf("an id with no log: %q", r2.ID)
+	}
+}
+
+// TestAskPipelineDocument: a document echoed into ssql run is verified
+// (the docs' own form), with no playground link: the playground has no echo.
+func TestAskPipelineDocument(t *testing.T) {
+	const pipeline = `ssql run <(echo '[["from","employees.csv"],["where","-if","dept","eq","Engineering"],["count"]]')`
+	s, _ := testServer(t, "Yes, as a document:\n```bash\n"+pipeline+"\n```\n")
+	w, resp := post(t, s.handler(), askRequest{Question: "can a pipeline be data?"})
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "sample" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if resp.Playground != "" {
+		t.Errorf("a playground link for an echo: %s", resp.Playground)
 	}
 }

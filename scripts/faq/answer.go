@@ -43,6 +43,7 @@ type answer struct {
 	Ran          bool          // the pipeline passed the pre-flight and ran
 	Checked      bool          // a visitor's columns: it passed schema mode, with no rows to run
 	RanOn        string        // "sample", "your-columns" or "your-rows" once verified
+	Program      string        // with RanOn "generated": the program's language, Go or Rust
 	Illustrative bool          // it names a file the sample data lacks: shown, not run
 	Setup        bool          // shell setup (eval "$(ssql -FLAG)", install), not a pipeline
 	Revised      bool          // the review turn replaced the first pipeline that ran
@@ -349,11 +350,13 @@ func (f *faq) check(a *answer, box sandbox, v *visitor) string {
 		b.WriteString("\nPut exactly one pipeline in the block; say anything else in prose")
 		return b.String()
 	}
-	run := runnable(a.Pipeline)
+	// What runs is the pipeline without a -run, -build or `| duckdb`
+	// (shownProgram), and that is what the validator checks.
+	run, lang := shownProgram(runnable(a.Pipeline))
+	generated := lang != ""
 	if _, err := validatePipeline(run); err != nil {
 		return "the pipeline cannot be run: " + err.Error()
 	}
-	run, generated := shownGo(run)
 	// Schema mode answers from the headers in milliseconds, and refuses an
 	// unknown column with the list of real ones (DFC170). A program is not
 	// rows: generate go checks the pipeline it is given itself.
@@ -377,7 +380,7 @@ func (f *faq) check(a *answer, box sandbox, v *visitor) string {
 	}
 	a.Ran, a.Output, a.Failure, a.RanOn = true, r.stdout, "", "sample"
 	if generated {
-		a.RanOn = "generated"
+		a.RanOn, a.Program = "generated", lang
 	}
 	if mine {
 		a.RanOn = "your-rows"

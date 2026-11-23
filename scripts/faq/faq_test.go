@@ -13,6 +13,10 @@ func TestValidatePipeline(t *testing.T) {
 		"ssql from employees.csv | ssql group-by dept -count n | ssql to table",
 		"ssql from orders.csv | ssql join <(ssql from customers.csv | ssql include customer_id tier) -using customer_id",
 		`ssql from e.csv | ssql where -if-expr 'salary > 100 && (age < 30)' | ssql update -set-expr b "a > 1 ? \"x\" : \"y\""`,
+		// A pipeline document handed to ssql run (the docs' own form).
+		`echo '[["from","csv","-arg","employees.csv"],["to","table"]]' | ssql run -stdin`,
+		`echo '[["from","employees.csv"],["count"]]' | ssql run -check -stdin`,
+		`ssql run <(echo '[["from","employees.csv"],["sort","salary","-desc"],["to","table"]]')`,
 	}
 	for _, p := range ok {
 		if _, err := validatePipeline(p); err != nil {
@@ -31,6 +35,16 @@ func TestValidatePipeline(t *testing.T) {
 		"ssql from `id`":                                     "`",
 		`ssql from "$HOME/x.csv"`:                            "shell expansion",
 		"ssql from \"`id`.csv\"":                             "shell expansion",
+		// echo only hands a document to ssql run, and the document reads
+		// only the samples.
+		`echo hi`: "ssql command",
+		`echo '[["from","e.csv"]]' | ssql from e.csv`:                   "ssql command",
+		`ssql from e.csv | echo '[["from","e.csv"]]' | ssql run -stdin`: "ssql command",
+		`echo '[["from","/etc/passwd"]]' | ssql run -stdin`:             "sample files",
+		`ssql run <(echo '[["from","../x.csv"]]')`:                      "sample files",
+		`echo 'not json' | ssql run -stdin`:                             "pipeline document",
+		`echo -e '[["from","e.csv"]]' | ssql run -stdin`:                "pipeline document",
+		`ssql join <(echo '[["from","e.csv"]]') -using id`:              "ssql command",
 	}
 	for p, want := range bad {
 		_, err := validatePipeline(p)

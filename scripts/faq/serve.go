@@ -62,7 +62,8 @@ type askResponse struct {
 	Reply      string   `json:"reply"`
 	Pipeline   string   `json:"pipeline,omitempty"`
 	Verified   bool     `json:"verified"`
-	RanOn      string   `json:"ran_on,omitempty"` // sample, your-columns, your-rows, setup
+	RanOn      string   `json:"ran_on,omitempty"`  // sample, your-columns, your-rows, setup, generated
+	Program    string   `json:"program,omitempty"` // with ran_on generated: Go or Rust
 	Output     string   `json:"output,omitempty"`
 	Failure    string   `json:"failure,omitempty"`
 	Status     string   `json:"status"` // verified, unverified, unsupported, illustration, setup, prose
@@ -229,7 +230,7 @@ func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 
 // respond is what the page shows of an answer.
 func respond(a answer, v *visitor, took time.Duration) askResponse {
-	resp := askResponse{Reply: a.Reply, Pipeline: a.Pipeline, RanOn: a.RanOn, Docs: a.Docs, Seconds: took.Seconds()}
+	resp := askResponse{Reply: a.Reply, Pipeline: a.Pipeline, RanOn: a.RanOn, Program: a.Program, Docs: a.Docs, Seconds: took.Seconds()}
 	switch {
 	case a.Reply == "" && a.Failure != "":
 		resp.Status, resp.Failure = "error", "the model did not answer: "+a.Failure
@@ -252,7 +253,7 @@ func respond(a answer, v *visitor, took time.Duration) askResponse {
 	}
 	// The playground holds the same sample files; a visitor's data.csv
 	// is not there.
-	if resp.Verified && !a.Setup && a.RanOn != "generated" && !readsFAQOnly(a.Pipeline) && (v == nil || !v.readBy(a.Pipeline)) {
+	if resp.Verified && !a.Setup && a.RanOn != "generated" && !readsFAQOnly(a.Pipeline) && !echoesDocument(a.Pipeline) && (v == nil || !v.readBy(a.Pipeline)) {
 		resp.Playground = playground + "#p=" + base64.RawURLEncoding.EncodeToString([]byte(runnable(a.Pipeline)))
 	}
 	return resp
