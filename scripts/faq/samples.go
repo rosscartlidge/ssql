@@ -3,15 +3,17 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-// The FAQ's sample files: the playground's five, plus the codelab's
-// signal.csv (a 100 Hz signal, t and amplitude) so a signal-processing
-// answer runs. Until 2026-11-21 every fft or spectrogram answer named a
-// file the samples lacked (sensor_data.csv, chirp.csv) and was shown as an
-// illustration: right, as it happened, but never checked.
-var faqOnlySamples = []string{"doc/codelab-data/signal.csv"}
+// The FAQ's sample files are the playground's (cmd/ssql-playground/data),
+// so every answer over them opens there and runs. signal.csv (a 100 Hz
+// signal, t and amplitude) joined them for the FAQ on 2026-11-21: until
+// then every fft or spectrogram answer named a file the samples lacked
+// (sensor_data.csv, chirp.csv) and was shown as an illustration. It lived
+// only in the FAQ, without playground links, until 2026-11-24, when it
+// moved into the playground's data; TestSamplesAreThePlaygrounds keeps
+// the two one set.
+const samplesDir = "cmd/ssql-playground/data"
 
 // sampleNotes are what a file's columns do not say. Without the rate, the
 // first signal answer ran fft at -rate 1000 and reported frequencies ten
@@ -34,10 +36,7 @@ func buildSamples(repo string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	files, _ := filepath.Glob(filepath.Join(repo, "cmd", "ssql-playground", "data", "*"))
-	for _, f := range faqOnlySamples {
-		files = append(files, filepath.Join(repo, f))
-	}
+	files, _ := filepath.Glob(filepath.Join(repo, samplesDir, "*"))
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -48,15 +47,4 @@ func buildSamples(repo string) (string, error) {
 		}
 	}
 	return dir, nil
-}
-
-// readsFAQOnly reports whether a pipeline reads a sample the playground
-// does not have: its playground link would open on a missing file.
-func readsFAQOnly(pipeline string) bool {
-	for _, f := range faqOnlySamples {
-		if strings.Contains(pipeline, filepath.Base(f)) {
-			return true
-		}
-	}
-	return false
 }

@@ -26,7 +26,8 @@ textarea { width: 100%; font: inherit; color: var(--ink); background: var(--bg);
   border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; resize: vertical; }
 textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 #q { min-height: 76px; }
-#hdr { min-height: 70px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88rem; }
+/* Tall enough for a few files with their rows (named sections, 2026-11-24). */
+#hdr { min-height: 180px; height: 14em; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88rem; white-space: pre; overflow-x: auto; }
 details { margin-top: 10px; color: var(--muted); }
 details p { margin: 6px 0; font-size: 0.9rem; }
 .row { display: flex; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
@@ -80,7 +81,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 <main>
   <h1>Ask ssql</h1>
   <p class="what"><strong>ssql</strong> is Unix pipelines for tabular data: read a CSV, JSON or Parquet file, then filter, join, group and sort it one small command per step, and compile the same pipeline to a fast Go program or SQL when it matters. It is free and open source, <a href="https://github.com/rosscartlidge/ssql">on GitHub</a>, and you can try it in your browser, with nothing to install, in <a href="https://rosscartlidge.github.io/ssql/playground.html">the playground</a>.</p>
-  <p class="sub">Ask how to do something with ssql. A local model answers, and every pipeline it gives is run against sample data (the playground's employees, orders, customers, flights and cities, and a signal to analyse) before you see it.</p>
+  <p class="sub">Ask how to do something with ssql. A local model answers, and every pipeline it gives is run against sample data (the playground's employees, orders, customers, flights, cities and signal) before you see it.</p>
 
   <form id="ask">
     <div class="chip" id="follow">Following up on <strong id="followq"></strong>
@@ -88,7 +89,7 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
     <textarea id="q" placeholder="e.g. what is the average salary in each department?" maxlength="2048" required></textarea>
     <details id="own">
       <summary>About your own data? Paste its columns <span id="inuse"></span></summary>
-      <p>Only your data's <em>column names</em> go here: a CSV header line, or one name per line. Add a few rows to have the pipeline run on them too. It is called <code>data.csv</code>; for more than one file, start each with a line naming it, like <code>--- orders.csv</code>. Questions, including follow-ups, go in the box above. What you paste is used for answers only and is not kept.</p>
+      <p>Only your data's <em>column names</em> go here: a CSV header line, or one name per line. Add a few rows to have the pipeline run on them too. It is called <code>data.csv</code>; for more than one file, start each with a line naming it, like <code>--- orders.csv</code>. An answer over your files links to the playground with them inside the link, so they run there too; nothing is uploaded. Questions, including follow-ups, go in the box above. What you paste is used for answers only and is not kept.</p>
       <textarea id="hdr" placeholder="order_id,customer,amount,placed_at&#10;&#10;or, for several files:&#10;--- orders.csv&#10;order_id,customer,amount&#10;--- customers.csv&#10;customer,region"></textarea>
       <div class="row"><button type="button" class="link" id="clearhdr">Clear the columns</button></div>
     </details>
@@ -234,8 +235,13 @@ function updateInUse() {
   document.getElementById('inuse').textContent = !n ? '' :
     '· ' + (files.length > 1 ? s(files.length, 'file') + ', ' : '') + s(n, 'column') + ' in use';
 }
-hdr.addEventListener('input', updateInUse);
-document.getElementById('clearhdr').onclick = () => { hdr.value = ''; updateInUse(); };
+// The box grows with a paste, so several files show whole (up to ~32 lines).
+function fitHdr() {
+  hdr.style.height = '';
+  if (hdr.scrollHeight > hdr.clientHeight) hdr.style.height = Math.min(hdr.scrollHeight + 4, 32 * 1.5 * 14) + 'px';
+}
+hdr.addEventListener('input', () => { updateInUse(); fitHdr(); });
+document.getElementById('clearhdr').onclick = () => { hdr.value = ''; updateInUse(); fitHdr(); };
 
 // Sharing (Ross, 2026-11-24): the session travels in the link itself,
 // compressed after #s=, so nothing is stored anywhere. A shared link is
@@ -255,7 +261,7 @@ function clean(r) {
   if (!labels[o.status]) o.status = 'prose';
   if (['Go', 'Rust', 'SQL'].includes(r.program)) o.program = r.program;
   o.seconds = typeof r.seconds === 'number' && isFinite(r.seconds) ? r.seconds : 0;
-  if (typeof r.playground === 'string' && r.playground.startsWith(playgroundURL + '#p=')) o.playground = r.playground;
+  if (typeof r.playground === 'string' && /^#[pw]=[A-Za-z0-9_-]+$/.test(r.playground.slice(playgroundURL.length)) && r.playground.startsWith(playgroundURL)) o.playground = r.playground;
   o.docs = Array.isArray(r.docs) ? r.docs.filter(d => typeof d === 'string' && /^[\w./-]+:\d+$/.test(d) && !d.includes('..')) : [];
   return o;
 }
@@ -282,12 +288,15 @@ document.getElementById('share').onclick = async () => {
   box.classList.add('on');
   input.focus();
   input.select();
+  // A playground link with #w= holds the visitor's pasted files, and the
+  // session link holds that link: say it travels with the session.
+  const data = x.some(e => e.r.playground && e.r.playground.startsWith(playgroundURL + '#w=')) ? ' It includes the files you pasted.' : '';
   try {
     await navigator.clipboard.writeText(link);
-    note.textContent = 'Copied: a link to these ' + n + '.';
+    note.textContent = 'Copied: a link to these ' + n + '.' + data;
   } catch (e) {
     // http on the LAN has no clipboard API: the selected link is ready for Ctrl-C.
-    note.textContent = 'Copy this link (' + n + ').';
+    note.textContent = 'Copy this link (' + n + ').' + data;
   }
 };
 
@@ -337,7 +346,9 @@ function show(question, r) {
   if (r.output && r.ran_on === 'generated') html += '<details open><summary>The ' + esc(lang === 'SQL' ? 'SQL' : lang + ' program') + '</summary><pre>' + esc(r.output) + '</pre></details>';
   else if (r.output) html += '<details><summary>Its output</summary><pre>' + esc(r.output) + '</pre></details>';
   const links = [];
-  if (r.playground) links.push('<a href="' + esc(r.playground) + '" target="_blank" rel="noopener">Open in the playground ↗</a>');
+  // A #w= link carries the visitor's files: say so, since the link is their data.
+  if (r.playground) links.push('<a href="' + esc(r.playground) + '" target="_blank" rel="noopener">' +
+    (r.playground.startsWith(playgroundURL + '#w=') ? 'Open in the playground with your files ↗' : 'Open in the playground ↗') + '</a>');
   if (r.docs && r.docs.length) links.push('Docs: ' + r.docs.map(docLink).join(', '));
   if (links.length) html += '<div class="links">' + links.join('') + '</div>';
   html += '<div class="meta">' + r.seconds.toFixed(1) + ' s</div>';

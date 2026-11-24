@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Playground workspace links (`#w=`)** carry a pipeline and the files
+  it reads, raw-deflated in the URL fragment, so no server ever sees the
+  data. The page writes the files into its virtual filesystem, the way an
+  upload does, runs the pipeline, and says which files came with the link
+  and which sample each replaces. File names are checked (letters,
+  digits, `_ - .`, a .csv/.tsv/.json/.jsonl extension, no `..`). At most 8
+  files and 256 KB, inflated, are accepted. A bad link loads nothing and
+  says why. The FAQ uses these links for answers over a visitor's pasted
+  files.
+- **`signal.csv` in the playground**, a 100 Hz signal (t, amplitude),
+  with an fft example. It was the FAQ's one sample the playground lacked,
+  so signal answers had no playground link.
+
 ### Changed
 
 - **A stray argument after a flag names the flag** (autocli v4.23.2):

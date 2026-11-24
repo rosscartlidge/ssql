@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -35,6 +36,7 @@ type visitorFile struct {
 	rows int      // data rows pasted (0: names only)
 	// replaces: a sample file has this name, and the visitor's takes its place
 	replaces bool
+	csv      []byte // the file as written, for a playground workspace link
 }
 
 // A paste holds several files when it is split by lines naming them
@@ -209,27 +211,21 @@ func newVisitor(parent, samples, text string) (*visitor, error) {
 			os.WriteFile(filepath.Join(v.dir, filepath.Base(sf)), b, 0o644)
 		}
 	}
-	for i, vf := range v.files {
-		if err := writeCSV(filepath.Join(v.dir, vf.name), recs[i]); err != nil {
+	for i := range v.files {
+		vf := &v.files[i]
+		var buf bytes.Buffer
+		w := csv.NewWriter(&buf)
+		err := w.WriteAll(recs[i])
+		if err == nil {
+			err = os.WriteFile(filepath.Join(v.dir, vf.name), buf.Bytes(), 0o644)
+		}
+		if err != nil {
 			os.RemoveAll(v.dir)
 			return nil, fmt.Errorf("writing %s: %v", vf.name, err)
 		}
+		vf.csv = buf.Bytes()
 	}
 	return v, nil
-}
-
-func writeCSV(path string, recs [][]string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	w := csv.NewWriter(f)
-	w.WriteAll(recs)
-	if err := w.Error(); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
 }
 
 // prompt tells the model about the visitor's files: context for a question

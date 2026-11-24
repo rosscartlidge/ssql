@@ -6,8 +6,7 @@
 //	go -C scripts/faq run . -eval cases.json -models gemma4:26b,gemma4:31b
 //
 // The ssql binary is the one on PATH unless -ssql names another; the sample
-// data is the playground's (cmd/ssql-playground/data) plus the codelab's
-// signal.csv (samples.go).
+// data is the playground's (cmd/ssql-playground/data, samples.go).
 package main
 
 import (

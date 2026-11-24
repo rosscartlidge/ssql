@@ -2,14 +2,18 @@ package main
 
 import (
 	"bytes"
+	"compress/flate"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -208,14 +212,18 @@ func TestAskLimits(t *testing.T) {
 
 // A visitor's pasted columns: the model's wrong column comes back from
 // schema mode with the real ones, and the corrected pipeline is checked
-// against the columns (no rows, so not run, and no playground link).
+// against the columns (no rows, so not run). Its playground link carries
+// the file, header only.
 func TestAskVisitorColumns(t *testing.T) {
 	s, logPath := testServer(t,
 		"```bash\nssql from data.csv | ssql group-by department -count n\n```",
 		"```bash\nssql from data.csv | ssql group-by dept -count n\n```")
 	w, resp := post(t, s.handler(), askRequest{Question: "count per department", Header: "name,dept,salary"})
-	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "your-columns" || resp.Playground != "" {
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "your-columns" {
 		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if ws := workspaceOf(t, resp.Playground); ws.F["data.csv"] != "name,dept,salary\n" || ws.P != resp.Pipeline {
+		t.Errorf("the workspace: %+v", ws)
 	}
 	if !strings.Contains(resp.Pipeline, "group-by dept ") {
 		t.Errorf("pipeline %q", resp.Pipeline)
@@ -274,8 +282,16 @@ func TestAskVisitorFiles(t *testing.T) {
 	paste := "--- sales.csv\nid,rep,amount\n1,ann,5\n2,bob,7\n3,ann,1\n--- reps\nrep,region\nann,north\nbob,south\n"
 	s, logPath := testServer(t, join)
 	w, resp := post(t, s.handler(), askRequest{Question: "total per region", Header: paste})
-	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "your-rows" || resp.Playground != "" {
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "your-rows" {
 		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	// The playground link carries both files, as written, and the pipeline.
+	ws := workspaceOf(t, resp.Playground)
+	if len(ws.F) != 2 || ws.F["reps.csv"] != "rep,region\nann,north\nbob,south\n" || !strings.HasPrefix(ws.F["sales.csv"], "id,rep,amount\n1,ann,5\n") || ws.P != resp.Pipeline {
+		t.Errorf("the workspace: %+v", ws)
+	}
+	if log, _ := os.ReadFile(logPath); strings.Contains(string(log), "#w=") || strings.Contains(string(log), "north") {
+		t.Errorf("the log must not keep the visitor's data: %s", log)
 	}
 	if !strings.Contains(resp.Output, "north") || !strings.Contains(resp.Output, "6") || !strings.Contains(resp.Output, "7") {
 		t.Errorf("output %q", resp.Output)
@@ -291,6 +307,47 @@ func TestAskVisitorFiles(t *testing.T) {
 	_, resp = post(t, s2.handler(), askRequest{Question: "total per region", Header: "--- sales.csv\nid,rep,amount\n1,ann,5\n--- reps.csv\nrep\nregion\n"})
 	if resp.Status != "verified" || resp.RanOn != "your-columns" {
 		t.Errorf("one file names only: %+v", resp)
+	}
+}
+
+// workspaceOf decodes a #w= playground link the way the playground's
+// workspaceFromHash does.
+func workspaceOf(t *testing.T, link string) (ws struct {
+	V int
+	P string
+	F map[string]string
+}) {
+	t.Helper()
+	b64, ok := strings.CutPrefix(link, playground+"#w=")
+	if !ok {
+		t.Fatalf("not a workspace link: %q", link)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := io.ReadAll(flate.NewReader(bytes.NewReader(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(doc, &ws); err != nil || ws.V != 1 {
+		t.Fatalf("%s: %v", doc, err)
+	}
+	return ws
+}
+
+// A pipeline over the samples only keeps the plain #p= link, even with
+// files pasted; one reading a pasted file names only the files it reads.
+func TestPlaygroundLink(t *testing.T) {
+	v := &visitor{files: []visitorFile{{name: "data.csv", csv: []byte("a\n1\n")}, {name: "b.csv", csv: []byte("b\n")}}}
+	if l := playgroundLink("ssql from employees.csv", v); !strings.HasPrefix(l, playground+"#p=") {
+		t.Errorf("samples only: %s", l)
+	}
+	if l := playgroundLink("ssql from employees.csv", nil); !strings.HasPrefix(l, playground+"#p=") {
+		t.Errorf("no visitor: %s", l)
+	}
+	if ws := workspaceOf(t, playgroundLink("ssql from data.csv | ssql count", v)); len(ws.F) != 1 || ws.F["data.csv"] != "a\n1\n" {
+		t.Errorf("%+v", ws)
 	}
 }
 
@@ -465,8 +522,9 @@ func TestAskKeysChecked(t *testing.T) {
 	}
 }
 
-// A signal answer runs on the FAQ's signal.csv, and gets no playground link
-// (the playground lacks the file); the log keeps the answer's text.
+// A signal answer runs on signal.csv, and gets its playground link (the
+// playground has the file since 2026-11-24); the log keeps the answer's
+// text.
 func TestAskSignalSample(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	repo, err := repoRoot()
@@ -480,11 +538,47 @@ func TestAskSignalSample(t *testing.T) {
 	s, logPath := testServer(t, "The strongest frequencies:\n```bash\nssql from signal.csv | ssql fft -field amplitude -rate 100 | ssql top 3 -field magnitude\n```")
 	s.f.box.dataDir = samples
 	w, resp := post(t, s.handler(), askRequest{Question: "strongest frequencies?"})
-	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "sample" || resp.Playground != "" {
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "sample" || !strings.HasPrefix(resp.Playground, playground+"#p=") {
 		t.Fatalf("%d %+v", w.Code, resp)
 	}
 	if log, _ := os.ReadFile(logPath); !strings.Contains(string(log), `"reply":"The strongest frequencies`) {
 		t.Errorf("the log must keep the reply: %s", log)
+	}
+}
+
+// The FAQ verifies on the files the playground loads, so a playground
+// link opens on the data the answer ran on: the page's DATA_FILES is the
+// data directory, and the playground's signal.csv is the codelab's.
+func TestSamplesAreThePlaygrounds(t *testing.T) {
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := os.ReadFile(filepath.Join(repo, "cmd", "ssql-playground", "playground.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`const DATA_FILES = \[([^\]]*)\]`).FindSubmatch(page)
+	if m == nil {
+		t.Fatal("playground.html has no DATA_FILES")
+	}
+	var listed []string
+	for _, q := range regexp.MustCompile(`'([^']+)'`).FindAllSubmatch(m[1], -1) {
+		listed = append(listed, string(q[1]))
+	}
+	files, _ := filepath.Glob(filepath.Join(repo, samplesDir, "*"))
+	var have []string
+	for _, f := range files {
+		have = append(have, filepath.Base(f))
+	}
+	slices.Sort(listed)
+	if strings.Join(listed, " ") != strings.Join(have, " ") {
+		t.Errorf("DATA_FILES %v, but %s holds %v", listed, samplesDir, have)
+	}
+	a, _ := os.ReadFile(filepath.Join(repo, samplesDir, "signal.csv"))
+	b, _ := os.ReadFile(filepath.Join(repo, "doc", "codelab-data", "signal.csv"))
+	if len(a) == 0 || string(a) != string(b) {
+		t.Errorf("the playground's signal.csv differs from the codelab's")
 	}
 }
 
@@ -494,7 +588,7 @@ func TestSampleNotesMatchTheData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(filepath.Join(repo, "doc", "codelab-data", "signal.csv"))
+	b, err := os.ReadFile(filepath.Join(repo, samplesDir, "signal.csv"))
 	if err != nil {
 		t.Fatal(err)
 	}

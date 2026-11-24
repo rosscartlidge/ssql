@@ -17,6 +17,11 @@
 <html><body>
 <iframe id="pg" src="playground.html" style="width:1200px;height:800px"></iframe>
 <iframe id="pgshare" src="playground.html#p=c3NxbCBmcm9tIGVtcGxveWVlcy5jc3YKfCBzc3FsIGdyb3VwLWJ5IGRlcHQgLWNvdW50IGNudAp8IHNzcWwgdG8gdGFibGU" style="width:1200px;height:800px"></iframe>
+<!-- Workspace links (#w=: a pipeline plus its files, made by the FAQ):
+     a good one with sales.csv, reps.csv and a cities.csv replacing the
+     sample; a bad one naming ../etc/passwd.csv, which must load nothing. -->
+<iframe id="pgws" src="playground.html#w=RY7BDoJADER_pdnzYoLGmHjzP_ayIOKapUXaJSHIv7tFxVPbyUznzWY0ZygtmD5Pw_yMcBuoA_ax4V3No8MXrPKDAsLQ9KsKReKArd6boR0o9UU1ZbENhFBw6sB3lFBASHzcnEyDfF2bJgTiq9iYzHLLLLPZEJQsXG3usp93DkvrEe3R4d5WVNmTw8OqlA71wQ9Tkxr7dakFc_ndocaYkq6aqIOEf1u-JocXiR4lcHYsyxs" style="width:1200px;height:800px"></iframe>
+<iframe id="pgwsbad" src="playground.html#w=HcwxDoAgEETRq2ymNhBbb4O4VBDQJahB7i5QTfFfpqJgo3UhpL4QOT25KwbikHx8mUVZKfTRLDlSNrtndO-6r1BKc7Y6GZH7GHS8PGjtBw" style="width:1200px;height:800px"></iframe>
 <pre id="results">RUNNING</pre>
 <script>
 const out = [];
@@ -491,11 +496,42 @@ async function run() {
         record("share-link-autorun", false, "share iframe never ready");
     }
 
+    // 13. Workspace link (#w=...): its files are written, the pipeline
+    //    runs on them, and the note names the files and the replaced sample.
+    const w3 = document.getElementById('pgws').contentWindow;
+    if (await waitReady(w3)) {
+        const o3 = w3.document.getElementById('output').textContent;
+        const n3 = w3.document.getElementById('wsNote').textContent;
+        record("workspace-link-runs",
+            /north\s+6/.test(o3) && /south\s+7/.test(o3),
+            "output: " + o3.slice(0, 160));
+        record("workspace-link-note",
+            n3.includes("sales.csv, reps.csv, cities.csv") && n3.includes("replaces the sample cities.csv"),
+            "note: " + n3);
+        record("workspace-file-replaces-sample",
+            // A top-level const is not a window property: read it in the page.
+            w3.eval("SAMPLE_DATASETS['cities.csv']") === "city\nAtlantis\n", String(w3.eval("SAMPLE_DATASETS['cities.csv']")).slice(0, 40));
+    } else {
+        record("workspace-link-runs", false, "workspace iframe never ready");
+    }
+    // 14. A workspace naming ../etc/passwd.csv loads nothing and says why.
+    const w4 = document.getElementById('pgwsbad').contentWindow;
+    if (await waitReady(w4)) {
+        const n4 = w4.document.getElementById('wsNote').textContent;
+        record("workspace-bad-name-refused",
+            n4.includes("nothing was loaded") && n4.includes("../etc/passwd.csv") && w4.document.getElementById('pipeline').value.includes("ssql from employees.csv\n"),
+            "note: " + n4 + " :: pipeline: " + w4.document.getElementById('pipeline').value.slice(0, 40));
+    } else {
+        record("workspace-bad-name-refused", false, "bad workspace iframe never ready");
+    }
+
     finish();
 }
 function finish() {
     document.getElementById('results').textContent = "DONE\n" + out.join("\n");
 }
-run();
+// An exception in a step is a FAIL with its stack, not a page left at
+// RUNNING that the script reports only as "did not finish".
+run().catch(e => { record("harness-exception", false, String(e && e.stack || e)); finish(); });
 </script>
 </body></html>

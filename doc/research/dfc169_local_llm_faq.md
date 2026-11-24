@@ -1077,3 +1077,47 @@ one box over several boxes.
 Live, on a scratch instance: sales.csv and reps.csv, both with rows,
 produced the join, verified on the visitor's rows (north 8, south 7). With
 reps.csv as names only, the same join came back `your-columns`.
+
+### 12.15 Answers open in the playground with their data (2026-11-24)
+
+Ross asked for a way to push the files an answer was verified on to the
+playground, so a visitor could run it there. Two kinds of file had kept
+answers from getting a playground link:
+
+- **signal.csv**, the FAQ's one sample the playground lacked. It moved
+  into `cmd/ssql-playground/data` (a copy of the codelab's, and a test
+  keeps the two equal) and the page's `DATA_FILES`, with an fft example.
+  The FAQ's samples are now exactly the playground's directory:
+  `faqOnlySamples` and `readsFAQOnly` are gone, and
+  `TestSamplesAreThePlaygrounds` fails when `DATA_FILES` and the
+  directory differ. It was watched failing with signal.csv left out of
+  the list.
+- **The visitor's pasted files.** The playground gained a second link
+  form, `#w=`: base64url of raw deflate of `{v:1, p, f:{name: contents}}`,
+  the same encoding as the FAQ's `#s=` session links. The FAQ's
+  `playgroundLink` uses it when the pipeline reads a pasted file, and
+  carries only the files it reads. Otherwise it keeps `#p=`. A fragment
+  never reaches a server, and the question log never keeps the link, so
+  the data lives only in the link the visitor holds. The page says so in
+  the paste help, labels the link "Open in the playground with your
+  files", and the share note warns that a shared session includes them.
+- **The playground treats a `#w=` link as untrusted input.** It checks
+  the names, caps the inflated size at 256 KB while it inflates, and
+  allows at most 8 files. A note names the files and any sample each
+  one replaces. A bad link loads nothing and says why.
+
+Gates: `scripts/playground-test.sh` gained four checks: a workspace link
+runs its join, its note names the files, a pasted cities.csv replaces
+the sample, and a `../etc/passwd.csv` name is refused. The last was
+watched failing with the name checks removed. The harness also now
+reports an exception in a step as a FAIL with its stack: an exception had
+left the page at RUNNING, reported only as "did not finish". In the
+faq: `TestPlaygroundLink`, plus workspace decoding in the visitor tests,
+watched failing with the link forced to `#p=`.
+
+Live: the LAN FAQ answered the sales and reps join with a 278-character
+`#w=` link. Opened in the locally built playground, the link ran the
+join on the visitor's rows (north 8, south 7).
+
+The paste box is taller (14em) and grows with a paste, up to about 32
+lines, so several files show whole (Ross).

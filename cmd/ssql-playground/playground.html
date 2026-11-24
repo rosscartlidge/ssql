@@ -32,6 +32,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .datasets span { color: #9ece6a; }
 .loading { text-align: center; padding: 40px; color: #565f89; }
 #status { font-size: 0.8em; color: #565f89; margin-bottom: 12px; }
+#wsNote { display: none; background: #24283b; border: 1px solid #3b4261; border-left: 3px solid #9ece6a; border-radius: 8px; padding: 8px 14px; margin-bottom: 12px; font-size: 0.8em; color: #a9b1d6; }
+#wsNote.bad { border-left-color: #f7768e; }
 #filesBar { display: none; background: #24283b; border: 1px solid #3b4261; border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; font-size: 13px; }
 #filesBar .fname { color: #73daca; }
 #filesBar button { margin-left: 8px; padding: 2px 10px; font-size: 12px; }
@@ -63,6 +65,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 <div class="subtitle">SQL-style stream processing — runs entirely in your browser via WebAssembly</div>
 <div class="subtitle">Suggestions appear <b style="color:#9ece6a;">as you type</b> — commands, flags, files, pipeline-aware field names and values (<b style="color:#9ece6a;">Tab</b> or click accepts, Esc dismisses) · <b style="color:#9ece6a;">? Help</b> (Alt-h) explains the command or flag at your cursor</div>
 <div id="status">Loading WASM module...</div>
+<div id="wsNote"></div>
 
 <div class="input-area">
     <label>Pipeline <span style="color:#565f89; font-weight:normal;">— type for suggestions, Tab accepts · "? Help" for the flag under the cursor · # comments out a command</span></label>
@@ -130,6 +133,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" onclick="loadExample(26)">int128 — a sum past 2^63 and squares of 39 digits, exact (cast -type n int128)</button>
     <button class="example-btn" onclick="loadExample(27)">decimal — 7% tax per order to the cent (-type amount decimal:2), summed exactly beside the float's drift</button>
     <button class="example-btn" onclick="loadExample(28)">Graph — quickest route from Sydney to every city (traverse; try -all-paths, another -start, or -start-file &lt;(ssql from cities.csv | ssql rename -as city src))</button>
+    <button class="example-btn" onclick="loadExample(29)">Signal — the strongest frequencies in a 100 Hz signal (fft; try spectrogram)</button>
 </div>
 
 <div class="datasets">
@@ -138,7 +142,8 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('orders.csv')">orders.csv</button> (40 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('customers.csv')">customers.csv</button> (20 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('flights.csv')">flights.csv</button> (10 rows) ·
-    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('cities.csv')">cities.csv</button> (8 rows) · or upload your own
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('cities.csv')">cities.csv</button> (8 rows) ·
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('signal.csv')">signal.csv</button> (256 samples at 100 Hz) · or upload your own
     <br><br>This playground runs a real ssql binary compiled to WebAssembly — <b>Tab</b> completes commands,
     flags, operators, files, and <i>pipeline-aware field names</i> (it runs your upstream stages in schema mode,
     so after a group-by it offers the grouped and aggregate fields); <b>Alt-h</b> (or "? Help") explains whatever
@@ -155,7 +160,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
-const DATA_FILES = ['employees.csv', 'orders.csv', 'customers.csv', 'flights.csv', 'cities.csv'];
+const DATA_FILES = ['employees.csv', 'orders.csv', 'customers.csv', 'flights.csv', 'cities.csv', 'signal.csv'];
 
 async function loadDatasets() {
     for (const name of DATA_FILES) {
@@ -287,6 +292,10 @@ const EXAMPLES = [
     `ssql from flights.csv
 | ssql traverse -from src -to dst -start SYD -lowest-sum mins total -depth hops -path route
 | ssql to table`,
+    `ssql from signal.csv
+| ssql fft -field amplitude -rate 100
+| ssql top 3 -field magnitude
+| ssql to table`,
 ];
 
 // Examples that should auto-optimize instead of run (by index)
@@ -369,6 +378,87 @@ function pipelineFromHash() {
     }
 }
 
+// --- Workspace links ---
+// #w=<base64url(raw deflate(JSON))> carries a pipeline AND the files it
+// reads: {v:1, p:"pipeline", f:{"name.csv":"contents"}}. The FAQ makes
+// them for an answer over a visitor's pasted files (Ross, 2026-11-24),
+// so the answer opens here and runs on the visitor's data. The fragment
+// never reaches a server: the data travels in the link and lands only in
+// this page's virtual FS, as an upload would. A link is someone else's
+// input, so names are checked, the inflated size is capped while it
+// inflates, and the page says which files came with it and which sample
+// each one replaces.
+const WORKSPACE_FILE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.(csv|tsv|json|jsonl)$/;
+const WORKSPACE_MAX_BYTES = 256 << 10;
+const WORKSPACE_MAX_FILES = 8;
+
+// Returns null without a #w= fragment, {error} for a bad one, else
+// {pipeline, files: [[name, contents], ...]}.
+async function workspaceFromHash() {
+    const m = location.hash.match(/^#w=([A-Za-z0-9_-]+)$/);
+    if (!m) return null;
+    try {
+        const bin = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
+        const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+        const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+        const chunks = [];
+        let total = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.length;
+            if (total > WORKSPACE_MAX_BYTES) {
+                reader.cancel();
+                throw new Error('it holds over ' + (WORKSPACE_MAX_BYTES >> 10) + ' KB');
+            }
+            chunks.push(value);
+        }
+        const all = new Uint8Array(total);
+        let at = 0;
+        for (const c of chunks) { all.set(c, at); at += c.length; }
+        const doc = JSON.parse(new TextDecoder().decode(all));
+        if (!doc || doc.v !== 1 || typeof doc.p !== 'string' || !doc.f || typeof doc.f !== 'object' || Array.isArray(doc.f)) {
+            throw new Error('it is not a workspace');
+        }
+        const files = Object.entries(doc.f);
+        if (files.length > WORKSPACE_MAX_FILES) throw new Error('it holds ' + files.length + ' files; at most ' + WORKSPACE_MAX_FILES);
+        for (const [name, contents] of files) {
+            if (!WORKSPACE_FILE.test(name) || name.includes('..') || typeof contents !== 'string') {
+                throw new Error('it holds a file named ' + JSON.stringify(name.slice(0, 80)));
+            }
+        }
+        return { pipeline: doc.p, files };
+    } catch (e) {
+        return { error: e.message || String(e) };
+    }
+}
+
+// openWorkspace writes a workspace's files and says what came with it.
+function openWorkspace(ws) {
+    const note = document.getElementById('wsNote');
+    note.style.display = 'block';
+    if (ws.error) {
+        note.className = 'bad';
+        note.textContent = 'This link should have brought a pipeline and its files, but ' + ws.error + ', so nothing was loaded.';
+        return null;
+    }
+    const replaced = [];
+    for (const [name, contents] of ws.files) {
+        if (DATA_FILES.includes(name)) replaced.push(name);
+        _fsWriteFile(name, contents);
+        SAMPLE_DATASETS[name] = contents;
+    }
+    const names = ws.files.map(([n]) => n);
+    let text = names.length
+        ? 'This link brought its own data: ' + names.join(', ') + '.'
+        : 'This link brought a pipeline.';
+    if (replaced.length) text += ' It replaces the sample ' + replaced.join(', ') + ' in this page.';
+    if (names.length) text += ' The files are in this page only: nothing was uploaded.';
+    note.className = '';
+    note.textContent = text;
+    return ws.pipeline;
+}
+
 // --- WASM setup ---
 let wasmReady = false;
 
@@ -409,9 +499,10 @@ async function initWasm() {
     document.getElementById('btnGenerateJSON').disabled = false;
     document.getElementById('btnHelpAt').disabled = false;
 
-    // A shared link (#p=...) preloads its pipeline and runs it;
-    // otherwise show the first example.
-    const shared = pipelineFromHash();
+    // A shared link (#p=...) or a workspace link (#w=..., with files)
+    // preloads its pipeline and runs it; otherwise show the first example.
+    const ws = await workspaceFromHash();
+    const shared = ws ? openWorkspace(ws) : pipelineFromHash();
     if (shared !== null) {
         document.getElementById('pipeline').value = shared;
         updateClearVisibility();

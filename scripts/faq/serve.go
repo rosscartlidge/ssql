@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/flate"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -252,12 +254,42 @@ func respond(a answer, v *visitor, took time.Duration) askResponse {
 	default:
 		resp.Status, resp.Failure = "unverified", a.Failure
 	}
-	// The playground holds the same sample files; a visitor's data.csv
-	// is not there.
-	if resp.Verified && !a.Setup && a.RanOn != "generated" && !readsFAQOnly(a.Pipeline) && !echoesDocument(a.Pipeline) && (v == nil || !v.readBy(a.Pipeline)) {
-		resp.Playground = playground + "#p=" + base64.RawURLEncoding.EncodeToString([]byte(runnable(a.Pipeline)))
+	// The playground holds the same sample files (TestSamplesAreThePlaygrounds),
+	// and a visitor's files the pipeline reads travel in the link itself.
+	if resp.Verified && !a.Setup && a.RanOn != "generated" && !echoesDocument(a.Pipeline) {
+		resp.Playground = playgroundLink(runnable(a.Pipeline), v)
 	}
 	return resp
+}
+
+// playgroundLink opens a pipeline in the playground: #p= with the
+// pipeline alone, or #w= (a workspace) with the visitor's files it reads,
+// as raw deflate of {v:1, p, f:{name: contents}}, the playground's
+// workspaceFromHash. The data goes only into the link: the playground
+// is a static page and a fragment never reaches its server, and the
+// question log never keeps the link.
+func playgroundLink(pipeline string, v *visitor) string {
+	var files []visitorFile
+	if v != nil {
+		files = v.read(pipeline)
+	}
+	if len(files) == 0 {
+		return playground + "#p=" + base64.RawURLEncoding.EncodeToString([]byte(pipeline))
+	}
+	ws := struct {
+		V int               `json:"v"`
+		P string            `json:"p"`
+		F map[string]string `json:"f"`
+	}{V: 1, P: pipeline, F: map[string]string{}}
+	for _, f := range files {
+		ws.F[f.name] = string(f.csv)
+	}
+	doc, _ := json.Marshal(ws)
+	var buf bytes.Buffer
+	zw, _ := flate.NewWriter(&buf, flate.BestCompression)
+	zw.Write(doc)
+	zw.Close()
+	return playground + "#w=" + base64.RawURLEncoding.EncodeToString(buf.Bytes())
 }
 
 func (s *server) record(req askRequest, v *visitor, a answer, resp askResponse) {
