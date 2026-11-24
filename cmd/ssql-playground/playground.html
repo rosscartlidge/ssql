@@ -143,7 +143,8 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('customers.csv')">customers.csv</button> (20 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('flights.csv')">flights.csv</button> (10 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('cities.csv')">cities.csv</button> (8 rows) ·
-    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('signal.csv')">signal.csv</button> (256 samples at 100 Hz) · or upload your own
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('signal.csv')">signal.csv</button> (256 samples at 100 Hz) ·
+    <span id="yourDatasets"></span>or upload your own
     <br><br>This playground runs a real ssql binary compiled to WebAssembly — <b>Tab</b> completes commands,
     flags, operators, files, and <i>pipeline-aware field names</i> (it runs your upstream stages in schema mode,
     so after a group-by it offers the grouped and aggregate fields); <b>Alt-h</b> (or "? Help") explains whatever
@@ -433,6 +434,32 @@ async function workspaceFromHash() {
     }
 }
 
+// listDataset adds a file that came with a link or an upload to the
+// datasets list, so it can be viewed like a sample (Ross, 2026-11-24: the
+// files a link brought were usable but not listed). Built from DOM nodes:
+// a name is someone else's input.
+function listDataset(name, contents, how) {
+    const box = document.getElementById('yourDatasets');
+    let item = [...box.children].find(el => el.dataset.name === name);
+    if (!item) {
+        item = document.createElement('span');
+        item.dataset.name = name;
+        box.appendChild(item);
+    }
+    const b = document.createElement('button');
+    b.className = 'example-btn';
+    b.style.display = 'inline';
+    b.style.width = 'auto';
+    b.textContent = name;
+    b.onclick = () => viewDataset(name);
+    const lines = contents.replace(/\n$/, '').split('\n').length;
+    const csv = /\.(csv|tsv)$/.test(name);
+    const n = csv ? lines - 1 : lines, unit = csv ? 'row' : 'line';
+    const note = ' (' + n + ' ' + unit + (n === 1 ? '' : 's') + ', ' + how +
+        (DATA_FILES.includes(name) ? ', replaces the sample' : '') + ') · ';
+    item.replaceChildren(b, note);
+}
+
 // openWorkspace writes a workspace's files and says what came with it.
 function openWorkspace(ws) {
     const note = document.getElementById('wsNote');
@@ -447,6 +474,7 @@ function openWorkspace(ws) {
         if (DATA_FILES.includes(name)) replaced.push(name);
         _fsWriteFile(name, contents);
         SAMPLE_DATASETS[name] = contents;
+        listDataset(name, contents, 'from the link');
     }
     const names = ws.files.map(([n]) => n);
     let text = names.length
@@ -728,6 +756,7 @@ function uploadFile(event) {
     reader.onload = () => {
         ssqlUIWriteUpload(file.name, reader.result);
         SAMPLE_DATASETS[file.name] = reader.result;
+        listDataset(file.name, reader.result, 'uploaded');
     };
     reader.readAsText(file);
 }

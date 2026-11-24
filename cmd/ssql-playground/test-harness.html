@@ -511,6 +511,16 @@ async function run() {
         record("workspace-file-replaces-sample",
             // A top-level const is not a window property: read it in the page.
             w3.eval("SAMPLE_DATASETS['cities.csv']") === "city\nAtlantis\n", String(w3.eval("SAMPLE_DATASETS['cities.csv']")).slice(0, 40));
+        const d3 = w3.document.getElementById('yourDatasets').textContent;
+        record("workspace-files-listed",
+            d3.includes("sales.csv (3 rows, from the link)") && d3.includes("reps.csv (2 rows, from the link)") &&
+            d3.includes("cities.csv (1 row, from the link, replaces the sample)"),
+            "datasets: " + d3);
+        w3.document.querySelector('#yourDatasets button').click();
+        const v3 = w3.document.getElementById('dataViewer');
+        record("workspace-file-viewable",
+            v3.style.display !== 'none' && v3.textContent.includes("ann"),
+            "viewer: " + v3.textContent.slice(0, 120));
     } else {
         record("workspace-link-runs", false, "workspace iframe never ready");
     }

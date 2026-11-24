@@ -1121,3 +1121,12 @@ join on the visitor's rows (north 8, south 7).
 
 The paste box is taller (14em) and grows with a paste, up to about 32
 lines, so several files show whole (Ross).
+
+The files a `#w=` link brought were usable but missing from the
+playground's "Available datasets" list (Ross). `listDataset` now adds
+each one as a viewable button, with its row count and where it came
+from ("from the link", "replaces the sample"). It is built from DOM
+nodes, because the names are someone else's input. Uploaded files get
+the same entry: they were never listed before either. The harness checks
+the list and that a click shows the file, and was watched failing
+without the call.
