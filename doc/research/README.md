@@ -178,6 +178,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC168 | 2026-11-11 | 2026-11-15 | [Heavy formats as packages a program imports](./dfc168_heavy_formats_as_packages.md) |
 | DFC169 | 2026-11-15 | 2026-11-25 | [A Dynamic FAQ on a Local Model: Teaching Gemma to Answer for ssql](./dfc169_local_llm_faq.md) |
 | DFC170 | 2026-11-15 | 2026-11-15 | [Schema Mode Is a Lane: Making Its Predictions Exact](./dfc170_schema_mode_is_a_lane.md) |
+| DFC171 | 2026-11-25 | 2026-11-25 | [The Public FAQ in a Container](./dfc171_faq_public_container.md) |
 
 <!-- DFC-INDEX-END -->
 
