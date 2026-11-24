@@ -78,6 +78,7 @@ type logLine struct {
 	Time        string  `json:"time"`
 	ID          string  `json:"id,omitempty"` // what a vote line names
 	Question    string  `json:"question"`
+	PastedFiles int     `json:"pasted_files,omitempty"`
 	PastedCols  int     `json:"pasted_cols,omitempty"`
 	PastedRows  int     `json:"pasted_rows,omitempty"`
 	FollowUp    bool    `json:"follow_up,omitempty"`
@@ -266,7 +267,7 @@ func (s *server) record(req askRequest, v *visitor, a answer, resp askResponse) 
 	l := logLine{Time: time.Now().UTC().Format(time.RFC3339), ID: resp.ID, Question: req.Question, Model: s.llm.model,
 		Pipeline: a.Pipeline, Status: resp.Status, Failure: firstLine(resp.Failure), Reply: clip(a.Reply, 8<<10), Revised: a.Revised, Corrections: a.Retries, Seconds: resp.Seconds}
 	if v != nil {
-		l.PastedCols, l.PastedRows = len(v.cols), v.rows
+		l.PastedFiles, l.PastedCols, l.PastedRows = v.counts()
 	}
 	l.FollowUp, l.Public = req.Previous != nil, s.public
 	s.appendLog(l)

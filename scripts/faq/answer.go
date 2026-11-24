@@ -366,7 +366,7 @@ func (f *faq) check(a *answer, box sandbox, v *visitor) string {
 		}
 	}
 	mine := v != nil && v.readBy(a.Pipeline)
-	if mine && v.rows == 0 {
+	if mine && v.columnsOnly(a.Pipeline) {
 		a.Checked, a.RanOn, a.Failure = true, "your-columns", ""
 		return ""
 	}
@@ -395,7 +395,7 @@ func (f *faq) feedback(pipeline, problem string, v *visitor) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "That pipeline failed:\n\n%s\n", problem)
 	if v != nil {
-		sb.WriteString("\nRemember: the visitor's data is data.csv, with the columns given above.\n")
+		fmt.Fprintf(&sb, "\nRemember: the visitor's data is %s, with the columns given above.\n", v.names())
 	}
 	cmds, _ := validatePipeline(runnable(pipeline))
 	sort.Strings(cmds)

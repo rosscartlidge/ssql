@@ -88,8 +88,8 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
     <textarea id="q" placeholder="e.g. what is the average salary in each department?" maxlength="2048" required></textarea>
     <details id="own">
       <summary>About your own data? Paste its columns <span id="inuse"></span></summary>
-      <p>Only your data's <em>column names</em> go here: a CSV header line, or one name per line. Add a few rows to have the pipeline run on them too. Questions, including follow-ups, go in the box above. What you paste is used for answers only and is not kept.</p>
-      <textarea id="hdr" placeholder="order_id,customer,amount,placed_at"></textarea>
+      <p>Only your data's <em>column names</em> go here: a CSV header line, or one name per line. Add a few rows to have the pipeline run on them too. It is called <code>data.csv</code>; for more than one file, start each with a line naming it, like <code>--- orders.csv</code>. Questions, including follow-ups, go in the box above. What you paste is used for answers only and is not kept.</p>
+      <textarea id="hdr" placeholder="order_id,customer,amount,placed_at&#10;&#10;or, for several files:&#10;--- orders.csv&#10;order_id,customer,amount&#10;--- customers.csv&#10;customer,region"></textarea>
       <div class="row"><button type="button" class="link" id="clearhdr">Clear the columns</button></div>
     </details>
     <div class="row">
@@ -200,6 +200,21 @@ document.getElementById('newsession').onclick = () => {
 // The pasted columns: say when they are in use, and catch a question
 // typed into the wrong box (the server refuses it too).
 const hdr = document.getElementById('hdr');
+// The paste's files: the server's split, at lines like `--- orders.csv`.
+function sectionsOf(text) {
+  const out = [];
+  let name = 'data.csv', body = [];
+  const flush = () => { if (body.join('\n').trim() || name !== 'data.csv') out.push({ name, body: body.join('\n') }); };
+  for (const ln of text.replace(/\r\n/g, '\n').trim().split('\n')) {
+    const m = ln.match(/^\s*-{3,}\s*([^\s-]\S*?)\s*-*\s*$/);
+    if (!m) { body.push(ln); continue; }
+    flush();
+    name = m[1].includes('.') ? m[1] : m[1] + '.csv';
+    body = [];
+  }
+  flush();
+  return out;
+}
 function columnsOf(text) {
   const t = text.trim();
   if (!t) return [];
@@ -213,8 +228,11 @@ function looksLikeSentence(c) {
   return c.endsWith('?') || c.split(/\s+/).length >= 5;
 }
 function updateInUse() {
-  const n = columnsOf(hdr.value).length;
-  document.getElementById('inuse').textContent = n ? '· ' + n + ' column' + (n === 1 ? '' : 's') + ' in use' : '';
+  const files = sectionsOf(hdr.value);
+  const n = files.reduce((t, f) => t + columnsOf(f.body).length, 0);
+  const s = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');
+  document.getElementById('inuse').textContent = !n ? '' :
+    '· ' + (files.length > 1 ? s(files.length, 'file') + ', ' : '') + s(n, 'column') + ' in use';
 }
 hdr.addEventListener('input', updateInUse);
 document.getElementById('clearhdr').onclick = () => { hdr.value = ''; updateInUse(); };
@@ -303,7 +321,7 @@ function show(question, r) {
   const div = document.createElement('div');
   div.className = 'answer';
   let label = labels[r.status] || r.status;
-  if (r.status === 'verified' && r.ran_on === 'your-columns') label = 'checked against your columns (not run: no rows)';
+  if (r.status === 'verified' && r.ran_on === 'your-columns') label = 'checked against your columns (not run: a file it reads has no rows)';
   if (r.status === 'verified' && r.ran_on === 'your-rows') label = 'verified: it ran on your rows';
   if (r.status === 'unverified' && !r.pipeline) label = 'not verified';
   if (r.status === 'verified' && r.ran_on === 'setup') label = 'verified: ssql printed this setup, and bash accepts it';
@@ -358,10 +376,13 @@ async function ask() {
   const go = document.getElementById('go'), status = document.getElementById('status');
   // The server's rule: a header with no rows and at most two names, one of
   // which reads as a sentence.
-  const cols = columnsOf(header);
-  const lines = header.trim().split('\n');
-  const headerOnly = lines.length === 1 || !/[,\t]/.test(lines[0]);
-  if (headerOnly && cols.length && cols.length <= 2 && cols.some(looksLikeSentence)) {
+  const sentence = sectionsOf(header).some(f => {
+    const cols = columnsOf(f.body);
+    const lines = f.body.trim().split('\n');
+    const headerOnly = lines.length === 1 || !/[,\t]/.test(lines[0]);
+    return headerOnly && cols.length && cols.length <= 2 && cols.some(looksLikeSentence);
+  });
+  if (sentence) {
     status.textContent = 'The columns box holds a question. Ask it in the question box, then clear the columns.';
     document.getElementById('own').open = true;
     return;

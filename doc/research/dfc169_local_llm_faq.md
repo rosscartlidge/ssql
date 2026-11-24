@@ -1045,3 +1045,35 @@ Checked in headless Chrome: a good link and a hostile one, and a round
 trip of the Share button's own link (questions intact, no ids). The
 page has no browser test harness of its own, so these were one-off
 checks rather than gates.
+
+### 12.14 More than one pasted file (2026-11-24)
+
+Ross asked whether a visitor could give more than one CSV. They couldn't:
+the paste was always `data.csv`, so a question joining two of the
+visitor's own files named a file that didn't exist and went out as an
+illustration, with no columns checked. He chose named sections in the
+one box over several boxes.
+
+- **The split.** A line like `--- orders.csv` starts a file. A name
+  without an extension gets `.csv`, and any other extension is refused,
+  because the file is written as CSV. Text before the first such line is
+  `data.csv`, so an old paste means what it did. A bare `---` is data.
+  Names are letters, digits, `_ - .`, with no `..`. There are at most 8
+  files, and the 20 KB limit covers the whole paste. Each section gets
+  the same checks as before, and an error names its file.
+- **Samples.** The files sit beside the sample copies. A pasted file
+  with a sample's name replaces it, and the prompt says so.
+- **Checked or run.** If any visitor file the pipeline reads has names
+  only, the answer stops at schema mode (`your-columns`), since a join
+  over an empty file answers from nothing. If every file it reads has
+  rows, it runs (`your-rows`). "Reads" means the name stands on its own,
+  so `mydata.csv` isn't `data.csv`.
+- **The log** counts files, columns and rows (`pasted_files`), never
+  their content.
+- **The page** splits the paste the same way to show "2 files, 5
+  columns in use", and checks each section for a question typed into the
+  wrong box.
+
+Live, on a scratch instance: sales.csv and reps.csv, both with rows,
+produced the join, verified on the visitor's rows (north 8, south 7). With
+reps.csv as names only, the same join came back `your-columns`.

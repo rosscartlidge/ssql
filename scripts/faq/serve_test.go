@@ -266,6 +266,72 @@ func TestAskVisitorSampleAnswer(t *testing.T) {
 	}
 }
 
+// Named sections (Ross, 2026-11-24): a paste split by `--- NAME` lines is
+// several files. Two with rows are joined and run on; one with names only
+// makes the answer checked, not run, since a join over it has no rows.
+func TestAskVisitorFiles(t *testing.T) {
+	join := "```bash\nssql from sales.csv | ssql join reps.csv -using rep | ssql group-by region -sum amount total | ssql sort region\n```"
+	paste := "--- sales.csv\nid,rep,amount\n1,ann,5\n2,bob,7\n3,ann,1\n--- reps\nrep,region\nann,north\nbob,south\n"
+	s, logPath := testServer(t, join)
+	w, resp := post(t, s.handler(), askRequest{Question: "total per region", Header: paste})
+	if w.Code != 200 || resp.Status != "verified" || resp.RanOn != "your-rows" || resp.Playground != "" {
+		t.Fatalf("%d %+v", w.Code, resp)
+	}
+	if !strings.Contains(resp.Output, "north") || !strings.Contains(resp.Output, "6") || !strings.Contains(resp.Output, "7") {
+		t.Errorf("output %q", resp.Output)
+	}
+	if p := lastCall[len(lastCall)-1].Content; !strings.Contains(p, "`sales.csv`, with the columns id, rep, amount (with 3 sample rows)") ||
+		!strings.Contains(p, "`reps.csv`, with the columns rep, region") {
+		t.Errorf("the prompt: %s", p)
+	}
+	if log, _ := os.ReadFile(logPath); !strings.Contains(string(log), `"pasted_files":2,"pasted_cols":5,"pasted_rows":5`) {
+		t.Errorf("log: %s", log)
+	}
+	s2, _ := testServer(t, join)
+	_, resp = post(t, s2.handler(), askRequest{Question: "total per region", Header: "--- sales.csv\nid,rep,amount\n1,ann,5\n--- reps.csv\nrep\nregion\n"})
+	if resp.Status != "verified" || resp.RanOn != "your-columns" {
+		t.Errorf("one file names only: %+v", resp)
+	}
+}
+
+func TestSplitSections(t *testing.T) {
+	for in, want := range map[string]string{
+		"a,b\n1,2":                     "data.csv=a,b\n1,2",
+		"a,b\n--- x.csv\nc\n":          "data.csv=a,b|x.csv=c",
+		"--- x\nc\n---- y.csv ----\nd": "x.csv=c|y.csv=d",
+		"a,b\n---\n1,2":                "data.csv=a,b\n---\n1,2", // a bare rule is data
+		"--- empty.csv\n--- x.csv\nc":  "empty.csv=|x.csv=c",
+	} {
+		names, bodies, err := splitSections(in)
+		var got []string
+		for i := range names {
+			got = append(got, names[i]+"="+bodies[i])
+		}
+		if err != nil || strings.Join(got, "|") != want {
+			t.Errorf("%q: %q %v", in, got, err)
+		}
+	}
+	for in, want := range map[string]string{
+		"--- ../x.csv\na":        "cannot name a file",
+		"--- x.json\na":          "cannot name a file",
+		"--- x\na\n--- x.csv\nb": "named twice",
+		strings.Repeat("--- f\na\n", 1) + "--- a\nb\n--- b\nb\n--- c\nb\n--- d\nb\n--- e\nb\n--- g\nb\n--- h\nb\n--- i\nb": "files",
+	} {
+		if _, _, err := splitSections(in); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: want %q, got %v", in, want, err)
+		}
+	}
+	// An empty section is refused by name when the visitor is built.
+	if _, err := newVisitor(t.TempDir(), t.TempDir(), "--- empty.csv\n--- x.csv\nc"); err == nil || !strings.Contains(err.Error(), "empty.csv: nothing pasted") {
+		t.Errorf("empty section: %v", err)
+	}
+	// A name inside a longer one is not read.
+	v := &visitor{files: []visitorFile{{name: "data.csv"}}}
+	if v.readBy("ssql from mydata.csv") || v.readBy("ssql from data.csv.bak") || !v.readBy("ssql from data.csv | ssql count") || !v.readBy("ssql join <(ssql from data.csv)") {
+		t.Errorf("readBy boundaries")
+	}
+}
+
 func TestParseVisitor(t *testing.T) {
 	ok := map[string][]string{
 		"a,b,c":                                {"a", "b", "c"},
