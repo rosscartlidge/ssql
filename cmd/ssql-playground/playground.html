@@ -96,7 +96,12 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 <div class="output-area">
     <label id="outputLabel">Output</label>
     <div class="output-content" id="output"><span class="info">Click "Run" to execute a pipeline, or try an example below.</span></div>
-    <iframe id="chartFrame" style="display:none; width:100%; height:500px; border:1px solid #3b4261; border-radius:4px; background:#fff; margin-top:8px;"></iframe>
+    <!-- sandbox without allow-same-origin: a chart's script runs in an
+         opaque origin and cannot reach this page. A chart's HTML comes
+         from a pipeline, and a link autoruns its pipeline; a column named
+         <img onerror=…> ran script here until 2026-11-25 (DFC169 §12.16).
+         allow-downloads keeps the chart's PNG and CSV saves. -->
+    <iframe id="chartFrame" sandbox="allow-scripts allow-downloads" style="display:none; width:100%; height:500px; border:1px solid #3b4261; border-radius:4px; background:#fff; margin-top:8px;"></iframe>
     <button id="btnUseOptimized" onclick="applyOptimized()" style="display:none; margin-top: 10px;">Use this pipeline</button>
 </div>
 

@@ -28,7 +28,7 @@ func TestPublicOnly(t *testing.T) {
 		{"8.8.8.8:5000", 403},
 		{"garbage", 403},
 	} {
-		r := httptest.NewRequest("GET", "/", nil)
+		r := newRequest("GET", "/", nil)
 		r.RemoteAddr = c.addr
 		r.Header.Set("Tailscale-Funnel-Request", "?1")
 		w := httptest.NewRecorder()
@@ -60,7 +60,7 @@ func TestClientKey(t *testing.T) {
 		{"", "127.0.0.1:4000", "127.0.0.1"},
 		{"not an ip", "127.0.0.1:4000", "127.0.0.1"},
 	} {
-		r := httptest.NewRequest("GET", "/", nil)
+		r := newRequest("GET", "/", nil)
 		r.RemoteAddr = c.remote
 		if c.xff != "" {
 			r.Header.Set("X-Forwarded-For", c.xff)
@@ -126,7 +126,7 @@ func TestLimiterSweeps(t *testing.T) {
 
 func publicPost(t *testing.T, h http.Handler, xff, question string) *httptest.ResponseRecorder {
 	b, _ := json.Marshal(askRequest{Question: question})
-	r := httptest.NewRequest("POST", "/api/ask", bytes.NewReader(b))
+	r := newRequest("POST", "/api/ask", bytes.NewReader(b))
 	r.RemoteAddr = "127.0.0.1:40000"
 	r.Header.Set("Tailscale-Funnel-Request", "?1")
 	r.Header.Set("X-Forwarded-For", xff)
@@ -164,7 +164,7 @@ func TestPublicInstance(t *testing.T) {
 	if strings.Contains(string(log), "203.0.113") || strings.Contains(string(log), "198.51.100") {
 		t.Errorf("the log kept an address:\n%s", log)
 	}
-	r := httptest.NewRequest("GET", "/", nil)
+	r := newRequest("GET", "/", nil)
 	r.RemoteAddr = "127.0.0.1:40000"
 	pw := httptest.NewRecorder()
 	h.ServeHTTP(pw, r)
@@ -173,7 +173,7 @@ func TestPublicInstance(t *testing.T) {
 	}
 	// A LAN address cannot reach it, even with Funnel's headers.
 	b, _ := json.Marshal(askRequest{Question: "hi"})
-	lr := httptest.NewRequest("POST", "/api/ask", bytes.NewReader(b))
+	lr := newRequest("POST", "/api/ask", bytes.NewReader(b))
 	lr.RemoteAddr = "192.168.4.20:5555"
 	lr.Header.Set("Tailscale-Funnel-Request", "?1")
 	lw := httptest.NewRecorder()

@@ -18,9 +18,34 @@ After=network-online.target ollama.service
 WorkingDirectory=%h/src/ssql
 # go must be on PATH (the slim build); edit to where yours is.
 Environment=PATH=%h/.local/bin:%h/sdk/go1.26.1/bin:%h/go/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=%h/.local/bin/ssql-faq -serve -listen :8484 -models gemma4:26b
+# -lan names the home network: every private address was answered until
+# 2026-11-25, so on a café's network its other guests could use the FAQ.
+# Change it to your own network (ip -4 addr), or drop it for the tailnet.
+ExecStart=%h/.local/bin/ssql-faq -serve -listen :8484 -lan 192.168.4.0/22 -models gemma4:26b
 Restart=on-failure
 RestartSec=10
+
+# Hardening (DFC169 §12.16): this instance runs as you, so a pipeline
+# that escaped the jail would be you. The filesystem is read-only but for
+# the caches and the log (and docsearch's embedding cache in the
+# checkout; the Go module cache stays read-only, so nothing can be planted
+# in your builds), /tmp is private, and keys and credentials are hidden.
+# Namespaces stay allowed: the jail (bubblewrap) needs them.
+NoNewPrivileges=yes
+ProtectSystem=strict
+# Under the user manager (systemd 255) strict leaves /home writable;
+# ProtectHome=read-only is what keeps the checkout and dotfiles read-only.
+ProtectHome=read-only
+ReadWritePaths=%h/.cache %h/.local/state %h/src/ssql/.docsearch-cache.jsonl
+PrivateTmp=yes
+InaccessiblePaths=-%h/.ssh -%h/.gnupg -%h/.aws -%h/.config/gh -%h/.password-store -%h/.netrc -%h/.git-credentials -%h/.docker -%h/.kube -%h/.claude -%h/.mozilla -%h/.config/google-chrome
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+MemoryMax=3G
+TasksMax=256
 
 [Install]
 WantedBy=default.target

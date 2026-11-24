@@ -36,6 +36,8 @@ func main() {
 	goldens := flag.Bool("goldens", false, "with -eval: run and print every golden, with no model")
 	serve := flag.Bool("serve", false, "serve the FAQ page to the local network and the tailnet")
 	listen := flag.String("listen", ":8484", "with -serve: the address (tailscale:PORT binds the tailnet address only)")
+	var lan cidrList
+	flag.Var(&lan, "lan", "with -serve: a local network to answer besides loopback and the tailnet, such as 192.168.4.0/22 (repeatable; none by default, so a café's network is refused)")
 	jail := flag.String("jail", "auto", "run pipelines in the bubblewrap jail: on, off, or auto (on when available; -serve requires it)")
 	logFile := flag.String("log", defaultLog(), "with -serve: where questions are kept, without addresses ('' keeps nothing)")
 	logShared := flag.Bool("log-shared", false, "with -serve: make the log and its directory readable by the service's group (the public instance's, so its owner can read it without sudo)")
@@ -113,10 +115,14 @@ func main() {
 		}
 		s := newServer(f, llms[0], *logFile)
 		s.logMax = *logMax
+		s.lan = lan
 		if *logShared {
 			s.logPerm = 0o640
 		}
-		reach := "LAN and tailnet only"
+		reach := "loopback and tailnet only"
+		if len(lan) > 0 {
+			reach = "loopback, tailnet and " + lan.String()
+		}
 		if *public {
 			if err := s.makePublic(*perHour, *perDay); err != nil {
 				fail(err)

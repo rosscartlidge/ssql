@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-22
+Last modified: 2026-11-25
 
 [Back to Index](./README.md)
 
@@ -60,6 +60,16 @@ TestSchemaOpsShadowSchemaMode) hold what is fixed.
   fired…" held the codelab's window functions until they got a heading of
   their own, 2026-11-21, DFC169 §11.3). The FAQ's retrieval and every
   docsearch user see the wrong sections. Skip fenced blocks when chunking.
+- [ ] FAQ security review leftovers (DFC169 §12.16, 2026-11-25): the
+  public unit's service user has full network access after a jail escape
+  (Ollama's unauthenticated API, the LAN, the tailnet); try
+  `IPAddressDeny=any` + `IPAddressAllow=localhost` and check it takes
+  effect in a user unit, else a system unit with `User=ssql-faq`. A `#s=`
+  share link inflates without a cap (a crafted one hangs the tab; cap it
+  as the playground caps `#w=`). A visitor's files are written before the
+  queue and rate-limit checks. The heatmap and spectrogram hover escaping
+  is checked by reading only (the harness cannot hover), and `to
+  explore`'s HTML was not reviewed.
 - [ ] The FAQ has no deadline for a whole question: each model call has
   120 s and each run 20 s, but corrections and the review multiply them.
   The public instance's queue and limits bound the load, not one

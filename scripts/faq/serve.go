@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 // The FAQ service (DFC169 phase 2). Ross, 2026-11-16: the local network and
@@ -43,11 +45,12 @@ type server struct {
 	logMax  int64         // past this size the log moves to .1 (0: no cap)
 	logPerm os.FileMode   // 0600, or 0640 with -log-shared
 	logMu   sync.Mutex
-	tmp     string   // where visitors' data.csv directories go
-	page    []byte   // the page as this mode says it
-	public  bool     // -public: Funnel's instance (public.go)
-	limit   *limiter // -public: questions per client and per day
-	votes   ballots  // the answers that can be voted on
+	tmp     string       // where visitors' data.csv directories go
+	page    []byte       // the page as this mode says it
+	public  bool         // -public: Funnel's instance (public.go)
+	limit   *limiter     // -public: questions per client and per day
+	votes   ballots      // the answers that can be voted on
+	lan     []*net.IPNet // -lan: the local networks privateOnly answers besides loopback and the tailnet
 }
 
 type askRequest struct {
@@ -126,18 +129,21 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/ask", s.ask)
 	mux.HandleFunc("POST /api/vote", s.vote)
 	if s.public {
-		return publicOnly(mux)
+		return publicOnly(sameSite(mux))
 	}
-	return privateOnly(mux)
+	return s.privateOnly(sameSite(mux))
 }
 
 func securityHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
 }
 
-// privateOnly answers the LAN and the tailnet and refuses everything else.
-func privateOnly(next http.Handler) http.Handler {
+// privateOnly answers loopback, the tailnet and the -lan networks, and
+// refuses everything else. Every private address was answered until
+// 2026-11-25, so on a café's network its other guests could use the FAQ
+// (DFC169 §12.16); the home network is now named (-lan 192.168.4.0/22).
+func (s *server) privateOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Tailscale-Funnel-Request") != "" {
 			http.Error(w, "this FAQ is not public yet", http.StatusForbidden)
@@ -145,8 +151,8 @@ func privateOnly(next http.Handler) http.Handler {
 		}
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		ip := net.ParseIP(host)
-		if err != nil || ip == nil || !privateIP(ip) {
-			http.Error(w, "this FAQ answers the local network and the tailnet only", http.StatusForbidden)
+		if err != nil || ip == nil || !allowedIP(ip, s.lan) {
+			http.Error(w, "this FAQ answers its own network and the tailnet only", http.StatusForbidden)
 			return
 		}
 		securityHeaders(w)
@@ -156,10 +162,84 @@ func privateOnly(next http.Handler) http.Handler {
 
 var tailnet4, tailnet6 = mustCIDR("100.64.0.0/10"), mustCIDR("fd7a:115c:a1e0::/48")
 
-// privateIP: loopback, RFC 1918 and IPv6 ULA, link-local, and the Tailscale
-// ranges (the CGNAT block Tailscale assigns from, and its ULA prefix).
-func privateIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || tailnet4.Contains(ip) || tailnet6.Contains(ip)
+// allowedIP: loopback, the Tailscale ranges (the CGNAT block Tailscale
+// assigns from, and its ULA prefix), and the -lan networks.
+func allowedIP(ip net.IP, lan []*net.IPNet) bool {
+	if ip.IsLoopback() || tailnet4.Contains(ip) || tailnet6.Contains(ip) {
+		return true
+	}
+	for _, n := range lan {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameSite refuses what another web site can make a visitor's browser
+// send (DFC169 §12.16). A Host naming a public domain is DNS rebinding:
+// a page whose name resolved to this machine, reading its answers. A
+// POST that is not JSON is a cross-site form or a no-preflight fetch;
+// requiring application/json makes a browser ask first (CORS preflight),
+// and nothing here says yes.
+func sameSite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !trustedHost(r.Host) {
+			http.Error(w, "unexpected Host", http.StatusMisdirectedRequest)
+			return
+		}
+		if r.Method == http.MethodPost {
+			if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+				writeError(w, http.StatusUnsupportedMediaType, "send JSON (Content-Type: application/json)")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// trustedHost: an IP address, localhost, a single-label name (the
+// machine's own, or a MagicDNS short name), or a name under a suffix no
+// stranger's DNS can answer for this machine: the tailnet's .ts.net and
+// the local suffixes.
+func trustedHost(hostport string) bool {
+	h := hostport
+	if hh, _, err := net.SplitHostPort(hostport); err == nil {
+		h = hh
+	}
+	h = strings.TrimSuffix(strings.ToLower(strings.Trim(h, "[]")), ".")
+	switch {
+	case h == "":
+		return false
+	case net.ParseIP(h) != nil, h == "localhost", !strings.Contains(h, "."):
+		return true
+	}
+	for _, sfx := range []string{".ts.net", ".local", ".lan", ".home.arpa", ".internal"} {
+		if strings.HasSuffix(h, sfx) {
+			return true
+		}
+	}
+	return false
+}
+
+// cidrList is a repeatable -lan flag.
+type cidrList []*net.IPNet
+
+func (c *cidrList) String() string {
+	var ss []string
+	for _, n := range *c {
+		ss = append(ss, n.String())
+	}
+	return strings.Join(ss, " ")
+}
+
+func (c *cidrList) Set(v string) error {
+	_, n, err := net.ParseCIDR(v)
+	if err != nil {
+		return fmt.Errorf("-lan takes a network such as 192.168.4.0/22: %v", err)
+	}
+	*c = append(*c, n)
+	return nil
 }
 
 func mustCIDR(s string) *net.IPNet {
@@ -183,6 +263,11 @@ func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 		return
 	case len(req.Question) > maxQuestion:
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("the question is over %d KB", maxQuestion>>10))
+		return
+	case strings.ContainsFunc(req.Question, controlChar):
+		// A question is kept in the log and read in a terminal: an escape
+		// sequence in it would reach that terminal (DFC169 §12.16).
+		writeError(w, http.StatusBadRequest, "the question holds a control character; type it as plain text")
 		return
 	}
 	if p := req.Previous; p != nil {
@@ -229,6 +314,12 @@ func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(req, v, a, resp)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// controlChar is a control character other than tab, newline and
+// carriage return, which typing a question can produce.
+func controlChar(r rune) bool {
+	return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
 }
 
 // respond is what the page shows of an answer.

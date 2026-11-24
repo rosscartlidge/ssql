@@ -86,6 +86,11 @@ cat_logs() {
 if [ -t 1 ]; then B=$'\e[1m' D=$'\e[2m' R=$'\e[0m' G=$'\e[32m' Y=$'\e[33m' X=$'\e[31m'; else B="" D="" R="" G="" Y="" X=""; fi
 
 # The filter and the layout, shared by the merged and the follow views.
+# clean strips control characters (but tab and newline) from what a
+# visitor or the model wrote: a question carrying ANSI or OSC escapes
+# would otherwise reach this terminal (-f writes it unfiltered; less -R
+# passes colours and OSC 8 links). DFC169 §12.16.
+DEFS='def clean: if type == "string" then gsub("[\u0001-\u0008\u000b-\u001f\u007f-\u009f]"; "\ufffd") else . end;'
 FILTER='
 	select($cutoff == "" or .time >= $cutoff)
 	| select($status == "" or (.status | test($status)))
@@ -98,10 +103,10 @@ FORMAT='
 	  + (if .revised then ", revised" else "" end)
 	  + (if .voted == "up" then "  👍" elif .voted == "down" then "  👎" else "" end)
 	  + (if (.pasted_cols // 0) > 0 then ", pasted \(.pasted_cols) cols \(.pasted_rows // 0) rows" else "" end)
-	  + "\($R)\n\($B)Q:\($R) \(.question)"
-	  + (if (.pipeline // "") != "" then "\n\($B)pipeline:\($R) \(.pipeline)" else "" end)
-	  + (if (.failure // "") != "" then "\n\($X)failure:\($R) \(.failure)" else "" end)
-	  + (if $brief or (.reply // "") == "" then "" else "\n\($B)A:\($R)\n\(.reply | split("\n") | map("  " + .) | join("\n"))" end)
+	  + "\($R)\n\($B)Q:\($R) \(.question | clean)"
+	  + (if (.pipeline // "") != "" then "\n\($B)pipeline:\($R) \(.pipeline | clean)" else "" end)
+	  + (if (.failure // "") != "" then "\n\($X)failure:\($R) \(.failure | clean)" else "" end)
+	  + (if $brief or (.reply // "") == "" then "" else "\n\($B)A:\($R)\n\(.reply | clean | split("\n") | map("  " + .) | join("\n"))" end)
 	  + "\n"'
 $follow && cutoff=""
 args=(--arg cutoff "$cutoff" --arg status "$status" --arg grep "$grep" --arg vote "$vote" --argjson brief "$brief"
@@ -112,15 +117,15 @@ if $follow; then
 		[ "$which" = public ] || tail -n0 -F "$LAN_LOG" 2>/dev/null | jq --unbuffered -c '. + {src: "lan"}' &
 		[ "$which" = lan ] || readpub tail -n0 -F "$PUBLIC_LOG" 2>/dev/null | jq --unbuffered -c '. + {src: "public"}' &
 		wait
-	} | jq --unbuffered -r "${args[@]}" "
+	} | jq --unbuffered -r "${args[@]}" "$DEFS
 		if has(\"vote\") then
 			select(\$vote == \"\" or \$vote == \"any\" or .vote == \$vote)
-			| \"\(\$B)── \(.time | sub(\"T\"; \" \") | sub(\"Z\"; \"\")) \(.src)  \(if .vote == \"up\" then \"👍\" else \"👎\" end)\(\$R) on: \(.question)\n\"
+			| \"\(\$B)── \(.time | sub(\"T\"; \" \") | sub(\"Z\"; \"\")) \(.src)  \(if .vote == \"up\" then \"👍\" else \"👎\" end)\(\$R) on: \(.question | clean)\n\"
 		else $FILTER | $FORMAT end"
 	exit
 fi
 
-out=$(cat_logs | jq -s -r "${args[@]}" --arg n "$n" "
+out=$(cat_logs | jq -s -r "${args[@]}" --arg n "$n" "$DEFS
 	sort_by(.time)
 	| (map(select(has(\"vote\"))) | map({key: .id, value: .vote}) | from_entries) as \$votes
 	| map(select(has(\"vote\") | not) | . + {voted: \$votes[.id // \"\"]})

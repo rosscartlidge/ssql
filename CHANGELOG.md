@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A chart page ran script from a field name.** `to chart`'s page put
+  field names, and the heatmap's hovered values, into `innerHTML`
+  unescaped, so a column named `<img src=x onerror=…>` ran its script.
+  Every value now goes through an escaping helper, and `to animate`'s
+  error is set as text. In the playground, chart output was shown in a
+  same-origin frame and a link runs its pipeline automatically, so a
+  crafted link could run script in the playground's page. The chart frame
+  is now sandboxed (`allow-scripts allow-downloads`, an opaque origin).
+  `scripts/playground-test.sh` checks both, and all three checks were
+  watched failing on the old code (DFC169 §12.16).
+
 ### Added
 
 - **Playground workspace links (`#w=`)** carry a pipeline and the files

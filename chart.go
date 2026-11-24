@@ -792,7 +792,11 @@ const animateHTMLTemplate = `<!DOCTYPE html>
             document.getElementById('chart'), 'animate', CFG, ROWS,
             { controlsEl: document.getElementById('player'), title: {{printf "%q" .Title}} });
         if (err) {
-            document.body.innerHTML = '<div id="err">to animate: ' + err + '</div>';
+            // textContent: the error can name a field (DFC169 §12.16).
+            const box = document.createElement('div');
+            box.id = 'err';
+            box.textContent = 'to animate: ' + err;
+            document.body.replaceChildren(box);
         }
     </script>
 </body>
@@ -1494,6 +1498,12 @@ const chartHTMLTemplate = `<!DOCTYPE html>
     </div>
 
     <script>
+        // Field names and data reach innerHTML through escHTML only: a
+        // column named <img onerror=…> ran script in the playground's
+        // origin until 2026-11-25 (DFC169 §12.16).
+        function escHTML(v) {
+            return String(v).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
+        }
         // Global variables
         let chartData = {{.DataJSON}};
         let chartConfig = {{.ConfigJSON}};
@@ -1523,8 +1533,8 @@ const chartHTMLTemplate = `<!DOCTYPE html>
                 const checkDiv = document.createElement('div');
                 checkDiv.className = 'form-check';
                 checkDiv.innerHTML = ` + "`" + `
-                    <input class="form-check-input" type="checkbox" id="y_${field}" value="${field}">
-                    <label class="form-check-label" for="y_${field}">${field}</label>
+                    <input class="form-check-input" type="checkbox" id="y_${escHTML(field)}" value="${escHTML(field)}">
+                    <label class="form-check-label" for="y_${escHTML(field)}">${escHTML(field)}</label>
                 ` + "`" + `;
                 yFieldsDiv.appendChild(checkDiv);
             });
@@ -1734,7 +1744,7 @@ const chartHTMLTemplate = `<!DOCTYPE html>
             for (const [field, stats] of Object.entries(chartData.summary.numericStats)) {
                 html += ` + "`" + `
                     <div class="col-md-12 mt-2">
-                        <small><strong>${field}:</strong>
+                        <small><strong>${escHTML(field)}:</strong>
                         Min: ${stats.min.toFixed(2)},
                         Max: ${stats.max.toFixed(2)},
                         Mean: ${stats.mean.toFixed(2)},
@@ -1884,9 +1894,16 @@ const heatmapHTMLTemplate = `<!DOCTYPE html>
     </div>
 
     <script>
+        // Field names and data reach innerHTML through escHTML only: a
+        // column named <img onerror=…> ran script in the playground's
+        // origin until 2026-11-25 (DFC169 §12.16).
+        function escHTML(v) {
+            return String(v).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
+        }
         const xLabels = {{.XLabels}};
         const yLabels = {{.YLabels}};
         const gridData = {{.GridData}};
+        const fieldNames = {x: {{.XField}}, y: {{.YField}}, z: {{.ZField}}};
 
         // Calculate Z-axis statistics
         let zMin = Infinity, zMax = -Infinity;
@@ -1947,7 +1964,7 @@ const heatmapHTMLTemplate = `<!DOCTYPE html>
         document.getElementById('heatmapChart').on('plotly_hover', function(data) {
             const pt = data.points[0];
             document.getElementById('cursorInfo').innerHTML =
-                ` + "`" + `<strong>{{.XField}}:</strong> ${pt.x} | <strong>{{.YField}}:</strong> ${pt.y} | <strong>{{.ZField}}:</strong> ${pt.z?.toFixed(4) || 'N/A'}` + "`" + `;
+                ` + "`" + `<strong>${escHTML(fieldNames.x)}:</strong> ${escHTML(pt.x)} | <strong>${escHTML(fieldNames.y)}:</strong> ${escHTML(pt.y)} | <strong>${escHTML(fieldNames.z)}:</strong> ${pt.z?.toFixed(4) || 'N/A'}` + "`" + `;
         });
 
         function updateColorScale() {
@@ -2143,6 +2160,12 @@ const enhancedChartHTMLTemplate = `<!DOCTYPE html>
     </div>
 
     <script>
+        // Field names and data reach innerHTML through escHTML only: a
+        // column named <img onerror=…> ran script in the playground's
+        // origin until 2026-11-25 (DFC169 §12.16).
+        function escHTML(v) {
+            return String(v).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
+        }
         let chartData = {{.DataJSON}};
         let chartConfig = {{.ConfigJSON}};
         let mainChart = null;
@@ -2166,8 +2189,8 @@ const enhancedChartHTMLTemplate = `<!DOCTYPE html>
                 const checkDiv = document.createElement('div');
                 checkDiv.className = 'form-check';
                 checkDiv.innerHTML = ` + "`" + `
-                    <input class="form-check-input" type="checkbox" id="y_${field}" value="${field}">
-                    <label class="form-check-label" for="y_${field}">${field}</label>
+                    <input class="form-check-input" type="checkbox" id="y_${escHTML(field)}" value="${escHTML(field)}">
+                    <label class="form-check-label" for="y_${escHTML(field)}">${escHTML(field)}</label>
                 ` + "`" + `;
                 yFieldsDiv.appendChild(checkDiv);
             });
@@ -2418,7 +2441,7 @@ const enhancedChartHTMLTemplate = `<!DOCTYPE html>
             for (const [field, stats] of Object.entries(chartData.summary.numericStats)) {
                 html += ` + "`" + `
                     <div class="col-md-12 mt-2">
-                        <small><strong>${field}:</strong>
+                        <small><strong>${escHTML(field)}:</strong>
                         Min: ${stats.min.toFixed(2)},
                         Max: ${stats.max.toFixed(2)},
                         Mean: ${stats.mean.toFixed(2)},
@@ -2620,9 +2643,16 @@ const spectrogramHTMLTemplate = `<!DOCTYPE html>
     </div>
 
     <script>
+        // Field names and data reach innerHTML through escHTML only: a
+        // column named <img onerror=…> ran script in the playground's
+        // origin until 2026-11-25 (DFC169 §12.16).
+        function escHTML(v) {
+            return String(v).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
+        }
         const xLabels = {{.XLabels}};
         const yLabels = {{.YLabels}};
         const gridData = {{.GridData}};
+        const fieldNames = {x: {{.XField}}, y: {{.YField}}, z: {{.ZField}}};
         const initialZMin = parseFloat("{{.ZMin}}");
         const initialZMax = parseFloat("{{.ZMax}}");
         const initialLogFreq = {{.LogFreq}};
@@ -2682,9 +2712,9 @@ const spectrogramHTMLTemplate = `<!DOCTYPE html>
         document.getElementById('heatmapChart').on('plotly_hover', function(data) {
             const pt = data.points[0];
             document.getElementById('cursorInfo').innerHTML =
-                '<strong>{{.XField}}:</strong> ' + pt.x +
-                '<br><strong>{{.YField}}:</strong> ' + pt.y +
-                '<br><strong>{{.ZField}}:</strong> ' + (pt.z !== null ? pt.z.toFixed(4) : 'N/A');
+                '<strong>' + escHTML(fieldNames.x) + ':</strong> ' + escHTML(pt.x) +
+                '<br><strong>' + escHTML(fieldNames.y) + ':</strong> ' + escHTML(pt.y) +
+                '<br><strong>' + escHTML(fieldNames.z) + ':</strong> ' + (pt.z !== null ? pt.z.toFixed(4) : 'N/A');
         });
 
         document.getElementById('heatmapChart').on('plotly_unhover', function() {

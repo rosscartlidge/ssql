@@ -2,7 +2,7 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-24
+Last modified: 2026-11-25
 
 [Back to Index](./README.md)
 
@@ -1130,3 +1130,65 @@ nodes, because the names are someone else's input. Uploaded files get
 the same entry: they were never listed before either. The harness checks
 the list and that a click shows the file, and was watched failing
 without the call.
+
+### 12.16 A security review, and its fixes (2026-11-25)
+
+Ross worried that publishing the FAQ's source would help people find
+holes. It was already public, and its walls don't depend on secrecy, so
+the answer was a review instead. Its findings, most serious first, with
+what was done:
+
+1. **XSS through a chart, confirmed.** `to chart`'s page (`chart.go`)
+   put field names into `innerHTML` unescaped: the y-field checkboxes,
+   the summary, and the heatmap and spectrogram hover lines (whose
+   `{{.XField}}` was JS-escaped by `html/template`, which `innerHTML`
+   then undid). The playground showed chart output in a `srcdoc` frame
+   without a sandbox, so the frame had the page's own origin. A `#p=`
+   link (it runs on open) whose pipeline renamed a column to
+   `<img src=x onerror=…>` changed the playground page's title in
+   headless Chrome. Fixed twice over: an `escHTML` helper in each chart
+   script wraps every value (`to animate`'s error is set with
+   textContent), and `chartFrame` is sandboxed with `allow-scripts
+   allow-downloads` and no `allow-same-origin`. The harness's three new
+   checks (`chart-field-names-escaped`, `chart-frame-sandboxed`,
+   `chart-no-parent-script`) all failed on the old code. The last one
+   passed wrongly twice before failing: first it read the title before
+   the frame had run, then its payload titled only its own frame.
+2. **Terminal escapes through `review.sh`.** Questions, replies and
+   pipelines were printed raw (`jq -r`). In `-f` mode a visitor's ANSI or
+   OSC sequences (OSC 52 sets the clipboard) reached the terminal;
+   `less -R` still passes colours and OSC 8 links. A jq `clean` now
+   replaces control characters other than tab and newline with U+FFFD.
+   `/api/ask` also refuses a question holding a control character other
+   than tab, newline or carriage return (`TestAskRefusesControlCharacters`).
+3. **The LAN instance answered every private address.** On a café's
+   network, its other guests could use the FAQ, which runs as Ross. Now
+   only loopback and the tailnet are answered by default, and
+   `-lan CIDR` (repeatable) names the home network; the unit passes
+   `192.168.4.0/22`. An LXD container (10.131.56.x) is refused. A
+   connection from the Docker bridge address looked allowed, but a NAT
+   rule had rewritten its source to the LAN address: a flawed probe, not
+   a hole. The unit now carries the public unit's hardening:
+   `ProtectSystem=strict` plus `ProtectHome=read-only`, writable only for
+   the caches, the log and docsearch's embedding file, with keys and
+   credentials inaccessible. Under the user manager (systemd 255), strict
+   alone left `/home` writable; that was found by a probe through
+   `/proc/PID/root`. The Go module cache stays read-only, so nothing can
+   be planted in Ross's builds. Go logs "writing stat cache" at start-up
+   and carries on.
+4. **Cross-site use of the FAQ.** A `text/plain` POST needs no CORS
+   preflight, and the `Host` header was never checked, so any page could
+   submit questions, or read answers via DNS rebinding. `sameSite`
+   (both instances) refuses a `Host` that is a public domain (421). It
+   allows an IP, localhost, a single label, or `.ts.net`/`.local`/`.lan`/
+   `.home.arpa`/`.internal`. It also refuses a POST that is not
+   `application/json` (415), and the CSP adds `frame-ancestors 'none'`.
+   `TestSameSite` and the narrowed `TestPrivateOnly` failed with the
+   checks removed.
+
+Left open, in TODO: the public service user's network reach after a
+jail escape; the uncapped `#s=` inflate; visitor files written before
+the limits; the hover escaping, checked by reading only; and `to
+explore`, not reviewed. The review found the jail, the public unit's
+hardening, the loopback-only trust of the forwarded address, the caps,
+and the page's escaping sound.

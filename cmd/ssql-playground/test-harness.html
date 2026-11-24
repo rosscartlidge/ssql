@@ -496,6 +496,34 @@ async function run() {
         record("share-link-autorun", false, "share iframe never ready");
     }
 
+    // 12b. A chart over a column named like markup (DFC169 §12.16): the
+    //    chart page escapes field names, checked by rendering the chart's
+    //    HTML in a frame of the harness's own, where an injected <img>
+    //    would show; and the playground's chart frame is sandboxed, so even
+    //    an unescaped one could not reach the page.
+    {
+        // It titles its own page and, where it can reach it, the parent's.
+        const evil = '<img id=pwn src=x onerror=document.title=parent.document.title=String.fromCharCode(88,83,83)>';
+        ta.value = "ssql from range 3\n| ssql rename -as n '" + evil + "'\n| ssql update -set-expr a '1'\n| ssql to chart -x a -y a -o xss.html";
+        await w.runPipeline();
+        const chartHtml = w._fsReadFile('xss.html') || '';
+        const cf = doc.getElementById('chartFrame');
+        const sb = cf.getAttribute('sandbox') || '';
+        record("chart-frame-sandboxed", sb.includes('allow-scripts') && !sb.includes('allow-same-origin'), "sandbox=" + JSON.stringify(sb));
+        const probe = document.createElement('iframe');
+        probe.style.cssText = 'width:900px;height:600px';
+        document.body.appendChild(probe);
+        await new Promise(r => { probe.onload = r; probe.srcdoc = chartHtml; });
+        await new Promise(r => setTimeout(r, 1500));
+        const pd = probe.contentDocument;
+        record("chart-field-names-escaped",
+            chartHtml.length > 0 && !pd.getElementById('pwn') && pd.title !== 'XSS' && pd.body.textContent.includes('<img id=pwn'),
+            "html=" + chartHtml.length + " title=" + pd.title + " injected=" + !!pd.getElementById('pwn'));
+        probe.remove();
+        // Read after the wait above, so the chart frame has loaded and run.
+        record("chart-no-parent-script", doc.title === 'ssql playground', "title: " + doc.title);
+    }
+
     // 13. Workspace link (#w=...): its files are written, the pipeline
     //    runs on them, and the note names the files and the replaced sample.
     const w3 = document.getElementById('pgws').contentWindow;

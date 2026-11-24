@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,7 +25,8 @@ import (
 // The service answers the LAN and the tailnet, nothing else, and nothing
 // Tailscale Funnel forwards (Ross, 2026-11-16: no Funnel yet).
 func TestPrivateOnly(t *testing.T) {
-	h := privateOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	s := &server{lan: []*net.IPNet{mustCIDR("192.168.4.0/22")}}
+	h := s.privateOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
 	cases := []struct {
 		addr   string
 		funnel bool
@@ -33,7 +35,11 @@ func TestPrivateOnly(t *testing.T) {
 		{"127.0.0.1:5000", false, 200},
 		{"[::1]:5000", false, 200},
 		{"192.168.4.20:5000", false, 200},
-		{"10.131.56.7:5000", false, 200},
+		{"192.168.7.254:5000", false, 200}, // the -lan /22's last host
+		{"192.168.8.1:5000", false, 403},   // past it: another network
+		{"10.131.56.7:5000", false, 403},   // private, but not named by -lan (a café's)
+		{"172.16.0.9:5000", false, 403},
+		{"[fe80::1]:5000", false, 403}, // link-local: any network's
 		{"100.106.137.79:5000", false, 200},
 		{"[fd7a:115c:a1e0::1]:5000", false, 200},
 		{"8.8.8.8:5000", false, 403},
@@ -43,7 +49,7 @@ func TestPrivateOnly(t *testing.T) {
 		{"garbage", false, 403},
 	}
 	for _, c := range cases {
-		r := httptest.NewRequest("GET", "/", nil)
+		r := newRequest("GET", "/", nil)
 		r.RemoteAddr = c.addr
 		if c.funnel {
 			r.Header.Set("Tailscale-Funnel-Request", "?1")
@@ -52,6 +58,56 @@ func TestPrivateOnly(t *testing.T) {
 		h.ServeHTTP(w, r)
 		if w.Code != c.want {
 			t.Errorf("%s funnel=%v: %d, want %d", c.addr, c.funnel, w.Code, c.want)
+		}
+	}
+}
+
+// Another web site cannot use the FAQ through a visitor's browser (DFC169
+// §12.16): a public Host is DNS rebinding, refused; a POST that is not
+// JSON is a form or a no-preflight fetch, refused. The page's own Hosts
+// (an address, localhost, the machine's name, its MagicDNS names) pass.
+func TestSameSite(t *testing.T) {
+	s, _ := testServer(t, "Use group-by.")
+	h := s.handler()
+	for host, want := range map[string]int{
+		"evil.example.com":             http.StatusMisdirectedRequest,
+		"evil.example.com:8484":        http.StatusMisdirectedRequest,
+		"192.168.4.132.nip.io:8484":    http.StatusMisdirectedRequest, // an address inside a public name
+		"":                             http.StatusMisdirectedRequest,
+		"192.168.4.132:8484":           200,
+		"[fd7a:115c:a1e0::1]:8484":     200,
+		"localhost:8484":               200,
+		"derra":                        200,
+		"derra.tail3f2e6c.ts.net:8443": 200,
+		"DERRA.local.":                 200,
+	} {
+		r := newRequest("GET", "/", nil)
+		r.RemoteAddr, r.Host = "192.168.4.20:5555", host
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Errorf("Host %q: %d, want %d", host, w.Code, want)
+		}
+	}
+	for ct, want := range map[string]int{
+		"":                                  http.StatusUnsupportedMediaType,
+		"text/plain":                        http.StatusUnsupportedMediaType,
+		"application/x-www-form-urlencoded": http.StatusUnsupportedMediaType,
+		"multipart/form-data; boundary=x":   http.StatusUnsupportedMediaType,
+		"application/json; charset=utf-8":   200,
+	} {
+		for _, path := range []string{"/api/ask", "/api/vote"} {
+			r := newRequest("POST", path, strings.NewReader(`{"question":"hi"}`))
+			r.RemoteAddr = "192.168.4.20:5555"
+			r.Header.Set("Content-Type", ct)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if path == "/api/vote" && want == 200 {
+				want = http.StatusBadRequest // past sameSite: a vote needs up or down
+			}
+			if w.Code != want {
+				t.Errorf("POST %s as %q: %d, want %d", path, ct, w.Code, want)
+			}
 		}
 	}
 }
@@ -151,12 +207,24 @@ func testServer(t *testing.T, replies ...string) (*server, string) {
 	logPath := filepath.Join(t.TempDir(), "q.jsonl")
 	s := newServer(f, llm, logPath)
 	s.tmp = t.TempDir()
+	s.lan = []*net.IPNet{mustCIDR("192.168.4.0/22")}
 	return s, logPath
+}
+
+// newRequest is a request as the page sends it: to a Host the server
+// trusts, and a POST as JSON (sameSite refuses anything else).
+func newRequest(method, target string, body io.Reader) *http.Request {
+	r := httptest.NewRequest(method, target, body)
+	r.Host = "derra:8484"
+	if method == http.MethodPost {
+		r.Header.Set("Content-Type", "application/json")
+	}
+	return r
 }
 
 func post(t *testing.T, h http.Handler, body any) (*httptest.ResponseRecorder, askResponse) {
 	b, _ := json.Marshal(body)
-	r := httptest.NewRequest("POST", "/api/ask", bytes.NewReader(b))
+	r := newRequest("POST", "/api/ask", bytes.NewReader(b))
 	r.RemoteAddr = "192.168.4.20:5555"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -237,6 +305,23 @@ func TestAskVisitorColumns(t *testing.T) {
 	_, resp = post(t, s2.handler(), askRequest{Question: "how many earn over 10?", Header: "name,salary\nann,5\nbob,20\n"})
 	if resp.RanOn != "your-rows" || strings.TrimSpace(resp.Output) != "1" {
 		t.Errorf("%+v", resp)
+	}
+}
+
+// A question with a terminal escape in it is refused before the model or
+// the log sees it: review.sh prints the log to a terminal (DFC169 §12.16).
+func TestAskRefusesControlCharacters(t *testing.T) {
+	s, logPath := testServer(t, "Use group-by.")
+	for _, q := range []string{"hi \x1b[2J there", "osc \x1b]52;c;eA==\x07", "c1 \u009b31m", "nul \x00"} {
+		if w, _ := post(t, s.handler(), askRequest{Question: q}); w.Code != http.StatusBadRequest {
+			t.Errorf("%q: %d", q, w.Code)
+		}
+	}
+	if w, resp := post(t, s.handler(), askRequest{Question: "two\nlines\twith a tab"}); w.Code != 200 || resp.Status != "prose" {
+		t.Errorf("newline and tab: %d %+v", w.Code, resp)
+	}
+	if log, _ := os.ReadFile(logPath); strings.Count(string(log), "\n") != 1 {
+		t.Errorf("only the plain question is logged: %s", log)
 	}
 }
 
@@ -721,7 +806,7 @@ func TestVote(t *testing.T) {
 	}
 	vote := func(id, v string) int {
 		b, _ := json.Marshal(voteRequest{ID: id, Vote: v})
-		r := httptest.NewRequest("POST", "/api/vote", bytes.NewReader(b))
+		r := newRequest("POST", "/api/vote", bytes.NewReader(b))
 		r.RemoteAddr = "192.168.4.20:5555"
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
