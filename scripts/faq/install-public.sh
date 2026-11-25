@@ -139,14 +139,19 @@ status() {
 	echo "health (today's answered and refused questions):"
 	curl -s --max-time 5 http://127.0.0.1:8485/api/health && echo
 	echo "today's answers by status ($LOG):"
-	local lines
+	# Read the log (as a member of the group, else through sudo), then
+	# summarise it. Until 2026-11-26 the readable case read it and printed
+	# nothing: the summary sat in the sudo branch's else.
+	local lines ok=1
 	if [ -r "$LOG" ]; then
 		lines=$(cat "$LOG")
 	elif ! lines=$(sudo -u "$USER_NAME" sh -c "test ! -e '$LOG' || cat '$LOG'"); then
+		ok=0
 		echo "  could not read the log (not in the $USER_NAME group yet, and sudo refused)"
-	elif [ -z "$lines" ]; then
+	fi
+	if [ "$ok" = 1 ] && [ -z "$lines" ]; then
 		echo "  nothing asked yet"
-	else
+	elif [ "$ok" = 1 ]; then
 		printf '%s\n' "$lines" |
 			ssql from jsonl | ssql where -if time ge "$(date -u +%F)" | ssql group-by status -count n | ssql to table || true
 	fi
