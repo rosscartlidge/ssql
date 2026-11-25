@@ -179,6 +179,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC169 | 2026-11-15 | 2026-11-26 | [A Dynamic FAQ on a Local Model: Teaching Gemma to Answer for ssql](./dfc169_local_llm_faq.md) |
 | DFC170 | 2026-11-15 | 2026-11-15 | [Schema Mode Is a Lane: Making Its Predictions Exact](./dfc170_schema_mode_is_a_lane.md) |
 | DFC171 | 2026-11-25 | 2026-11-26 | [The Public FAQ in a Container](./dfc171_faq_public_container.md) |
+| DFC172 | 2026-11-26 | 2026-11-26 | [The Playground Engine in the FAQ Page](./dfc172_faq_in_page_engine.md) |
 
 <!-- DFC-INDEX-END -->
 
