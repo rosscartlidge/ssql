@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -48,7 +49,6 @@ var corpusGlobs = []string{
 }
 
 const (
-	ollamaURL  = "http://localhost:11434/api/embeddings"
 	embedModel = "nomic-embed-text"
 	cacheFile  = ".docsearch-cache.jsonl"
 	rrfK       = 60 // standard RRF constant
@@ -349,14 +349,32 @@ func semantic(root string, chunks []chunk, query string) ([]scored, error) {
 	return out, nil
 }
 
+// ollamaURL is the embeddings endpoint of $OLLAMA_HOST (as the ollama
+// client reads it: HOST:PORT or a URL), else of the local server. The
+// public FAQ points it at its Ollama filter (DFC171 §5).
+func ollamaURL() string {
+	host := strings.TrimRight(os.Getenv("OLLAMA_HOST"), "/")
+	switch {
+	case host == "":
+		host = "http://localhost:11434"
+	case !strings.Contains(host, "://"):
+		host = "http://" + host
+	}
+	return host + "/api/embeddings"
+}
+
 func embed(text string) ([]float32, error) {
 	body, _ := json.Marshal(map[string]string{"model": embedModel, "prompt": text})
 	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Post(ollamaURL, "application/json", bytes.NewReader(body))
+	resp, err := client.Post(ollamaURL(), "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("ollama %s: %s: %s", ollamaURL(), resp.Status, bytes.TrimSpace(msg))
+	}
 	var r struct {
 		Embedding []float32 `json:"embedding"`
 	}

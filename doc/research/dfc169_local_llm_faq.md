@@ -2,7 +2,7 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-25
+Last modified: 2026-11-26
 
 [Back to Index](./README.md)
 
@@ -1192,3 +1192,62 @@ the limits; the hover escaping, checked by reading only; and `to
 explore`, not reviewed. The review found the jail, the public unit's
 hardening, the loopback-only trust of the forwarded address, the caps,
 and the page's escaping sound.
+
+### 12.17 The Ollama filter, and the public user's network (2026-11-26)
+
+Ollama's API has no authentication: besides chat it pulls, creates,
+copies and deletes models. Until now the `ssql-faq` user could reach all
+of it, and the LAN, the tailnet and the llama bridge too, so code that
+escaped the jail had all of them (the first leftover of §12.16). DFC171 §5
+proposed a filter. A filter alone does nothing on the host, because the
+user can still connect to Ollama directly. So the two go together:
+
+- **The filter** (`ssql-faq -ollama-filter 127.0.0.1:11435`,
+  `scripts/faq/ollamafilter.go`) passes `POST /api/chat` for the FAQ's
+  models and `POST /api/embeddings` for docsearch's. It takes only the
+  keys and options the FAQ sends, and no `num_ctx` above the FAQ's own;
+  it refuses everything else with 403 before Ollama sees it. It runs as a
+  system unit under a dynamic user (`ssql-faq-ollama-filter.service`,
+  heavily sandboxed), so the `ssql-faq` user can neither stop nor replace
+  it. The warm-up now loads the model with an empty `/api/chat`, so a
+  question's two calls are the whole list. docsearch reads `OLLAMA_HOST`,
+  as the ollama client does.
+- **The rule** (`ssql-faq-public.nft`, loaded by `ssql-faq-net.service`,
+  ordered before user sessions so the lingering service never starts
+  without it): packets from the `ssql-faq` uid may answer a connection
+  (Funnel's) or open one to 127.0.0.1:11435, and are rejected otherwise.
+  It is the kernel's and keyed on the uid, so it holds for every process
+  the user runs, however started. The unit's own hardening does not:
+  after an escape, `systemd-run --user` on the user's bus starts a fresh
+  unit without it (reasoned, not tried).
+- **The install** copies the binary to `/usr/local/libexec/ssql-faq`,
+  loads the rule and starts the filter before the service, and then
+  checks, as `ssql-faq`, that the filter refuses `/api/pull` and that
+  Ollama (127.0.0.1 and ::1) and the llama bridge are refused. A surprise
+  fails the install. `status` shows both units.
+
+**Tested.** `TestOllamaFilter` covers 18 calls: the three allowed, and
+pull, delete, create, tags, generate, other models, a model on the wrong
+endpoint, a foreign key or option, a larger context, a non-JSON body and
+an oversized one. Every refused call must not reach the stand-in Ollama.
+It failed 19 ways with the check disabled. `TestOllamaThroughTheFilter`
+runs the FAQ's own client (warm-up and chat) through it, and failed with
+the old `/api/generate` warm-up. `TestFilterUnitPassesThePublicModels`
+ties the two units' `-models`, `-ctx` and address to the rule's port, and
+failed on each drift. Live, a question answered verified with the FAQ and
+docsearch reaching Ollama only through a filter on a scratch port. The
+real Ollama answered the empty-chat warm-up with `done_reason: load`.
+
+The root half was probed in a throwaway LXD container (no NIC; deleted
+afterwards), with the units as committed and stand-ins for Ollama and the
+bridge. Before the rule, `ssql-faq` reached the stand-in Ollama (200).
+With it, the install's own `check_net` passed, a chat for the model
+passed the filter, and a connection into a server run by `ssql-faq`
+still answered. With `ssql-faq-net` stopped, `check_net` failed the
+install. After a reboot, the rule was active before
+`systemd-user-sessions`. The filter ran as its dynamic user with every
+sandbox setting accepted.
+
+It takes effect at Ross's next
+`sudo scripts/faq/install-public.sh install STAGE`.
+

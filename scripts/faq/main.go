@@ -12,6 +12,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -47,7 +48,26 @@ func main() {
 	perDay := flag.Int("per-day", 200, "with -public: questions answered in total per UTC day")
 	repoFlag := flag.String("repo", "", "the ssql docs tree (default: the git checkout this runs in)")
 	search := flag.String("docsearch", "", "the docsearch command (default: REPO/scripts/docsearch.sh)")
+	filterAddr := flag.String("ollama-filter", "", "serve only the Ollama calls the FAQ makes, for -models and -embed-model, on this loopback address, forwarding to -host (the public instance's way to Ollama, DFC171 §5)")
+	embedModel := flag.String("embed-model", "nomic-embed-text", "with -ollama-filter: the embedding model docsearch uses")
 	flag.Parse()
+
+	if *filterAddr != "" {
+		if h, _, err := net.SplitHostPort(*filterAddr); err != nil || !net.ParseIP(h).IsLoopback() {
+			fail(fmt.Errorf("-ollama-filter needs a loopback address such as 127.0.0.1:11435, not %q", *filterAddr))
+		}
+		var chat []string
+		for _, m := range strings.Split(*models, ",") {
+			chat = append(chat, strings.TrimSpace(m))
+		}
+		filter, err := newOllamaFilter(*host, chat, *embedModel, *ctxSize)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Fprintf(os.Stderr, "faq: Ollama filter on http://%s to %s (chat: %s; embeddings: %s; num_ctx up to %d)\n", *filterAddr, *host, strings.Join(chat, ", "), *embedModel, *ctxSize)
+		srv := &http.Server{Addr: *filterAddr, Handler: filter, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10}
+		fail(srv.ListenAndServe())
+	}
 
 	if *public && !*serve {
 		fail(fmt.Errorf("-public is a mode of -serve"))

@@ -1,0 +1,22 @@
+# The public FAQ's network (DFC171 §5), loaded by ssql-faq-net.service;
+# install-public.sh writes the service user's uid for @UID@.
+#
+# Packets the ssql-faq user sends may answer a connection (Funnel's, via
+# tailscaled on 127.0.0.1:8485) or open one to the Ollama filter on
+# 127.0.0.1:11435. Nothing else: not Ollama itself (whose API pulls and
+# deletes models), not the llama bridge, the LAN, the tailnet or the
+# internet. The rule is the kernel's and keyed on the uid, so it holds for
+# every process the user runs, however started.
+table inet ssql_faq
+delete table inet ssql_faq
+table inet ssql_faq {
+	chain output {
+		type filter hook output priority filter; policy accept;
+		meta skuid @UID@ jump faq
+	}
+	chain faq {
+		ct state established,related accept
+		oifname "lo" ip daddr 127.0.0.1 tcp dport 11435 accept
+		counter reject
+	}
+}

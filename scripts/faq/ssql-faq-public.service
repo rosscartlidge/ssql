@@ -24,6 +24,9 @@ ExecStart=%h/app/bin/ssql-faq -serve -public -listen 127.0.0.1:8485 \
     -repo %h/app/repo -ssql %h/app/bin/ssql -docsearch %h/app/bin/docsearch \
     -models gemma4:26b -per-hour 10 -per-day 200 -log-shared
 Environment=PATH=/usr/bin:/bin
+# Ollama through its filter (ssql-faq-ollama-filter.service, DFC171 §5),
+# for the FAQ and docsearch alike: this user may not reach Ollama itself.
+Environment=OLLAMA_HOST=http://127.0.0.1:11435
 Restart=on-failure
 RestartSec=10
 

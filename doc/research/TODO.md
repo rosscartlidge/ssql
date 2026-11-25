@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-11-25
+Last modified: 2026-11-26
 
 [Back to Index](./README.md)
 
@@ -60,11 +60,10 @@ TestSchemaOpsShadowSchemaMode) hold what is fixed.
   fired…" held the codelab's window functions until they got a heading of
   their own, 2026-11-21, DFC169 §11.3). The FAQ's retrieval and every
   docsearch user see the wrong sections. Skip fenced blocks when chunking.
-- [ ] FAQ security review leftovers (DFC169 §12.16, 2026-11-25): the
-  public unit's service user has full network access after a jail escape
-  (Ollama's unauthenticated API, the LAN, the tailnet); try
-  `IPAddressDeny=any` + `IPAddressAllow=localhost` and check it takes
-  effect in a user unit, else a system unit with `User=ssql-faq`. A `#s=`
+- [ ] FAQ security review leftovers (DFC169 §12.16, 2026-11-25). (The
+  public service user's network reach is closed: an nftables rule keyed
+  on its uid lets it reach only the Ollama filter, DFC169 §12.17; it takes
+  effect at Ross's next `install-public.sh install`.) A `#s=`
   share link inflates without a cap (a crafted one hangs the tab; cap it
   as the playground caps `#w=`). A visitor's files are written before the
   queue and rate-limit checks. The heatmap and spectrogram hover escaping

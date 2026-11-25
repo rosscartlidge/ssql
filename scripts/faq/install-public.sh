@@ -15,12 +15,21 @@
 # (the faq binary, the slim ssql, docsearch, and the committed user docs:
 # no journals, no claude/ notes, no research docs). It cannot read your
 # home (mode 750, and the unit makes /home inaccessible anyway).
+#
+# Its network (DFC171 §5): an nftables rule (ssql-faq-net.service) lets the
+# user's processes answer connections and open one to the Ollama filter
+# (ssql-faq-ollama-filter.service, a system unit under a dynamic user), and
+# nothing else. Code that escapes the jail can ask the filter for a chat
+# with the FAQ's model, and cannot pull, delete or replace models, or reach
+# the LAN, the tailnet or the llama bridge.
 set -euo pipefail
 
 USER_NAME=ssql-faq
 HOME_DIR=/var/lib/ssql-faq
 APP=$HOME_DIR/app
 UNIT=ssql-faq-public.service
+SYSTEM_UNITS="ssql-faq-net.service ssql-faq-ollama-filter.service"
+LIBEXEC=/usr/local/libexec/ssql-faq
 LOG=$HOME_DIR/.local/state/ssql-faq/questions.jsonl
 STAGE=${XDG_CACHE_HOME:-$HOME/.cache}/ssql-faq-public-stage
 
@@ -45,7 +54,8 @@ stage() {
 	(cd "$r" && CGO_ENABLED=0 go build -tags slim -ldflags "-s -w" -o "$STAGE/app/bin/ssql" ./cmd/ssql)
 	(cd "$r/scripts/faq" && go build -o "$STAGE/app/bin/ssql-faq" .)
 	(cd "$r/scripts/docsearch" && go build -o "$STAGE/app/bin/docsearch" .)
-	cp "$r/scripts/faq/$UNIT" "$STAGE/"
+	cp "$r/scripts/faq/$UNIT" "$r/scripts/faq/ssql-faq-public.nft" "$STAGE/"
+	for u in $SYSTEM_UNITS; do cp "$r/scripts/faq/$u" "$STAGE/"; done
 	git -C "$r" rev-parse --short=8 HEAD >"$STAGE/app/REVISION"
 	# Embed the copy's chunks now, as you, so the service's first question
 	# does not: the service sees the app tree read-only.
@@ -83,17 +93,49 @@ install_root() {
 		echo "added $SUDO_USER to the $USER_NAME group: log in again (or run: newgrp $USER_NAME) to read the log without sudo"
 	fi
 	install -o "$USER_NAME" -g "$USER_NAME" -m 644 "$src/$UNIT" "$HOME_DIR/.config/systemd/user/$UNIT"
+	# Its network: the rule first, then the filter, then the service.
+	install -d -m 755 "$LIBEXEC" /etc/ssql-faq
+	install -m 755 "$APP/bin/ssql-faq" "$LIBEXEC/ssql-faq"
+	sed "s/@UID@/$uid/" "$src/ssql-faq-public.nft" >/etc/ssql-faq/public.nft
+	for u in $SYSTEM_UNITS; do install -m 644 "$src/$u" "/etc/systemd/system/$u"; done
+	systemctl daemon-reload
+	# shellcheck disable=SC2086
+	systemctl enable $SYSTEM_UNITS
+	# shellcheck disable=SC2086
+	systemctl restart $SYSTEM_UNITS
 	loginctl enable-linger "$USER_NAME"
 	for _ in $(seq 1 20); do [ -S "/run/user/$uid/bus" ] && break; sleep 0.5; done
 	systemctl --user -M "$USER_NAME@" daemon-reload
 	systemctl --user -M "$USER_NAME@" enable "$UNIT"
 	systemctl --user -M "$USER_NAME@" restart "$UNIT"
+	check_net
 	echo "started $UNIT as $USER_NAME (app $(cat "$APP/REVISION")); check: $0 status"
+}
+
+# check_net asks, as the service's user, for what the rule must refuse and
+# the filter must pass or refuse, and fails the install on any surprise.
+check_net() {
+	local as=(runuser -u "$USER_NAME" -- curl -s -o /dev/null --max-time 5 -w '%{http_code}')
+	local code
+	for _ in $(seq 1 20); do
+		code=$("${as[@]}" -X POST -d '{}' http://127.0.0.1:11435/api/pull || true)
+		[ "$code" = 403 ] && break
+		sleep 0.5
+	done
+	[ "$code" = 403 ] || { echo "FAIL: the Ollama filter did not refuse /api/pull for $USER_NAME (got '$code')" >&2; exit 1; }
+	for target in http://127.0.0.1:11434/api/tags http://[::1]:11434/api/tags http://127.0.0.1:8765/; do
+		if code=$("${as[@]}" "$target"); then
+			echo "FAIL: $USER_NAME reaches $target ($code): the network rule is not in force" >&2
+			exit 1
+		fi
+	done
+	echo "network: $USER_NAME reaches the Ollama filter only (Ollama itself and the llama bridge refused)"
 }
 
 status() {
 	systemctl --user -M "$USER_NAME@" status "$UNIT" --no-pager -n 5 2>/dev/null ||
 		sudo systemctl --user -M "$USER_NAME@" status "$UNIT" --no-pager -n 5 || true
+	echo "network rule and Ollama filter: $(systemctl is-active $SYSTEM_UNITS | tr '\n' ' ')"
 	echo "health (today's answered and refused questions):"
 	curl -s --max-time 5 http://127.0.0.1:8485/api/health && echo
 	echo "today's answers by status ($LOG):"

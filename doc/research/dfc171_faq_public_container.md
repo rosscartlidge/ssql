@@ -2,7 +2,7 @@
 
 Reference: DFC171
 Created: 2026-11-25
-Last modified: 2026-11-25
+Last modified: 2026-11-26
 
 [Back to Index](./README.md)
 
@@ -51,7 +51,9 @@ Two weaknesses are left:
   the LAN, the tailnet, the llama bridge on 127.0.0.1:8765, and Ollama's
   unauthenticated API, which can pull and delete models. This is the
   open TODO item from §12.16. `IPAddressDeny=` might close it, but it is
-  unverified in a user unit.
+  unverified in a user unit. *Closed 2026-11-26 (DFC169 §12.17): an
+  nftables rule keyed on the user's uid lets it reach only the Ollama
+  filter (§5).*
 - **The hardening is a list.** Each entry was found by testing:
   `ProtectKernelTunables` broke the jail's `/proc` (§12), and on the LAN
   unit, `ProtectSystem=strict` alone left `/home` writable (§12.16). A
@@ -194,10 +196,15 @@ the docs), built from HEAD.
 - **Ollama's API.** The outbound proxy passes all of it, including
   `/api/pull`, `/api/delete` and `/api/create`. After an escape, someone
   could delete or replace models, or fill the disk with pulls. The fix
-  works with or without a container: a ~40-line filtering proxy on the
+  works with or without a container: a small filtering proxy on the
   host. It would allow only `POST /api/chat`, `/api/embed`/`/api/embeddings`
   and `GET /api/tags`, for the two models the FAQ uses, and the
   container's `ollama` proxy would point at it instead of at Ollama.
+  *Built 2026-11-26 (DFC169 §12.17), with two corrections. Without a
+  container, a filter alone does nothing, because the service user can
+  still connect to Ollama directly; it comes with a uid-keyed nftables
+  rule. The calls it passes are fewer: `POST /api/chat` (the warm-up
+  became an empty chat) and `POST /api/embeddings`.*
 - **Abuse of the service itself** (questions, load, prompt injection).
   That is unchanged; the rate limits and the daily cap stay as they are.
 
@@ -228,6 +235,7 @@ the docs), built from HEAD.
 
 1. **Add the filtering Ollama proxy (§5) whatever else is decided.** It
    is small, and it removes the worst thing an escape could do today.
+   *Done 2026-11-26, with the network rule it needs (DFC169 §12.17).*
 2. **If the public instance is to stay, move it into the container
    (§4).** The gain is mostly simplicity: a boundary of two ports and no
    host files, rebuilt on every install, in place of a hardening list

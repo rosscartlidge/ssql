@@ -1,0 +1,20 @@
+# The public FAQ's network rule (DFC171 §5): the ssql-faq user may reach
+# the Ollama filter and nothing else (ssql-faq-public.nft). Ordered before
+# user sessions, so the lingering ssql-faq user manager, and with it the
+# public instance, never starts without it. Installed by
+# scripts/faq/install-public.sh.
+
+[Unit]
+Description=ssql FAQ public instance: its user reaches only the Ollama filter
+DefaultDependencies=no
+Before=systemd-user-sessions.service network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/ssql-faq/public.nft
+ExecStop=/usr/sbin/nft delete table inet ssql_faq
+
+[Install]
+WantedBy=multi-user.target

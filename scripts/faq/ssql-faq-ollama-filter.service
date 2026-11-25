@@ -1,0 +1,45 @@
+# The Ollama filter (DFC171 §5): the only way from the public FAQ to
+# Ollama. It passes a chat with the FAQ's model and docsearch's embeddings
+# and refuses the rest of Ollama's API (pull, create, delete, other models,
+# larger contexts). A system unit under a dynamic user, so the ssql-faq
+# user, which ssql-faq-public.nft confines to this port, cannot stop or
+# replace it. Installed by scripts/faq/install-public.sh; -models must be
+# the public unit's (TestFilterUnitPassesThePublicModels).
+
+[Unit]
+Description=ssql FAQ: the Ollama calls the public instance may make
+After=network.target ollama.service
+
+[Service]
+ExecStart=/usr/local/libexec/ssql-faq/ssql-faq -ollama-filter 127.0.0.1:11435 \
+    -host http://127.0.0.1:11434 -models gemma4:26b -embed-model nomic-embed-text
+DynamicUser=yes
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

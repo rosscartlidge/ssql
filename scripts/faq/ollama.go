@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -49,6 +50,10 @@ func (o ollama) chat(msgs []message) (string, chatStats, error) {
 		return "", chatStats{}, fmt.Errorf("ollama: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", chatStats{}, fmt.Errorf("ollama: %s", bytes.TrimSpace(msg))
+	}
 	var out struct {
 		Message         message `json:"message"`
 		PromptEvalCount int     `json:"prompt_eval_count"`
@@ -69,10 +74,12 @@ func (o ollama) chat(msgs []message) (string, chatStats, error) {
 var ollamaClient = &http.Client{Timeout: 120 * time.Second}
 
 // warm loads the model and keeps it loaded, so the first visitor does not
-// wait 10-20 s for it (DFC169 §7).
+// wait 10-20 s for it (DFC169 §7). A chat with no messages loads the model
+// and answers nothing; it is /api/chat so the Ollama filter (DFC171 §5)
+// needs to pass only the calls a question makes.
 func (o ollama) warm() error {
-	body, _ := json.Marshal(map[string]any{"model": o.model, "keep_alive": "30m"})
-	resp, err := ollamaClient.Post(o.host+"/api/generate", "application/json", bytes.NewReader(body))
+	body, _ := json.Marshal(map[string]any{"model": o.model, "messages": []message{}, "keep_alive": "30m"})
+	resp, err := ollamaClient.Post(o.host+"/api/chat", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("ollama: %w", err)
 	}
