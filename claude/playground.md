@@ -8,6 +8,10 @@ Static CSV files live in `cmd/ssql-playground/data/`:
 - `customers.csv` — 20 rows (customer_id, name, country, tier)
 - `flights.csv` — 10 rows (src, dst, mins), the codelab's graph (DFC161)
 - `cities.csv` — 8 rows (city), seeds for the `traverse` example
+- `signal.csv` — 256 rows (t, amplitude), a 100 Hz signal for `fft`
+- `cast.csv` — 12,090 rows (movie, actor), real film casts from Wikidata
+  (CC0) for six degrees of Kevin Bacon (`traverse -both`). 480 KB, kept
+  whole; rebuilt by `scripts/fetch-cast-data.sh`, never edited by hand
 
 A new file goes in `DATA_FILES` in `playground.html` too. The deploy
 workflow copies `data/*.csv` to gh-pages, and the page refuses to start

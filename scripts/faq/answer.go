@@ -499,6 +499,28 @@ func readmeSection(path, heading string) (string, error) {
 	return strings.TrimSpace(rest), nil
 }
 
+// noRows reports output with no data rows: nothing, a table's header and
+// rule alone, or an empty JSON array. A review shown an empty block kept
+// it: "verified", answering nothing (a Bacon number from a name with a
+// birth year added, 2026-11-26).
+func noRows(out string) bool {
+	var lines []string
+	for _, ln := range strings.Split(out, "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			lines = append(lines, ln)
+		}
+	}
+	switch len(lines) {
+	case 0:
+		return true
+	case 1:
+		return lines[0] == "[]"
+	case 2:
+		return strings.Trim(lines[1], "-") == ""
+	}
+	return false
+}
+
 // reviewOK is a review reply that keeps the answer.
 var reviewOK = regexp.MustCompile(`(?i)^[\s*_"'` + "`" + `]*ok\b`)
 
@@ -512,11 +534,16 @@ func (f *faq) reviewed(llm ollama, msgs []message, question string, a answer, bo
 	if len(out) > 12 {
 		out = append(out[:12], "…")
 	}
-	msgs = append(msgs, message{Role: "user", Content: fmt.Sprintf("Your pipeline ran. Its first lines of output:\n\n```\n%s\n```\n\n"+
+	empty := ""
+	if noRows(a.Output) {
+		empty = "It printed no rows. Unless the question expects none, a name or a value in the pipeline does not match the data: " +
+			"check each against the files' columns and values, and the shape of what each stage writes. "
+	}
+	msgs = append(msgs, message{Role: "user", Content: fmt.Sprintf("Your pipeline ran. Its first lines of output:\n\n```\n%s\n```\n\n%s"+
 		"The question was: %s\n\nCheck the output against the question: the columns it asks to see and no others, "+
 		"and values written the way it asks. If the output already answers it, reply with exactly OK. "+
 		"If not, give your whole answer again, corrected, in the same format. "+
-		"The visitor never saw this message: do not mention it.", strings.Join(out, "\n"), question)})
+		"The visitor never saw this message: do not mention it.", strings.Join(out, "\n"), empty, question)})
 	reply, st, err := llm.chat(msgs)
 	a.Wall += st.Wall
 	a.GenTokens += st.GenTokens

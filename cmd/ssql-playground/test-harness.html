@@ -483,6 +483,15 @@ async function run() {
         record("every-example-runs", nBtn >= 28 && bad.length === 0, "buttons=" + nBtn + " " + bad.join(" | "));
     }
 
+    // 11i. Six degrees of Kevin Bacon: traverse -both over cast.csv, the
+    //      real casts from Wikidata, finds the route the example promises.
+    {
+        const btn = [...doc.querySelectorAll('.example-btn[onclick^="loadExample"]')].find(b => /Kevin Bacon/.test(b.textContent));
+        if (btn) btn.click();
+        const out = doc.getElementById('output').textContent;
+        record("bacon-example-route", !!btn && /JFK \(1991\)","Jack Lemmon","Some Like It Hot \(1959\)","Marilyn Monroe/.test(out) && /\b2\b/.test(out), out.slice(0, 300));
+    }
+
     // 12. Share link (#p=... on the second iframe): pipeline preloaded and
     //    auto-run — output is the group-by result table.
     const w2 = document.getElementById('pgshare').contentWindow;

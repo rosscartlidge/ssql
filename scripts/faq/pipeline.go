@@ -371,6 +371,17 @@ func (s sandbox) withData(dir string) sandbox {
 	return s
 }
 
+// stageStatus follows a pipeline and decides its exit status from every
+// stage's. The last stage must succeed. A stage before it may succeed or
+// die of SIGPIPE (141), which is what a stage gets when a later one stops
+// reading: limit, or generate schema, over a file larger than a pipe
+// buffer. Any other status fails the run. pipefail called the SIGPIPE a
+// failure, and cast.csv was the first sample large enough to show it
+// (2026-11-26, TestRunAcceptsAnEarlyStop).
+const stageStatus = `st=("${PIPESTATUS[@]}"); last=${st[${#st[@]}-1]}
+[ "$last" = 0 ] || exit "$last"
+for x in "${st[@]}"; do [ "$x" = 0 ] || [ "$x" = 141 ] || exit "$x"; done`
+
 func (s sandbox) run(pipeline string, env ...string) runResult {
 	dir, err := os.MkdirTemp("", "faq-run-")
 	if err != nil {
@@ -385,7 +396,7 @@ func (s sandbox) run(pipeline string, env ...string) runResult {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
-	script := "set -o pipefail; " + pipeline
+	script := pipeline + "\n" + stageStatus
 	var cmd *exec.Cmd
 	if s.jail {
 		cmd = exec.CommandContext(ctx, "systemd-run", jailArgs(s.ssql, dir, script, env)...)

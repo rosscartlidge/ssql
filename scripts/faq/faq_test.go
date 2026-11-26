@@ -245,3 +245,20 @@ func TestRowsHold(t *testing.T) {
 		}
 	}
 }
+
+func TestNoRows(t *testing.T) {
+	for out, want := range map[string]bool{
+		"":                                    true,
+		"\n\n":                                true,
+		"actor   movie\n-------------\n":      true,
+		"[]\n":                                true,
+		"42\n":                                false,
+		"n\n-\n1\n":                           false,
+		"dept  total\n-----------\nSales 3\n": false,
+		"field,type\nn,int\n":                 false,
+	} {
+		if got := noRows(out); got != want {
+			t.Errorf("noRows(%q) = %v, want %v", out, got, want)
+		}
+	}
+}

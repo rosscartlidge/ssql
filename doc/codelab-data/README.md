@@ -22,6 +22,7 @@ restores them after editing.
 | `alarms.csv` | three alarm timestamps inside `sensor.csv`'s range | join -asof |
 | `flights.csv` | ten flights between Australian cities (`src`, `dst`, `mins`), a cycle and three routes to Darwin | traverse (graph traversal) |
 | `cities.csv` | the eight cities of `flights.csv` (`city`, `name`, `state`) | traverse `-start-file` |
+| `cast.csv` | 31 rows of `movie,actor` from Wikidata (CC0): the shortest routes from Kevin Bacon to seven actors, and Seven Samurai, which no route reaches. A slice of the playground's 12,090-row `cast.csv`; every route in it is the full file's | traverse `-both` (six degrees of Kevin Bacon) |
 | `shipments.csv` | day-first dates with a time of day (`05/01/2026 09:15`), a leap day | -format, date_trunc, strftime, -time-format |
 | `signal.csv` | 5 Hz + 20 Hz at 100 samples/s | fft, spectrogram |
 

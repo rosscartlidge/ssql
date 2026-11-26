@@ -682,6 +682,33 @@ pipeline keeps the same row. `generate sql` writes it as a recursive
 CTE: all three modes on DuckDB, `-all-paths` on Postgres and DataFusion,
 which have no way to visit each node only once.
 
+### Six degrees of Kevin Bacon: an undirected graph
+
+Some graphs have no direction. `cast.csv` says which actor was in which
+film: real casts from Wikidata, a 31-row slice of the 12,090 the
+playground has. An actor links to each of their films, and a film to
+each of its actors, so the edges go both ways: `-both`. Six degrees of
+Kevin Bacon is a traverse from him:
+
+```bash
+ssql from cast.csv | ssql traverse -from actor -to movie -both -start "Kevin Bacon" -depth hops -path route | ssql where -if movie eq "Marilyn Monroe" | ssql to table -max-width 0
+```
+
+Read the columns carefully. `actor`, the `-from` field, holds the
+start, Kevin Bacon, on every row. `movie`, the `-to` field, holds the
+node reached, which is a film or a person, so a person is found with
+`where -if movie eq NAME`. The route alternates actor and film, so
+Marilyn Monroe, 4 hops away, has a Bacon number of 2: JFK, Jack Lemmon,
+Some Like It Hot. Everyone's Bacon number, the furthest first, keeps
+the even hops (the people) and halves them:
+
+```bash
+ssql from cast.csv | ssql traverse -from actor -to movie -both -start "Kevin Bacon" -depth hops | ssql where -if-expr 'hops % 2 == 0' | ssql update -set-expr bacon_number 'hops / 2' | ssql rename -as movie person | ssql include person bacon_number | ssql sort -desc bacon_number | ssql to table
+```
+
+Toshirō Mifune is not in the output at all: no film here links Seven
+Samurai to Kevin Bacon, and `traverse` writes only what it reaches.
+
 That is the everyday toolkit. Everything in Part 2 makes these same
 pipelines faster, bigger, or shareable — the vocabulary does not change.
 

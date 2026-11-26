@@ -1251,3 +1251,87 @@ sandbox setting accepted.
 It takes effect at Ross's next
 `sudo scripts/faq/install-public.sh install STAGE`.
 
+### 12.18 Six degrees of Kevin Bacon (2026-11-26)
+
+Ross asked for a Kevin Bacon question: a graph traversal to a known
+person, run on real movie data in the playground and the FAQ. ssql
+already has the command for it, `traverse` (DFC161), so this needed data
+and an example, not a feature.
+
+**The data.** `cmd/ssql-playground/data/cast.csv` has 12,090 rows of
+`movie,actor`, from Wikidata (CC0; IMDb's licence does not allow
+redistribution). It holds every film with 60 or more Wikipedia language
+editions, plus all of Kevin Bacon's. A film is written `Title (year)`, so
+remakes stay apart. `scripts/fetch-cast-data.sh` rebuilds it a decade at
+a time, because one query times out. It fails loudly on a lost fetch.
+
+Wikidata now keeps many names as `mul` labels instead of `en`. The first
+fetch asked for `en` and silently lost Apollo 13 and Kevin Bacon himself.
+Ross chose to keep the file whole, at 480 KB, the routes being the point.
+
+**The pipeline.** Actors and films form one undirected graph, so a route
+alternates them, and a Bacon number is `hops / 2`. It reaches the whole
+graph in 0.14 s:
+
+```
+ssql from cast.csv | ssql traverse -from actor -to movie -both -start "Kevin Bacon" -depth hops -path route
+```
+
+Marilyn Monroe is 2 (JFK, Jack Lemmon, Some Like It Hot) and Charlie
+Chaplin 3. Nobody in the sample is further than 4. The sample has gaps:
+some numbers are larger than the real ones, and some actors are not
+connected at all. The playground gained a dataset button and an example,
+and `bacon-example-route` in its harness checks the Monroe route. That
+check was watched failing on an example changed to Tom Hanks.
+
+**A bug the file exposed.** The jail ran pipelines under `pipefail`. A
+stage that stops reading early (`limit`, `generate schema`) leaves the
+stages before it to die of SIGPIPE. Over a file larger than a pipe
+buffer, that was exit 141, a failed run. The FAQ could not even start:
+reading `cast.csv`'s columns failed. Every earlier sample fitted in a
+pipe buffer. Now the last stage must succeed, and an earlier one may
+succeed or die of SIGPIPE (`stageStatus`, `pipeline.go`).
+`TestRunAcceptsAnEarlyStop` failed under pipefail. It also checks that a
+failing middle or last stage still fails the run.
+
+**Teaching the model.** Asked for Monroe's Bacon number with no help, the
+model called it unsupported and used `-lowest-sum 1`. Docsearch does not
+surface the graph section for "Kevin Bacon". Three versions of the
+`cast.csv` sample note (`samples.go`) followed. The last one spells out
+the pipeline and what each output column holds: `actor` is the start on
+every row, `movie` the node reached.
+
+The review turn had kept answers that printed nothing as "verified". It
+now says when a run printed no rows (`noRows`, `TestNoRows`).
+
+**The eval.** Two new cases. The route to Chaplin passes. Monroe's Bacon
+number fails: the model starts the traverse from Monroe and filters on
+`actor`. The full eval scored 41/45. Its other failures also fail on HEAD:
+`quickest-from-syd` keeps the `src` column; `doc-latest-changes` is stale
+since v4.148.3; `orders-per-month` is the known order-dependent case. So
+the note and the review change cost nothing measured.
+
+**Teaching it through the codelab.** Ross suggested a small cast file in
+the codelab data, which the binary embeds. That way the docs can teach
+the pattern, and docsearch can find it. `doc/codelab-data/cast.csv` is 31
+real rows, 1.2 KB: the shortest routes from Kevin Bacon to seven actors,
+plus Seven Samurai, which no route reaches. A slice of the full file keeps
+every route the full file's, because a route cannot get shorter in a
+subgraph and the tie-break picks among fewer candidates.
+`TestCodelabCastIsASlice` holds that true; it failed on an invented row.
+
+The codelab gained "Six degrees of Kevin Bacon: an undirected graph". It
+has its own heading because, inside the graph section, its chunk was cut
+before the Bacon examples. It says which column holds what, and gives
+everyone's Bacon number with the furthest first. With it retrieved, the
+long note was no longer needed. It went back to one line about the data
+and "an undirected graph (traverse -both)".
+
+The full eval: **42/45, both Bacon cases passing.** The failures are
+`quickest-from-syd` and `doc-latest-changes` (both fail on HEAD) and
+`flight-city-names`, which passed on one of two reruns. "Monroe's
+Bacon number" and "furthest from Kevin Bacon" now come out right. The
+Chaplin route sometimes comes without the films (the route column left
+out), and one run computed `bacon_number` with `-set` where it needed
+`-set-expr`.
+

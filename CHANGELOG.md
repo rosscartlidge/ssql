@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`signal.csv` in the playground**, a 100 Hz signal (t, amplitude),
   with an fft example. It was the FAQ's one sample the playground lacked,
   so signal answers had no playground link.
+- **`cast.csv` in the playground: six degrees of Kevin Bacon.** 12,090
+  rows of which actor was in which film, real casts from Wikidata (CC0):
+  popular films plus all of Kevin Bacon's. `traverse -from actor -to
+  movie -both -start "Kevin Bacon" -path route` finds the films linking
+  him to anyone in it (Marilyn Monroe: JFK, Jack Lemmon, Some Like It
+  Hot). A playground example shows it, and `scripts/fetch-cast-data.sh`
+  rebuilds the file. The CLI codelab has a section on it ("Six degrees of
+  Kevin Bacon: an undirected graph") over a 31-row slice in the codelab
+  data, so `ssql codelab` ships it.
 
 ### Changed
 

@@ -46,6 +46,10 @@
    "golden": "ssql from flights.csv | ssql join cities.csv -on src city -as name src_name + -on dst city -as name dst_name | ssql include src_name dst_name mins"},
   {"id": "quickest-from-syd", "kind": "pipeline", "question": "Using the flights, what is the quickest total flying time from SYD to every city you can reach? (SYD itself counts, at 0 minutes) Show each destination and the total minutes.",
    "golden": "ssql from flights.csv | ssql traverse -from src -to dst -start SYD -lowest-sum mins total | ssql include dst total"},
+  {"id": "bacon-route-chaplin", "kind": "pipeline", "question": "Six degrees of Kevin Bacon: using cast.csv, how is Charlie Chaplin connected to Kevin Bacon? Show only the route of actors and films from Kevin Bacon to him.",
+   "golden": "ssql from cast.csv | ssql traverse -from actor -to movie -both -start \"Kevin Bacon\" -path route | ssql where -if movie eq \"Charlie Chaplin\" | ssql include route"},
+  {"id": "bacon-number-monroe", "kind": "pipeline", "question": "Using cast.csv, what is Marilyn Monroe's Kevin Bacon number? Show only the number, as bacon_number.",
+   "golden": "ssql from cast.csv | ssql traverse -from actor -to movie -both -start \"Kevin Bacon\" -depth hops | ssql where -if movie eq \"Marilyn Monroe\" | ssql update -set-expr bacon_number 'hops / 2' | ssql include bacon_number"},
 
   {"id": "signal-top-frequencies", "kind": "pipeline", "ordered": true, "question": "signal.csv is sampled at 100 Hz. What are its three strongest frequencies? Show the frequency and the magnitude, strongest first.",
    "golden": "ssql from signal.csv | ssql fft -field amplitude -rate 100 | ssql top 3 -field magnitude | ssql include frequency magnitude"},

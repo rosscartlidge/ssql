@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -667,6 +668,64 @@ func TestSamplesAreThePlaygrounds(t *testing.T) {
 	}
 }
 
+// TestCodelabCastIsASlice: the codelab's cast.csv (31 rows, embedded in
+// the binary) is a slice of the playground's (12,090 rows): every row of
+// it is in the full file, and every person it reaches has the same route
+// from Kevin Bacon in both. So a pipeline learnt from the codelab, by a
+// reader or by the FAQ's model through docsearch, gives the same answer
+// in the playground (DFC169 §12.18). Rebuild the slice from the full
+// file's routes after scripts/fetch-cast-data.sh.
+func TestCodelabCastIsASlice(t *testing.T) {
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := filepath.Join(repo, samplesDir, "cast.csv")
+	slice := filepath.Join(repo, "doc", "codelab-data", "cast.csv")
+	fb, _ := os.ReadFile(full)
+	sb, _ := os.ReadFile(slice)
+	have := map[string]bool{}
+	for _, ln := range strings.Split(string(fb), "\n") {
+		have[ln] = true
+	}
+	lines := strings.Split(strings.TrimSpace(string(sb)), "\n")
+	if len(lines) < 10 {
+		t.Fatalf("the codelab's cast.csv has %d lines", len(lines))
+	}
+	for _, ln := range lines {
+		if !have[ln] {
+			t.Errorf("the codelab's cast.csv row %q is not in the playground's", ln)
+		}
+	}
+	routes := func(file string) map[string]string {
+		out, err := exec.Command("bash", "-c", "set -o pipefail; "+ssqlForTest(t)+" from csv '"+file+"' | "+ssqlForTest(t)+
+			` traverse -from actor -to movie -both -start "Kevin Bacon" -path route | `+ssqlForTest(t)+" to jsonl").Output()
+		if err != nil {
+			t.Fatalf("traverse %s: %v", file, err)
+		}
+		m := map[string]string{}
+		for _, ln := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			var r struct {
+				Movie string   `json:"movie"`
+				Route []string `json:"route"`
+			}
+			if json.Unmarshal([]byte(ln), &r) == nil && r.Movie != "" {
+				m[r.Movie] = strings.Join(r.Route, " > ")
+			}
+		}
+		return m
+	}
+	small, big := routes(slice), routes(full)
+	if len(small) < 10 {
+		t.Fatalf("the slice reaches %d nodes", len(small))
+	}
+	for node, route := range small {
+		if big[node] != route {
+			t.Errorf("%s: the codelab's route %q, the playground's %q", node, route, big[node])
+		}
+	}
+}
+
 // The 100 Hz in sampleNotes is the data's own: t steps by 0.01 s.
 func TestSampleNotesMatchTheData(t *testing.T) {
 	repo, err := repoRoot()
@@ -861,5 +920,34 @@ func TestAskPipelineDocument(t *testing.T) {
 	}
 	if resp.Playground != "" {
 		t.Errorf("a playground link for an echo: %s", resp.Playground)
+	}
+}
+
+// TestRunAcceptsAnEarlyStop: a stage that stops reading (limit, generate
+// schema) leaves the stages before it to die of SIGPIPE, as in any shell.
+// Under pipefail that was a failed run, unseen until cast.csv (2026-11-26)
+// outgrew a pipe buffer: the FAQ could not even read its columns. A stage
+// that fails for itself still fails the run, wherever it stands.
+func TestRunAcceptsAnEarlyStop(t *testing.T) {
+	data := t.TempDir()
+	var big strings.Builder
+	big.WriteString("n,word\n")
+	for i := range 50000 {
+		fmt.Fprintf(&big, "%d,w%d\n", i, i)
+	}
+	os.WriteFile(filepath.Join(data, "big.csv"), []byte(big.String()), 0o644)
+	box := sandbox{ssql: ssqlForTest(t), dataDir: data, timeout: 20 * time.Second, jail: jailAvailable() == ""}
+
+	if r := box.run("ssql from big.csv | ssql limit 2 | ssql to csv"); r.err != nil || !strings.Contains(r.stdout, "w1") {
+		t.Errorf("limit over a large file: %v %q %s", r.err, r.stdout, r.stderr)
+	}
+	if r := box.run("ssql from big.csv | ssql generate schema -data | ssql to csv"); r.err != nil || !strings.Contains(r.stdout, "word") {
+		t.Errorf("the schema of a large file: %v %q %s", r.err, r.stdout, r.stderr)
+	}
+	if r := box.run("ssql from big.csv | ssql where -if nosuch eq 1 | ssql limit 2 | ssql to csv"); r.err == nil {
+		t.Errorf("a failing middle stage passed: %q", r.stdout)
+	}
+	if r := box.run("ssql from big.csv | ssql limit 2 | ssql where -if nosuch eq 1"); r.err == nil {
+		t.Errorf("a failing last stage passed: %q", r.stdout)
 	}
 }

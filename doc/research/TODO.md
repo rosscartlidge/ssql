@@ -69,6 +69,11 @@ TestSchemaOpsShadowSchemaMode) hold what is fixed.
   queue and rate-limit checks. The heatmap and spectrogram hover escaping
   is checked by reading only (the harness cannot hover), and `to
   explore`'s HTML was not reviewed.
+- [ ] FAQ evals failing on HEAD too (DFC169 §12.18): `quickest-from-syd`
+  keeps the `src` column; `doc-latest-changes` has been stale since
+  v4.148.3 (update its fact). After the codelab's Kevin Bacon section,
+  the Bacon cases pass. A run can still leave the route out of "how is X
+  connected", or use `update -set` where it needs `-set-expr`.
 - [ ] The FAQ has no deadline for a whole question: each model call has
   120 s and each run 20 s, but corrections and the review multiply them.
   The public instance's queue and limits bound the load, not one

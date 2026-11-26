@@ -20,6 +20,7 @@ const samplesDir = "cmd/ssql-playground/data"
 // times too high (2026-11-21); TestSampleNotesMatchTheData checks it.
 var sampleNotes = map[string]string{
 	"signal.csv": "; sampled at 100 Hz (t steps by 0.01 s), so fft and spectrogram take -rate 100",
+	"cast.csv":   `; one row per actor per film, real casts from Wikidata; a movie is written "Title (year)", such as "Apollo 13 (1995)", a person by name alone. The actors and films form an undirected graph (traverse -both)`,
 }
 
 // buildSamples copies the sample files into one directory under the user
