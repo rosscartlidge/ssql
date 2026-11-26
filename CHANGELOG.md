@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Hot). A playground example shows it, and `scripts/fetch-cast-data.sh`
   rebuilds the file. The CLI codelab has a section on it ("Six degrees of
   Kevin Bacon: an undirected graph") over a 31-row slice in the codelab
-  data, so `ssql codelab` ships it.
+  data, so `ssql codelab` ships it. It then runs the same pipeline on the
+  full file, read by `from` from the playground's URL
+  (`https://rosscartlidge.github.io/ssql/data/cast.csv`).
 
 ### Changed
 

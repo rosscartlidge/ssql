@@ -709,6 +709,30 @@ ssql from cast.csv | ssql traverse -from actor -to movie -both -start "Kevin Bac
 Toshirō Mifune is not in the output at all: no film here links Seven
 Samurai to Kevin Bacon, and `traverse` writes only what it reaches.
 
+The slice is small enough to read, but every route in it comes from the
+full file: 12,090 rows, popular films and all of Kevin Bacon's, which
+the playground serves. `from` reads a URL as it reads a file, so the
+same pipeline runs on all of it with nothing to download first.
+Charlie Chaplin is three films away:
+
+```bash
+# codelab: skip — reads the full file over the network
+ssql from https://rosscartlidge.github.io/ssql/data/cast.csv | ssql traverse -from actor -to movie -both -start "Kevin Bacon" -path route | ssql where -if movie eq "Charlie Chaplin" | ssql include route | ssql to table -max-width 0
+```
+
+Kevin Bacon reaches about 8,600 people and films in that file. To explore
+it, save a copy once rather than fetching it for every pipeline. Only
+`from` reads a URL: a file another command takes, such as `join`'s side
+file or `traverse -start-file`, is local, or `<(ssql from URL)`. The URL
+serves whatever is on the main branch, not the version you installed;
+`scripts/fetch-cast-data.sh` in the repository rebuilds it from Wikidata.
+
+```bash
+# codelab: skip — reads the full file over the network
+ssql from https://rosscartlidge.github.io/ssql/data/cast.csv | ssql to csv cast_full.csv
+ssql from cast_full.csv | ssql traverse -from actor -to movie -both -start "Kevin Bacon" -depth hops | ssql where -if-expr 'hops % 2 == 0' | ssql update -set-expr bacon_number 'hops / 2' | ssql group-by bacon_number -count people | ssql sort bacon_number | ssql to table
+```
+
 That is the everyday toolkit. Everything in Part 2 makes these same
 pipelines faster, bigger, or shareable — the vocabulary does not change.
 
