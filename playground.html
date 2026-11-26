@@ -139,6 +139,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" onclick="loadExample(27)">decimal — 7% tax per order to the cent (-type amount decimal:2), summed exactly beside the float's drift</button>
     <button class="example-btn" onclick="loadExample(28)">Graph — quickest route from Sydney to every city (traverse; try -all-paths, another -start, or -start-file &lt;(ssql from cities.csv | ssql rename -as city src))</button>
     <button class="example-btn" onclick="loadExample(29)">Signal — the strongest frequencies in a 100 Hz signal (fft; try spectrogram)</button>
+    <button class="example-btn" onclick="loadExample(30)">Six degrees of Kevin Bacon — the films that link him to Marilyn Monroe (traverse -both over real casts; try Charlie Chaplin or Audrey Hepburn)</button>
 </div>
 
 <div class="datasets">
@@ -149,6 +150,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('flights.csv')">flights.csv</button> (10 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('cities.csv')">cities.csv</button> (8 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('signal.csv')">signal.csv</button> (256 samples at 100 Hz) ·
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('cast.csv')">cast.csv</button> (12,090 film casts, from Wikidata) ·
     <span id="yourDatasets"></span>or upload your own
     <br><br>This playground runs a real ssql binary compiled to WebAssembly — <b>Tab</b> completes commands,
     flags, operators, files, and <i>pipeline-aware field names</i> (it runs your upstream stages in schema mode,
@@ -160,13 +162,13 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <!-- ?v= busts the browser cache per deploy: a stale fs-polyfill.js with a
      fresh playground.html made runs die silently (missing new helpers). -->
-<script src="fs-polyfill.js?v=e4c21a7b"></script>
-<script src="wasm_exec.js?v=e4c21a7b"></script>
-<script src="ssql-ui.js?v=e4c21a7b"></script>
+<script src="fs-polyfill.js?v=2d63e3fb"></script>
+<script src="wasm_exec.js?v=2d63e3fb"></script>
+<script src="ssql-ui.js?v=2d63e3fb"></script>
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
-const DATA_FILES = ['employees.csv', 'orders.csv', 'customers.csv', 'flights.csv', 'cities.csv', 'signal.csv'];
+const DATA_FILES = ['employees.csv', 'orders.csv', 'customers.csv', 'flights.csv', 'cities.csv', 'signal.csv', 'cast.csv'];
 
 async function loadDatasets() {
     for (const name of DATA_FILES) {
@@ -302,6 +304,12 @@ const EXAMPLES = [
 | ssql fft -field amplitude -rate 100
 | ssql top 3 -field magnitude
 | ssql to table`,
+    `ssql from cast.csv
+| ssql traverse -from actor -to movie -both -start "Kevin Bacon" -depth hops -path route
+| ssql where -if movie eq "Marilyn Monroe"
+| ssql update -set-expr bacon_number 'hops / 2'
+| ssql include bacon_number route
+| ssql to table -max-width 0`,
 ];
 
 // Examples that should auto-optimize instead of run (by index)
@@ -497,7 +505,7 @@ let wasmReady = false;
 
 async function initWasm() {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=e4c21a7b'), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=2d63e3fb'), go.importObject);
     go.run(result.instance);
 
     // Wait for ssqlReady
