@@ -1340,7 +1340,7 @@ out), and one run computed `bacon_number` with `-set` where it needed
 
 Ross: "a simple q=\"a question for ask ssql\"". Opening the page as
 `https://…/?q=how+do+I+count+rows` asks that question at once, as a
-search link does. The page script (`askFromLink`, `page.html`) reads
+search link does. The page script (`fromLink`, `page.html`) reads
 `q`, takes it out of the address bar with `history.replaceState` first, so
 a reload, a bookmark or a share does not ask it again, and caps it at
 the box's 2,048 characters; the server's own limits still apply. It runs
@@ -1357,6 +1357,18 @@ without asking would be a one-line change if that ever matters.
 Chrome against the real handler and a fake model, and checks the
 question was shown once with its answer (skipped without Chrome; it
 failed before the change).
+
+**Your columns in the link** (Ross, the same day: "there needs to be a
+simple way to specify your own columns"). `&columns=order_id,customer,amount`
+fills the columns box with that header line and opens it, so the visitor
+sees what is sent, and `q` then asks against it:
+`?q=total+amount+per+customer&columns=order_id,customer,amount`. With
+`columns` and no `q` the page fills the box and waits for a question. It is
+the box's own text, so a newline (`%0A`) gives more rows or `--- name`
+files. `TestPageSendsTheLinksColumns` checks the answer's badge reads
+"checked against your columns"; its first version matched that phrase
+anywhere and passed on the old page, because the phrase is in the page's
+script, which a DOM dump includes.
 
 ### 12.20 Asking from a terminal: `?format=sh` (2026-11-27)
 

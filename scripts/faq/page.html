@@ -424,19 +424,29 @@ async function ask() {
   }
 }
 
-// A link with ?q= asks that question when the page opens, as a search
-// link does: https://…/?q=how+do+I+count+rows. q leaves the address bar at
-// once, so a reload, a bookmark or a shared session does not ask it again.
-// After a #s= session has opened, the question follows up on it.
-function askFromLink() {
+// A link can ask a question and say what your data looks like, as a
+// search link does:
+//   ?q=total+amount+per+customer&columns=order_id,customer,amount
+// columns fills the columns box (a CSV header line, as you would paste it)
+// and opens it, so you see what is sent; q then asks. columns alone fills
+// the box and waits for a question. Both leave the address bar at once, so
+// a reload, a bookmark or a shared session does not ask again. After a #s=
+// session has opened, the question follows up on it.
+function fromLink() {
   const params = new URLSearchParams(location.search);
-  const q = params.get('q');
-  if (q === null) return;
+  const q = params.get('q'), cols = params.get('columns');
+  if (q === null && cols === null) return;
   params.delete('q');
+  params.delete('columns');
   const rest = params.toString();
   history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
-  const text = q.trim().slice(0, 2048);
-  if (!text) return;
+  if (cols !== null && cols.trim()) {
+    hdr.value = cols.trim();
+    document.getElementById('own').open = true;
+    updateInUse(); fitHdr();
+  }
+  const text = (q || '').trim().slice(0, 2048);
+  if (!text) { document.getElementById('q').focus(); return; }
   document.getElementById('q').value = text;
   ask();
 }
@@ -447,7 +457,7 @@ document.getElementById('curlhint').textContent =
   location.origin + location.pathname.replace(/[^/]*$/, '') + "api/ask?format=sh' > answer.sh";
 
 document.getElementById('ask').addEventListener('submit', e => { e.preventDefault(); ask(); });
-openShared().then(askFromLink);
+openShared().then(fromLink);
 document.getElementById('q').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
 });
