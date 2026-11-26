@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
 	"net"
 	"net/http"
@@ -251,6 +252,17 @@ func mustCIDR(s string) *net.IPNet {
 }
 
 func (s *server) ask(w http.ResponseWriter, r *http.Request) {
+	// ?format=sh answers a terminal: the checked pipeline as a script, in
+	// plain text (scriptOf), and every refusal in plain text too.
+	writeError := writeError
+	switch r.URL.Query().Get("format") {
+	case "":
+	case "sh":
+		writeError = writeScriptError
+	default:
+		writeError(w, http.StatusBadRequest, "format: sh, or leave it out for JSON")
+		return
+	}
 	var req askRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*maxQuestion+maxPaste+maxPrevReply+4096)).Decode(&req); err != nil {
 		writeError(w, http.StatusRequestEntityTooLarge, "the question or the pasted data is too long, or not JSON")
@@ -313,7 +325,68 @@ func (s *server) ask(w http.ResponseWriter, r *http.Request) {
 		resp.ID = s.votes.issue(req.Question)
 	}
 	s.record(req, v, a, resp)
+	if r.URL.Query().Get("format") == "sh" {
+		code, body := scriptOf(req.Question, resp, start)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(code)
+		io.WriteString(w, body)
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// scriptOf is an answer as a terminal wants it (?format=sh): a checked
+// pipeline is a script to save, read and run, with the question and how it
+// was checked as comments. Anything else is 422, the reply as comments,
+// so `curl -f` fails rather than saving something nobody checked.
+func scriptOf(question string, resp askResponse, when time.Time) (int, string) {
+	var b strings.Builder
+	comment := func(text string) {
+		for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+			b.WriteString(strings.TrimRight("# "+line, " ") + "\n")
+		}
+	}
+	if !resp.Verified || resp.Pipeline == "" {
+		comment("ssql FAQ: no checked pipeline for this question (" + resp.Status + ").")
+		if resp.Failure != "" {
+			comment(resp.Failure)
+		}
+		if resp.Reply != "" {
+			comment("")
+			comment(resp.Reply)
+		}
+		return http.StatusUnprocessableEntity, b.String()
+	}
+	b.WriteString("#!/bin/bash\n")
+	comment(question)
+	comment("ssql FAQ, " + when.Format("2006-01-02") + ": " + checkedHow(resp.RanOn) + ".")
+	comment("It comes from a model: read it before you run it.")
+	b.WriteString(strings.TrimSpace(resp.Pipeline) + "\n")
+	return http.StatusOK, b.String()
+}
+
+// checkedHow says what a verified answer's ran_on means.
+func checkedHow(ranOn string) string {
+	switch ranOn {
+	case "your-columns":
+		return "checked against your columns, not run"
+	case "your-rows":
+		return "checked by running it on the rows you sent"
+	case "generated":
+		return "checked by building and running the program it generates"
+	case "setup":
+		return "checked by running it with its setup lines"
+	default:
+		return "checked by running it on the playground's sample data"
+	}
+}
+
+// writeScriptError is writeError for ?format=sh: the message as a comment
+// line, in plain text.
+func writeScriptError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(code)
+	io.WriteString(w, "# ssql FAQ: "+msg+"\n")
 }
 
 // controlChar is a control character other than tab, newline and

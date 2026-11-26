@@ -951,3 +951,62 @@ func TestRunAcceptsAnEarlyStop(t *testing.T) {
 		t.Errorf("a failing last stage passed: %q", r.stdout)
 	}
 }
+
+// postScript asks as a terminal does: ?format=sh.
+func postScript(t *testing.T, h http.Handler, format string, body any) *httptest.ResponseRecorder {
+	b, _ := json.Marshal(body)
+	r := newRequest("POST", "/api/ask?format="+format, bytes.NewReader(b))
+	r.RemoteAddr = "192.168.4.20:5555"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestAskScript(t *testing.T) {
+	const pipeline = "ssql from employees.csv | ssql group-by dept -count n | ssql to table"
+	s, _ := testServer(t, "Group them:\n```bash\n"+pipeline+"\n```\n")
+	w := postScript(t, s.handler(), "sh", askRequest{Question: "how many in each dept?\nand sorted"})
+	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("%d %s: %s", w.Code, w.Header().Get("Content-Type"), w.Body)
+	}
+	got := w.Body.String()
+	for _, want := range []string{"#!/bin/bash\n", "# how many in each dept?\n# and sorted\n", "on the playground's sample data.\n", "\n" + pipeline + "\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the script lacks %q:\n%s", want, got)
+		}
+	}
+	if !strings.HasSuffix(got, pipeline+"\n") {
+		t.Errorf("the pipeline is not the script's last line:\n%s", got)
+	}
+	// The script runs as it stands: comments and all.
+	run := exec.Command("bash", "-c", got)
+	run.Dir = s.f.box.dataDir
+	run.Env = append(os.Environ(), "PATH="+filepath.Dir(s.f.box.ssql)+":"+os.Getenv("PATH"))
+	if out, err := run.CombinedOutput(); err != nil || !strings.Contains(string(out), "Engineering") {
+		t.Errorf("running the script: %v\n%s", err, out)
+	}
+}
+
+func TestAskScriptRefuses(t *testing.T) {
+	s, _ := testServer(t, "ssql has no command for that; try a\nmulti-line reply.")
+	w := postScript(t, s.handler(), "sh", askRequest{Question: "can ssql make coffee?"})
+	if w.Code != http.StatusUnprocessableEntity || strings.Contains(w.Body.String(), "#!/bin/bash") {
+		t.Fatalf("a prose answer: %d\n%s", w.Code, w.Body)
+	}
+	for _, line := range strings.Split(strings.TrimRight(w.Body.String(), "\n"), "\n") {
+		if !strings.HasPrefix(line, "#") {
+			t.Errorf("a refusal's line is not a comment: %q", line)
+		}
+	}
+	if !strings.Contains(w.Body.String(), "# multi-line reply.") {
+		t.Errorf("the reply is not in the refusal:\n%s", w.Body)
+	}
+	w = postScript(t, s.handler(), "sh", askRequest{Question: ""})
+	if w.Code != http.StatusBadRequest || w.Body.String() != "# ssql FAQ: ask a question\n" {
+		t.Errorf("an empty question: %d %q", w.Code, w.Body)
+	}
+	w = postScript(t, s.handler(), "html", askRequest{Question: "how many rows?"})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "format: sh") {
+		t.Errorf("an unknown format: %d %q", w.Code, w.Body)
+	}
+}

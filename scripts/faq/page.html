@@ -61,6 +61,7 @@ pre code { background: none; padding: 0; }
 .links { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.9rem; margin-top: 8px; }
 a { color: var(--accent); }
 .meta { color: var(--muted); font-size: 0.82rem; margin-top: 10px; }
+details.terminal { margin-top: 28px; font-size: 0.9rem; }
 footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 .chip { display: none; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; padding: 6px 10px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 0.88rem; color: var(--muted); }
@@ -105,6 +106,12 @@ footer { color: var(--muted); font-size: 0.82rem; margin-top: 36px; }
 
   <div id="sharednote" class="shared" hidden></div>
   <div id="answers"></div>
+
+  <details class="terminal" id="terminal">
+    <summary>Ask from a terminal</summary>
+    <p>The answer comes back as a script to save, read, then run. If the FAQ has no checked pipeline for the question, <code>curl -f</code> fails and saves nothing; add <code>--fail-with-body</code> to see its reply.</p>
+    <pre id="curlhint"></pre>
+  </details>
 
   <footer>Runs on a laptop on this network. Questions, their answers and your 👍/👎 are kept, without your address, to improve the FAQ; pasted data is not kept.
     A model can still be wrong: a <em>verified</em> answer ran, but check that it answers what you asked.</footer>
@@ -417,8 +424,30 @@ async function ask() {
   }
 }
 
+// A link with ?q= asks that question when the page opens, as a search
+// link does: https://…/?q=how+do+I+count+rows. q leaves the address bar at
+// once, so a reload, a bookmark or a shared session does not ask it again.
+// After a #s= session has opened, the question follows up on it.
+function askFromLink() {
+  const params = new URLSearchParams(location.search);
+  const q = params.get('q');
+  if (q === null) return;
+  params.delete('q');
+  const rest = params.toString();
+  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+  const text = q.trim().slice(0, 2048);
+  if (!text) return;
+  document.getElementById('q').value = text;
+  ask();
+}
+
+// The terminal hint names this page's own address, LAN or public.
+document.getElementById('curlhint').textContent =
+  "curl -sf --json '{\"question\":\"how many employees are in each department?\"}' \\\n  '" +
+  location.origin + location.pathname.replace(/[^/]*$/, '') + "api/ask?format=sh' > answer.sh";
+
 document.getElementById('ask').addEventListener('submit', e => { e.preventDefault(); ask(); });
-openShared();
+openShared().then(askFromLink);
 document.getElementById('q').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
 });

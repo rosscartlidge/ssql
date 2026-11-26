@@ -2,7 +2,7 @@
 
 Reference: DFC169
 Created: 2026-11-15
-Last modified: 2026-11-26
+Last modified: 2026-11-27
 
 [Back to Index](./README.md)
 
@@ -1335,3 +1335,62 @@ Chaplin route sometimes comes without the films (the route column left
 out), and one run computed `bacon_number` with `-set` where it needed
 `-set-expr`.
 
+
+### 12.19 A link that asks: `?q=` (2026-11-27)
+
+Ross: "a simple q=\"a question for ask ssql\"". Opening the page as
+`https://…/?q=how+do+I+count+rows` asks that question at once, as a
+search link does. The page script (`askFromLink`, `page.html`) reads
+`q`, takes it out of the address bar with `history.replaceState` first, so
+a reload, a bookmark or a share does not ask it again, and caps it at
+the box's 2,048 characters; the server's own limits still apply. It runs
+after a `#s=` session has opened, so `#s=…` with `?q=` asks a follow-up
+on that session. Nothing changed on the server: the question goes through
+`/api/ask` like a typed one, under the same rate limit, and is logged the
+same way.
+
+Asking at once means anyone can make a link that puts a question, and the
+model's answer to it, in front of whoever clicks. The question is shown
+above its answer, so the visitor sees what was asked; filling the box
+without asking would be a one-line change if that ever matters.
+`TestPageAsksTheLinksQuestion` opens the page with `?q=` in headless
+Chrome against the real handler and a fake model, and checks the
+question was shown once with its answer (skipped without Chrome; it
+failed before the change).
+
+### 12.20 Asking from a terminal: `?format=sh` (2026-11-27)
+
+Ross: a way to ask with curl and get an ssql script back.
+`/api/ask?format=sh` takes the same JSON and answers in plain text. The
+page has an "Ask from a terminal" section with the command, filled in
+with its own address:
+
+```
+curl -sf --json '{"question":"how many employees are in each department?"}' \
+  'https://…/api/ask?format=sh' > answer.sh
+```
+
+- **A checked pipeline is a script.** It starts with `#!/bin/bash`, then
+  the question and how it was checked as comments (`checkedHow`:
+  sample data, your columns, your rows, the generated program, setup
+  lines), then "It comes from a model: read it before you run it", and
+  the pipeline exactly as it was run. `"header"` works as on the page.
+- **Anything else is 422.** The reply comes back as `#` comments, so
+  `curl -f` fails and saves nothing, and `--fail-with-body` shows why.
+  Every refusal before the model (empty question, too long, busy, rate
+  limit) is plain text too, one `# ssql FAQ: …` line. An unknown
+  `format` is 400.
+- **Still a JSON POST.** A `GET ?q=` would be shorter to type, but any
+  page could make its visitors' browsers send questions with `<img>`
+  tags, each from a different address, getting around the per-address
+  rate limit and tying up the GPU. A browser cannot send a JSON POST to
+  another site without asking first (§12.16), and `curl --json` makes it
+  short anyway.
+
+Tests: `TestAskScript` (the script runs as it stands, comments and all),
+`TestAskScriptRefuses` (each line a comment; the empty question; an
+unknown format), both watched failing on the old handler; and
+`TestPageAsksTheLinksQuestion` checks the hint names the server. On the
+LAN instance with gemma4:26b, the hint's own command saved a script that
+printed the department counts, and "can ssql make me a coffee?" exited
+22 with the model's reply as comments.
